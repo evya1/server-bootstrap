@@ -1,0 +1,38 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared="$(tr -d '[:space:]' < VERSION)"
+          [[ "$tag" == "$declared" ]] \
+            || { echo "ERROR: tag $tag != VERSION $declared" >&2; exit 1; }
+
+      # Runs the full test suite, refreshes checksums, and builds every archive
+      # twice, failing if the two passes are not byte-identical.
+      - name: Build release
+        run: bash release/build-release.sh
+
+      - name: Publish assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/dist/gpu-server-bootstrap-*.tar.gz
+            release/dist/gpu-server-bootstrap-*.tar.gz.sha256
+            release/dist/gpu-server-bootstrap-*.zip
+            release/dist/gpu-server-bootstrap-*.zip.sha256
+            release/dist/gpu-server-bootstrap-*-release-manifest.json
+            release/dist/gpu-provision.sh
+            release/dist/provision-plan.example.sh
+            release/dist/provision-plan.whisper.example.sh

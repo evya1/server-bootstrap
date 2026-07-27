@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Install one checksum-verified toolkit archive through the shared bundle core.
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+ROOT="$(cd -- "$(dirname -- "$SELF")" && pwd -P)"
+LIB_ROOT="${GSB_LIB_ROOT:-$ROOT/lib}"
+[[ -f "$LIB_ROOT/bundle.sh" ]] || LIB_ROOT=/usr/local/lib/gpu-server-bootstrap/lib
+# shellcheck source=lib/bundle.sh
+source "$LIB_ROOT/bundle.sh"
+
+NAME=""; VERSION=""; SOURCE_REF=""; SHA256=""; SHA_FILE=""
+INSTALLER=install.sh; DELETE_AFTER=0; FORCE=0
+STATE_ROOT="${STATE_ROOT:-${WORKSPACE_ROOT:-/workspace}/.setup-state}"
+
+usage() {
+    cat <<'USAGE'
+Usage: gpu-bundle-install --name NAME --version VERSION --source ARCHIVE_OR_HTTPS \
+       (--sha256 HEX | --sha256-file FILE) [options] [-- INSTALLER_ARGS...]
+
+Options:
+  --archive PATH              alias for --source PATH
+  --installer FILE            installer filename inside the archive (default: install.sh)
+  --delete-after-success      delete a local archive and its checksum file after success
+  --keep-archive              keep source files (default)
+  --force                     reinstall; required for same version with changed archive
+  --state-root PATH           installation state root
+  -h, --help
+USAGE
+}
+
+while (($#)); do
+    case "$1" in
+        --name) NAME="${2:?missing value}"; shift 2 ;;
+        --version) VERSION="${2:?missing value}"; shift 2 ;;
+        --source|--archive) SOURCE_REF="${2:?missing value}"; shift 2 ;;
+        --sha256) SHA256="${2:?missing value}"; shift 2 ;;
+        --sha256-file) SHA_FILE="${2:?missing value}"; shift 2 ;;
+        --installer) INSTALLER="${2:?missing value}"; shift 2 ;;
+        --delete-after-success) DELETE_AFTER=1; shift ;;
+        --keep-archive) DELETE_AFTER=0; shift ;;
+        --force) FORCE=1; shift ;;
+        --state-root) STATE_ROOT="${2:?missing value}"; shift 2 ;;
+        --) shift; break ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+INSTALLER_ARGS=("$@")
+
+[[ -n "$NAME" && -n "$VERSION" && -n "$SOURCE_REF" ]] \
+    || { echo "ERROR: --name, --version, and --source are required" >&2; usage >&2; exit 2; }
+if [[ -n "$SHA_FILE" ]]; then
+    [[ -z "$SHA256" ]] || { echo "ERROR: use either --sha256 or --sha256-file" >&2; exit 2; }
+    SHA_FILE="$(realpath -m -- "$SHA_FILE")"
+    SHA256="$(gsb_read_sha256_file "$SHA_FILE")"
+fi
+[[ -n "$SHA256" ]] || { echo "ERROR: checksum is required" >&2; exit 2; }
+if [[ "$SOURCE_REF" != https://* ]]; then SOURCE_REF="$(realpath -m -- "${SOURCE_REF#file://}")"; fi
+
+GSB_LOG_PREFIX=gpu-bundle-install
+gsb_install_bundle "$NAME" "$VERSION" "$SOURCE_REF" "$SHA256" "$INSTALLER" \
+    "$DELETE_AFTER" "$FORCE" "$STATE_ROOT" "$SHA_FILE" "${INSTALLER_ARGS[@]}"

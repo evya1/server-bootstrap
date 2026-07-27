@@ -1,0 +1,20 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: shellcheck (advisory)
+        run: shellcheck -S warning $(find . -name '*.sh' -not -path './release/dist/*') gpu-bundle-install gpu-vscode-extensions || true
+      - name: test suite
+        run: bash tests/run-tests.sh
+
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Proves the archives are byte-reproducible on a clean machine, not just
+      # on the author's box. build-release.sh builds twice and fails on a diff.
+      - run: bash release/build-release.sh

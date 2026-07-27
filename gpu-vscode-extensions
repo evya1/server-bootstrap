@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Install the bundle's extension manifest into an existing VS Code Remote-SSH server.
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+ROOT="$(cd -- "$(dirname -- "$SELF")" && pwd -P)"
+# shellcheck source=/dev/null
+source "$ROOT/lib/core.sh"
+GSB_LOG_PREFIX=gpu-vscode-extensions
+
+MANIFEST="${VSCODE_EXTENSIONS_FILE:-$ROOT/config/vscode-extensions.txt}"
+STATE_ROOT="${STATE_ROOT:-/workspace/.setup-state}"
+LOG_ROOT="${LOG_ROOT:-/workspace/startup-logs}"
+STRICT="${VSCODE_EXTENSIONS_STRICT:-0}"
+AUTO_RETRY_SECONDS="${VSCODE_EXTENSIONS_AUTO_RETRY_SECONDS:-21600}"
+DRY_RUN=0
+AUTO=0
+QUIET=0
+CLI="${VSCODE_CLI:-}"
+
+usage() {
+    cat <<'USAGE'
+Usage: gpu-vscode-extensions [options]
+
+Options:
+  --manifest FILE  use a different extension-ID manifest
+  --cli FILE       use a specific VS Code CLI
+  --strict         fail if any extension cannot be installed
+  --dry-run        print missing extensions without installing
+  --auto           rate-limited mode for the generated VS Code shell hook
+  --quiet          reduce routine output
+  --help            show this help
+USAGE
+}
+
+while (($#)); do
+    case "$1" in
+        --manifest) MANIFEST="$2"; shift 2 ;;
+        --cli) CLI="$2"; shift 2 ;;
+        --strict) STRICT=1; shift ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        --auto) AUTO=1; QUIET=1; shift ;;
+        --quiet) QUIET=1; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) gsb_die "unknown option: $1"; usage >&2; exit 2 ;;
+    esac
+done
+
+find_vscode_cli() {
+    local candidate
+    if [[ -n "$CLI" ]]; then
+        [[ -x "$CLI" ]] || gsb_die "VS Code CLI is not executable: $CLI" || return
+        printf '%s\n' "$CLI"
+        return
+    fi
+    for candidate in "$(command -v code 2>/dev/null || true)" "$(command -v code-insiders 2>/dev/null || true)"; do
+        [[ -n "$candidate" && -x "$candidate" ]] && { printf '%s\n' "$candidate"; return; }
+    done
+    candidate="$(find /root/.vscode-server /root/.vscode-server-insiders -type f \
+        -path '*/bin/remote-cli/code' -perm -u+x -printf '%T@ %p\n' 2>/dev/null \
+        | sort -nr | head -n1 | cut -d' ' -f2- || true)"
+    [[ -n "$candidate" ]] || return 1
+    printf '%s\n' "$candidate"
+}
+
+[[ -f "$MANIFEST" ]] || { gsb_die "extension manifest not found: $MANIFEST"; exit 1; }
+mkdir -p "$STATE_ROOT" "$LOG_ROOT"
+COMPLETE="$STATE_ROOT/vscode-extensions-complete"
+LAST_ATTEMPT="$STATE_ROOT/vscode-extensions-last-attempt"
+LOCK="$STATE_ROOT/vscode-extensions.lock"
+
+MANIFEST_SHA256="$(gsb_sha256 "$MANIFEST")"
+if [[ -f "$COMPLETE" ]] && ! grep -Fqx "manifest_sha256=$MANIFEST_SHA256" "$COMPLETE" 2>/dev/null; then
+    rm -f -- "$COMPLETE"
+fi
+if (( AUTO == 1 )) && [[ -f "$COMPLETE" ]]; then exit 0; fi
+if (( AUTO == 1 )) && [[ -f "$LAST_ATTEMPT" ]]; then
+    now="$(date +%s)"; last="$(cat "$LAST_ATTEMPT" 2>/dev/null || echo 0)"
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    (( now - last >= AUTO_RETRY_SECONDS )) || exit 0
+fi
+
+exec 9>"$LOCK"
+flock -n 9 || exit 0
+printf '%s\n' "$(date +%s)" > "$LAST_ATTEMPT"
+
+CLI="$(find_vscode_cli || true)"
+if [[ -z "$CLI" ]]; then
+    (( QUIET == 1 )) || gsb_warn "VS Code Server CLI is not available yet; connect with Remote-SSH, then run gpu-vscode-extensions"
+    exit 3
+fi
+
+mapfile -t requested < <(awk 'NF && $1 !~ /^#/ {print tolower($1)}' "$MANIFEST")
+((${#requested[@]} > 0)) || { gsb_die "extension manifest is empty"; exit 1; }
+
+for extension in "${requested[@]}"; do
+    [[ "$extension" =~ ^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9._-]*$ ]] \
+        || { gsb_die "invalid extension ID in manifest: $extension"; exit 1; }
+done
+
+mapfile -t installed < <("$CLI" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort -u)
+declare -A have=()
+for extension in "${installed[@]}"; do have["$extension"]=1; done
+
+missing=0; failures=0; installed_now=0
+LOG_FILE="$LOG_ROOT/vscode-extensions-$(date -u +%Y%m%dT%H%M%SZ).log"
+for extension in "${requested[@]}"; do
+    [[ -z "${have[$extension]:-}" ]] || continue
+    missing=$((missing + 1))
+    if (( DRY_RUN == 1 )); then
+        printf '%s\n' "$extension"
+        continue
+    fi
+    (( QUIET == 1 )) || gsb_log "installing $extension"
+    if "$CLI" --install-extension "$extension" --force >>"$LOG_FILE" 2>&1; then
+        installed_now=$((installed_now + 1))
+    else
+        failures=$((failures + 1))
+        gsb_warn "failed to install VS Code extension: $extension"
+    fi
+done
+
+if (( DRY_RUN == 1 )); then
+    (( QUIET == 1 )) || gsb_log "$missing extension(s) are missing"
+    exit 0
+fi
+
+if (( failures == 0 )); then
+    {
+        echo "completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "manifest=$MANIFEST"
+        echo "manifest_sha256=$MANIFEST_SHA256"
+        echo "cli=$CLI"
+        echo "requested=${#requested[@]}"
+        echo "installed_now=$installed_now"
+    } > "$COMPLETE"
+    (( QUIET == 1 )) || gsb_log "VS Code extensions ready (${#requested[@]} requested, $installed_now installed now)"
+else
+    rm -f -- "$COMPLETE"
+    gsb_warn "$failures extension(s) failed; see $LOG_FILE"
+    if (( STRICT == 1 )); then exit 1; else exit 4; fi
+fi
