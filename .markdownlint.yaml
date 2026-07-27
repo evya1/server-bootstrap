@@ -1,0 +1,17 @@
+# markdownlint configuration.
+#
+# The README uses a centered HTML header with badges and <details> blocks for
+# reference sections. GitHub has no Markdown syntax for either, so inline HTML
+# is deliberate rather than accidental.
+
+# MD033 no-inline-html: <div align="center">, <details>, <summary> are required
+# for the badge header and the collapsible reference sections.
+MD033: false
+
+# MD041 first-line-heading: the file opens with the centered <div> that wraps
+# the H1, so the H1 is on line 3 rather than line 1.
+MD041: false
+
+# MD013 line-length: prose is hard-wrapped near 80 columns, but tables and
+# badge URLs legitimately exceed it.
+MD013: false

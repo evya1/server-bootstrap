@@ -1,9 +1,20 @@
-# gpu-server-bootstrap 1.4.0
+<div align="center">
 
-A modular, workload-neutral foundation for newly rented Ubuntu GPU servers.
-It prepares the host, installs persistent provisioning and developer tools,
-checks the rented machine, and can then install checksum-verified workload
-bundles in a declared order.
+# gpu-server-bootstrap
+
+**One command turns a freshly rented Ubuntu GPU box into a working dev machine.**
+
+Verifies the hardware you paid for, installs a pinned toolchain, and starts nothing on its own.
+
+[![ci](https://github.com/evya1/gpu-server-bootstrap/actions/workflows/ci.yml/badge.svg)](https://github.com/evya1/gpu-server-bootstrap/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/evya1/gpu-server-bootstrap?color=2563eb&label=release)](https://github.com/evya1/gpu-server-bootstrap/releases/latest)
+[![license](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
+[![ubuntu](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![bash](https://img.shields.io/badge/Bash-5-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+
+</div>
+
+---
 
 ## Quick start
 
@@ -22,24 +33,14 @@ chmod +x gpu-provision.sh
 ./gpu-provision.sh --plan ./provision-plan.example.sh
 ```
 
-That is the whole installation. It verifies the archive checksum, installs the
-server foundation, and then checks that the machine you rented is the machine
-you paid for. Expect roughly five minutes, most of it `apt`.
+That is the whole installation — roughly five minutes, most of it `apt`.
 
-Rented GPU hosts hand you a root shell, and `sudo` is often not installed.
-Prefix the last command with `sudo` only if you are not root.
-
-Installed by the run:
-
-- Zsh as the login shell, pinned Oh My Zsh, and `alias c='clear'`;
-- checksum-verified Node.js 24.18.0 LTS for Linux x64 or ARM64;
-- Claude Code 2.1.216 and OpenAI Codex CLI 0.145.0 in an isolated npm prefix;
-- the 49 VS Code extensions for the Remote-SSH host;
-- uv and an isolated base Python environment;
-- a `gpu-accept` report on GPU, PCIe link width, thermals, RAM, CPU, and disk.
+> [!NOTE]
+> Rented GPU hosts hand you a root shell and often ship without `sudo`.
+> Prefix the last command with `sudo` only if you are not root.
 
 Then start the new shell and sign in to the two coding agents, which are
-installed but deliberately not authenticated:
+installed but deliberately **not** authenticated:
 
 ```bash
 exec zsh -l
@@ -47,22 +48,55 @@ claude
 codex
 ```
 
-Nothing else starts on its own: no workload, model download, or public port.
+Nothing else starts on its own: no workload, no model download, no public port.
+
+---
+
+## What the run installs
+
+| Area | Component |
+| --- | --- |
+| **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear` and GPU/disk/mem aliases |
+| **Node** | Checksum-verified Node.js 24.18.0 LTS, x64 or ARM64 |
+| **Agents** | Claude Code 2.1.216 and OpenAI Codex 0.145.0, isolated in `/opt/gpu-ai-cli` |
+| **Python** | uv, plus an isolated base environment |
+| **Editor** | 49 VS Code extensions for the Remote-SSH host |
+| **Hardware** | A `gpu-accept` report: GPU, PCIe link width, thermals, ECC, RAM, CPU, disk |
+
+Every version above is pinned by the release and checksum-verified before use.
+
+## How it works
+
+```mermaid
+flowchart LR
+  A["wget<br/>release assets"] --> B["verify<br/>SHA-256"]
+  B --> C["extract<br/>bundle"]
+  C --> D["install<br/>foundation"]
+  D --> E["gpu-accept"]
+  E --> F["workload bundles<br/>in plan order"]
+```
+
+Acceptance runs **before** any workload. A rejected box stops provisioning, so
+you find out the riser is x1 while destroying the instance is still cheap.
+
+---
 
 ## Which command do I run?
 
 | Goal | Command |
-|---|---|
+| --- | --- |
 | Provision a fresh server end to end | `./gpu-provision.sh --plan ./provision-plan.example.sh` |
 | Re-run or repair the foundation on a box that already has it | `gpu-server-bootstrap` |
 | Install one workload bundle later | `gpu-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check that the rented box matches spec | `gpu-accept` |
 | Install or repair the VS Code extension list | `gpu-vscode-extensions` |
+| Preview a plan without touching anything | `gpu-provision.sh --plan … --dry-run` |
 
-**Never execute a `provision-plan*.sh` file directly.** A plan is a data file,
-not a program: it only calls `register_bootstrap` and `register_bundle`, which
-exist for as long as `gpu-provision.sh` is reading it. Always pass a plan with
-`--plan`. Running one on its own now exits with that reminder.
+> [!WARNING]
+> **Never execute a `provision-plan*.sh` file directly.** A plan is a data file,
+> not a program: it only calls `register_bootstrap` and `register_bundle`, which
+> exist for as long as `gpu-provision.sh` is reading it. Always pass it with
+> `--plan`. Running one on its own exits with that reminder.
 
 `gpu-server-bootstrap.sh` inside the archive is the inner foundation installer.
 `gpu-provision.sh` verifies the archive, unpacks it, runs that script, runs the
@@ -73,7 +107,7 @@ is why it, not the inner script, is the entry point on a new machine.
 
 The shipped `provision-plan.example.sh` installs the foundation only, so it runs
 green with nothing else downloaded. To add a workload, put its archive and
-`.sha256` beside the plan and uncomment the `register_bundle` block inside it:
+`.sha256` beside the plan, then uncomment the `register_bundle` block inside it:
 
 ```text
 gpu-provision.sh
@@ -84,89 +118,132 @@ gpu-server-bootstrap-1.4.0.tar.gz.sha256
 <workload>-<version>.tar.gz.sha256
 ```
 
-Registering a bundle whose archive is not actually present aborts the run after
+Registering a bundle whose archive is not actually present aborts the run *after*
 the bootstrap has already installed, so add the files first.
 
-The provisioner installs the bootstrap first, runs `gpu-accept`, installs each
-registered bundle in order, and deletes local archives only after successful
-installation.
+The provisioner installs the bootstrap, runs `gpu-accept`, installs each
+registered bundle in order, and deletes local archives only after success.
 
-## Download integrity
+---
+
+## Security model
+
+<details>
+<summary><b>What the checksum does and does not prove</b></summary>
+
+<br>
 
 The archive checksum is verified before extraction. Fetching an archive and its
-`.sha256` from the same origin establishes integrity, not authenticity: it
+`.sha256` from the same origin establishes **integrity, not authenticity**: it
 detects a truncated or corrupted transfer, but anyone able to publish to the
-release can publish both files. The trust anchors are HTTPS, account 2FA, and
-pinning the expected SHA-256 in your own provision plan.
+release can publish both files. The real trust anchors are HTTPS, account 2FA,
+and pinning the expected SHA-256 in your own provision plan.
 
-There is deliberately no `curl | sh` installer; it would defeat the verified
+There is deliberately **no `curl | sh` installer**; it would defeat the verified
 archive model the rest of this bundle is built on.
 
 `gpu-provision.sh` resolves plan entries as local paths, so the bootstrap
 archive must be downloaded first. Workload bundles do not: `gpu-bundle-install`
 accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
 
-## Commands
+</details>
 
-| Command | Purpose |
-|---|---|
-| `gpu-server-bootstrap` | Prepare or refresh the general server foundation |
-| `gpu-provision` | Execute a local multi-bundle provisioning plan |
-| `gpu-bundle-install` | Install one verified bundle archive |
-| `gpu-accept` | Validate GPU, PCIe, thermals, RAM, CPU, and disk |
-| `gpu-vscode-extensions` | Install or repair the Remote-SSH extension manifest |
+<details>
+<summary><b>Guarantees</b></summary>
 
-The release archive also includes `gpu-provision.sh` as a standalone file for
-the first run, before the bootstrap has installed any commands.
-
-`gpu-bundle-install` is not a second bootstrap step. It is a generic helper for
-an explicitly named, versioned, checksum-verified add-on, so running it without
-arguments intentionally prints its usage.
-
-## VS Code Remote-SSH behavior
-
-VS Code Server normally exists only after the first Remote-SSH connection. If
-its CLI is already present, the bootstrap installs the extension manifest
-immediately. Otherwise it records a pending result. The generated Zsh startup
-configuration launches a rate-limited background installation when the first
-VS Code integrated terminal opens. You can also run this explicitly:
-
-```bash
-gpu-vscode-extensions
-```
-
-Reload the Remote-SSH window after a first-time extension installation.
-
-## Interactive shell
-
-The bootstrap installs Zsh, sets it as root's default login shell, installs a
-pinned Oh My Zsh revision, and loads it from `/root/.zshrc`. The generated
-server aliases include `c` for `clear`. Reconnect after the first bootstrap run,
-or run `exec zsh -l`, to enter the new login shell immediately.
-
-## Documentation
-
-- `docs/QUICKSTART.md` — first installation and reruns.
-- `docs/PROVISIONING.md` — plan format, ordering, deletion, and policies.
-- `docs/ARCHITECTURE.md` — modules and responsibility boundaries.
-- `docs/BUNDLE-CONTRACT.md` — requirements for future toolkit archives.
-- `docs/CONFIGURATION.md` — bootstrap and acceptance variables.
-- `docs/TROUBLESHOOTING.md` — failures and recovery.
-
-## Safety model
+<br>
 
 - SHA-256 is checked before Node.js or bundle archive extraction.
 - Archives with absolute paths, `..` traversal, or escaping symlinks are rejected.
 - Remote sources and the npm registry must use HTTPS.
 - Node.js, Claude Code, Codex, uv, and Oh My Zsh are version-pinned by the release.
 - Oh My Zsh is fetched at an exact commit; no upstream installer script is run.
-- AI CLI packages are installed into `/opt/gpu-ai-cli`, not the system npm tree.
+- AI CLI packages go to `/opt/gpu-ai-cli`, not the system npm tree.
 - Installation state records versions and completion status.
-- Local workload archives and checksum files are removed only after success.
-- No workload, model, dataset, or public service is started automatically.
+- Local workload archives and checksums are removed only after success.
+- No workload, model, dataset, or public service starts automatically.
 - The bootstrap never installs or replaces the NVIDIA driver.
+- Release archives are byte-reproducible and verified twice on every build.
 
-## Compatibility
+</details>
+
+## Reference
+
+<details>
+<summary><b>Commands</b></summary>
+
+<br>
+
+| Command | Purpose |
+| --- | --- |
+| `gpu-server-bootstrap` | Prepare or refresh the general server foundation |
+| `gpu-provision` | Execute a local multi-bundle provisioning plan |
+| `gpu-bundle-install` | Install one verified bundle archive |
+| `gpu-accept` | Validate GPU, PCIe, thermals, RAM, CPU, and disk |
+| `gpu-vscode-extensions` | Install or repair the Remote-SSH extension manifest |
+
+The release also ships `gpu-provision.sh` as a standalone file, for the first
+run before the bootstrap has installed any commands.
+
+`gpu-bundle-install` is not a second bootstrap step. It is a generic helper for
+an explicitly named, versioned, checksum-verified add-on, so running it without
+arguments intentionally prints its usage.
+
+</details>
+
+<details>
+<summary><b>VS Code Remote-SSH behavior</b></summary>
+
+<br>
+
+VS Code Server normally exists only after the first Remote-SSH connection. If
+its CLI is already present, the bootstrap installs the extension manifest
+immediately. Otherwise it records a pending result, and the generated Zsh
+startup configuration launches a rate-limited background installation when the
+first VS Code integrated terminal opens. You can also run it explicitly:
+
+```bash
+gpu-vscode-extensions
+```
+
+Reload the Remote-SSH window after a first-time extension installation. Point
+`VSCODE_EXTENSIONS_FILE` at your own manifest to install a different list.
+
+</details>
+
+<details>
+<summary><b>Interactive shell</b></summary>
+
+<br>
+
+The bootstrap installs Zsh, sets it as root's default login shell, installs a
+pinned Oh My Zsh revision, and loads it from `/root/.zshrc`. The generated
+server aliases include `c` for `clear`. Reconnect after the first run, or run
+`exec zsh -l`, to enter the new login shell immediately.
+
+</details>
+
+<details>
+<summary><b>Compatibility</b></summary>
+
+<br>
 
 The old single-add-on environment variables remain supported by
 `gpu-server-bootstrap.sh`. New multi-bundle setups should use a provision plan.
+
+</details>
+
+## Documentation
+
+| Guide | Covers |
+| --- | --- |
+| [QUICKSTART](docs/QUICKSTART.md) | First installation and reruns |
+| [PROVISIONING](docs/PROVISIONING.md) | Plan format, ordering, deletion, policies |
+| [CONFIGURATION](docs/CONFIGURATION.md) | Bootstrap and acceptance variables |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Modules and responsibility boundaries |
+| [BUNDLE-CONTRACT](docs/BUNDLE-CONTRACT.md) | Requirements for future toolkit archives |
+| [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) | Failures and recovery |
+
+## License
+
+[MIT](LICENSE)
