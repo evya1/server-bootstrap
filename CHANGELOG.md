@@ -3,6 +3,7 @@
 ## 1.4.0
 
 - First public release.
+- Fixed `gpu-provision.sh --dry-run` performing side effects before it printed anything: it created the log directory, opened a log file, and took the lock, so previewing a plan both wrote to `/workspace` and required root. A dry run is now read-only and works unprivileged. Caught by running the suite in CI, which is unprivileged; every local run had been as root.
 - Trimmed the VS Code Remote-SSH manifest to 49 extensions, dropping two entries that were specific to the original author's environment rather than generally useful. Override `VSCODE_EXTENSIONS_FILE` to install your own manifest instead.
 - Corrected stale `1.3.1` version headers in `config.example.env`, `checksums/OH_MY_ZSH_REF.txt`, and `checksums/UV_SHA256.txt`, which had drifted because they are neither Markdown nor shell files and were missed by the previous release bump.
 - Added a version-drift fitness test so a shipped file can no longer advertise a version that disagrees with `VERSION`.

@@ -171,6 +171,25 @@ second_line="$(printf '%s\n' "$output" | grep -n 'second 2.0.0' | cut -d: -f1)"
 [[ -n "$first_line" && -n "$second_line" && "$first_line" -lt "$second_line" ]] \
     && ok "plan preserves bundle order" || bad "plan order"
 
+# A dry run is a preview and must stay read-only: no log directory, no lock,
+# no root. This regressed invisibly until CI ran the suite unprivileged, where
+# gpu-provision.sh died on mkdir /workspace/startup-logs before printing.
+DRY_WS="$TMP/dryrun-workspace"
+WORKSPACE_ROOT="$DRY_WS" ./gpu-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run >/dev/null 2>&1 \
+    && [[ ! -e "$DRY_WS" ]] \
+    && ok "dry run creates no workspace or log files" || bad "dry run has side effects"
+if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
+    # mktemp -d is mode 700, so the unprivileged user needs traverse rights on
+    # $TMP itself, not just on the plan directory inside it.
+    chmod a+rx "$TMP" 2>/dev/null || true
+    chmod -R a+rX "$PLAN_DIR" 2>/dev/null || true
+    setpriv --reuid=65534 --regid=65534 --clear-groups \
+        ./gpu-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null | grep -q 'Bundles: 2' \
+        && ok "dry run works without root" || bad "dry run requires root"
+else
+    ok "dry run without root (already unprivileged or setpriv absent)"
+fi
+
 section "Provision integration"
 if (( EUID == 0 )); then
     FULL="$TMP/full"; mkdir -p "$FULL/bin" "$FULL/bootstrap-src/base-1.2.0"

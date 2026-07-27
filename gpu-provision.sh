@@ -56,6 +56,20 @@ source "$PLAN"
 
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
 LOG_ROOT="${LOG_ROOT:-$WORKSPACE_ROOT/startup-logs}"
+
+# A dry run is a preview: it must not create the log directory, open a log
+# file, or take the lock, and it must not need root. Previewing a plan is
+# exactly what you want to do before provisioning, often as an ordinary user.
+if (( DRY_RUN )); then
+    printf 'Provision plan: %s\n' "$PLAN"
+    printf 'Bootstrap: %s\n' "$BOOTSTRAP_ARCHIVE"
+    printf 'Bundles: %d\n' "${#BUNDLE_NAMES[@]}"
+    for i in "${!BUNDLE_NAMES[@]}"; do
+        printf '  %d. %s %s <- %s\n' "$((i+1))" "${BUNDLE_NAMES[i]}" "${BUNDLE_VERSIONS[i]}" "${BUNDLE_ARCHIVES[i]}"
+    done
+    exit 0
+fi
+
 mkdir -p "$LOG_ROOT"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="$LOG_ROOT/provision-$TS.log"
@@ -104,12 +118,8 @@ GPU_ACCEPT_POLICY="${GPU_ACCEPT_POLICY:-reject-stop}"
 printf 'Provision plan: %s\n' "$PLAN"
 printf 'Bootstrap: %s\n' "$BOOTSTRAP_ARCHIVE"
 printf 'Bundles: %d\n' "${#BUNDLE_NAMES[@]}"
-if (( DRY_RUN )); then
-    for i in "${!BUNDLE_NAMES[@]}"; do printf '  %d. %s %s <- %s\n' "$((i+1))" "${BUNDLE_NAMES[i]}" "${BUNDLE_VERSIONS[i]}" "${BUNDLE_ARCHIVES[i]}"; done
-    exit 0
-fi
 
-(( EUID == 0 )) || { echo "ERROR: run with sudo" >&2; exit 1; }
+(( EUID == 0 )) || { echo "ERROR: run as root" >&2; exit 1; }
 STEP=verify-bootstrap
 verify "$BOOTSTRAP_ARCHIVE" "$BOOTSTRAP_SHA_FILE"
 STEP=extract-bootstrap
