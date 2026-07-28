@@ -1,5 +1,5 @@
 # Shell scripts must keep LF endings; CRLF breaks the shebang line on Linux.
 * text=auto eol=lf
 *.sh text eol=lf
-gpu-bundle-install text eol=lf
-gpu-vscode-extensions text eol=lf
+server-bundle-install text eol=lf
+server-vscode-extensions text eol=lf

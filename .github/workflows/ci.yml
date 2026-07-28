@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: shellcheck (advisory)
-        run: shellcheck -S warning $(find . -name '*.sh' -not -path './release/dist/*') gpu-bundle-install gpu-vscode-extensions || true
+        run: shellcheck -S warning $(find . -name '*.sh' -not -path './release/dist/*') server-bundle-install server-vscode-extensions || true
       - name: test suite
         run: bash tests/run-tests.sh
 

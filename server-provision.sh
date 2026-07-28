@@ -8,7 +8,7 @@ KEEP_ARCHIVES=0
 
 usage() {
     cat <<'USAGE'
-Usage: sudo ./gpu-provision.sh [--plan FILE] [--dry-run] [--keep-archives]
+Usage: sudo ./server-provision.sh [--plan FILE] [--dry-run] [--keep-archives]
 
 The plan is a Bash data file that calls:
   register_bootstrap ARCHIVE SHA256_FILE [BOOTSTRAP_SCRIPT]
@@ -28,7 +28,7 @@ PLAN="$(realpath -m -- "$PLAN")"
 [[ -f "$PLAN" ]] || { echo "ERROR: plan not found: $PLAN" >&2; exit 1; }
 PLAN_DIR="$(cd -- "$(dirname -- "$PLAN")" && pwd -P)"
 
-BOOTSTRAP_ARCHIVE=""; BOOTSTRAP_SHA_FILE=""; BOOTSTRAP_SCRIPT=gpu-server-bootstrap.sh
+BOOTSTRAP_ARCHIVE=""; BOOTSTRAP_SHA_FILE=""; BOOTSTRAP_SCRIPT=server-bootstrap.sh
 BUNDLE_NAMES=(); BUNDLE_VERSIONS=(); BUNDLE_ARCHIVES=(); BUNDLE_SHA_FILES=(); BUNDLE_INSTALLERS=()
 
 resolve_plan_path() { [[ "$1" == /* ]] && realpath -m -- "$1" || realpath -m -- "$PLAN_DIR/$1"; }
@@ -36,7 +36,7 @@ register_bootstrap() {
     [[ -z "$BOOTSTRAP_ARCHIVE" ]] || { echo "ERROR: bootstrap registered twice" >&2; return 2; }
     BOOTSTRAP_ARCHIVE="$(resolve_plan_path "$1")"
     BOOTSTRAP_SHA_FILE="$(resolve_plan_path "$2")"
-    BOOTSTRAP_SCRIPT="${3:-gpu-server-bootstrap.sh}"
+    BOOTSTRAP_SCRIPT="${3:-server-bootstrap.sh}"
 }
 register_bundle() {
     local index="${#BUNDLE_NAMES[@]}"
@@ -75,7 +75,7 @@ TS="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="$LOG_ROOT/provision-$TS.log"
 SUMMARY_FILE="$LOG_ROOT/latest-provision-summary.txt"
 exec > >(tee -a "$LOG_FILE") 2>&1
-exec 9>"${TMPDIR:-/tmp}/gpu-provision.lock"
+exec 9>"${TMPDIR:-/tmp}/server-provision.lock"
 flock -w 1800 9 || { echo "ERROR: another provision run is active" >&2; exit 1; }
 
 STEP=initialize
@@ -113,7 +113,7 @@ cleanup_pair() { rm -f -- "$1" "$2"; }
 
 DELETE_ARCHIVES_AFTER_SUCCESS="${DELETE_ARCHIVES_AFTER_SUCCESS:-1}"
 (( KEEP_ARCHIVES == 0 )) || DELETE_ARCHIVES_AFTER_SUCCESS=0
-GPU_ACCEPT_POLICY="${GPU_ACCEPT_POLICY:-reject-stop}"
+ACCEPT_POLICY="${ACCEPT_POLICY:-reject-stop}"
 
 printf 'Provision plan: %s\n' "$PLAN"
 printf 'Bootstrap: %s\n' "$BOOTSTRAP_ARCHIVE"
@@ -131,17 +131,17 @@ mapfile -d '' bootstrap_matches < <(find "$TEMP_DIR" -type f -name "$BOOTSTRAP_S
 echo "==> Installing server foundation"
 STEP=bootstrap
 RUN_ACCEPT_TEST=0 bash "${bootstrap_matches[0]}"
-command -v gpu-bundle-install >/dev/null 2>&1 || { echo "ERROR: bootstrap did not install gpu-bundle-install" >&2; exit 1; }
+command -v server-bundle-install >/dev/null 2>&1 || { echo "ERROR: bootstrap did not install server-bundle-install" >&2; exit 1; }
 (( DELETE_ARCHIVES_AFTER_SUCCESS == 0 )) || cleanup_pair "$BOOTSTRAP_ARCHIVE" "$BOOTSTRAP_SHA_FILE"
 
 ACCEPTANCE=not-run
-if [[ "$GPU_ACCEPT_POLICY" != off ]]; then
+if [[ "$ACCEPT_POLICY" != off ]]; then
     STEP=acceptance
-    echo "==> Checking rented GPU server"
-    result=0; gpu-accept || result=$?
-    case "$result" in 0) ACCEPTANCE=accept ;; 1) ACCEPTANCE=reject ;; 2) ACCEPTANCE=warn ;; *) echo "ERROR: gpu-accept failed: $result" >&2; exit "$result" ;; esac
-    [[ "$GPU_ACCEPT_POLICY" != reject-stop || "$result" != 1 ]] || { echo "ERROR: GPU server rejected; workloads were not installed" >&2; exit 1; }
-    [[ "$GPU_ACCEPT_POLICY" != warn-stop || "$result" == 0 ]] || { echo "ERROR: GPU acceptance was not clean; workloads were not installed" >&2; exit 1; }
+    echo "==> Checking rented server"
+    result=0; server-accept || result=$?
+    case "$result" in 0) ACCEPTANCE=accept ;; 1) ACCEPTANCE=reject ;; 2) ACCEPTANCE=warn ;; *) echo "ERROR: server-accept failed: $result" >&2; exit "$result" ;; esac
+    [[ "$ACCEPT_POLICY" != reject-stop || "$result" != 1 ]] || { echo "ERROR: server rejected; workloads were not installed" >&2; exit 1; }
+    [[ "$ACCEPT_POLICY" != warn-stop || "$result" == 0 ]] || { echo "ERROR: acceptance was not clean; workloads were not installed" >&2; exit 1; }
 fi
 
 INSTALLED=0
@@ -152,7 +152,7 @@ for i in "${!BUNDLE_NAMES[@]}"; do
     declare -n args_ref="BUNDLE_ARGS_$i"
     STEP="bundle:$name"
     echo "==> Installing $name $version"
-    gpu-bundle-install --name "$name" --version "$version" --archive "$archive" \
+    server-bundle-install --name "$name" --version "$version" --archive "$archive" \
         --sha256-file "$sha_file" --installer "$installer" "${local_delete[@]}" -- "${args_ref[@]}"
     INSTALLED=$((INSTALLED + 1))
 done

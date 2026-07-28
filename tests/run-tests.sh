@@ -12,14 +12,15 @@ section(){ printf '\n== %s ==\n' "$1"; }
 section "Syntax and structure"
 while IFS= read -r file; do
     bash -n "$file" && ok "bash -n $file" || bad "syntax: $file"
-done < <(find . -type f \( -name '*.sh' -o -name 'gpu-bundle-install' -o -name 'gpu-vscode-extensions' \) | LC_ALL=C sort)
+done < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' -o -name 'server-vscode-extensions' \) \
+    -not -path './release/dist/*' | LC_ALL=C sort)
 for file in lib/core.sh lib/archive.sh lib/bundle.sh \
     lib/bootstrap/config.sh lib/bootstrap/workspace.sh lib/bootstrap/packages.sh \
     lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/vscode.sh lib/bootstrap/uv.sh lib/bootstrap/python.sh lib/bootstrap/shell.sh \
-    lib/bootstrap/runtime.sh lib/bootstrap/report.sh; do
+    lib/bootstrap/github_cli.sh lib/bootstrap/runtime.sh lib/bootstrap/report.sh; do
     [[ -f "$file" ]] && ok "module present: $file" || bad "missing module: $file"
 done
-for command in gpu-server-bootstrap.sh gpu-provision.sh gpu-bundle-install gpu-accept.sh gpu-vscode-extensions; do
+for command in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions; do
     [[ -x "$command" ]] && ok "executable: $command" || bad "not executable: $command"
 done
 
@@ -27,15 +28,15 @@ done
 # faster-whisper et al. and "torch" covers pytorch.
 auto_terms=(whisper transcribe torch)
 term_hit=0
-for file in gpu-server-bootstrap.sh gpu-bundle-install lib/*.sh lib/bootstrap/*.sh; do
+for file in server-bootstrap.sh server-bundle-install lib/*.sh lib/bootstrap/*.sh; do
     for term in "${auto_terms[@]}"; do
         if grep -qi -- "$term" "$file"; then bad "workload term '$term' in neutral code: $file"; term_hit=1; fi
     done
 done
 (( term_hit == 0 )) && ok "neutral runtime code"
 
-grep -q 'STEP=acceptance' gpu-server-bootstrap.sh && grep -q 'STEP=addon' gpu-server-bootstrap.sh \
-    && [[ "$(grep -n 'STEP=acceptance' gpu-server-bootstrap.sh | cut -d: -f1)" -lt "$(grep -n 'STEP=addon' gpu-server-bootstrap.sh | cut -d: -f1)" ]] \
+grep -q 'STEP=acceptance' server-bootstrap.sh && grep -q 'STEP=addon' server-bootstrap.sh \
+    && [[ "$(grep -n 'STEP=acceptance' server-bootstrap.sh | cut -d: -f1)" -lt "$(grep -n 'STEP=addon' server-bootstrap.sh | cut -d: -f1)" ]] \
     && ok "acceptance precedes optional add-on" || bad "acceptance ordering"
 
 section "Package command compatibility aliases"
@@ -48,7 +49,7 @@ cat > "$ALIAS_FIX/source/fdfind" <<'COMMAND'
 exit 0
 COMMAND
 chmod 0755 "$ALIAS_FIX/source/fdfind"
-gsb_warn(){ :; }
+sb_warn(){ :; }
 
 alias_rc_first=0
 PATH="$ALIAS_FIX/bin:$ALIAS_FIX/source:/usr/bin:/bin" \
@@ -75,6 +76,51 @@ BOOTSTRAP_LOCAL_BIN_DIR="$ALIAS_FIX/bin" \
     && ok "missing alias source warns without aborting" \
     || bad "missing alias source handling"
 
+section "Package manifest"
+PKG_FIX="$TMP/packages"; mkdir -p "$PKG_FIX"
+cat > "$PKG_FIX/manifest.txt" <<'MANIFEST'
+# leading comment
+[required]
+alpha
+bravo    # trailing comment
+
+charlie
+
+[optional]
+delta
+MANIFEST
+[[ "$(bootstrap_read_package_section "$PKG_FIX/manifest.txt" required | tr '\n' ' ')" == "alpha bravo charlie " ]] \
+    && ok "manifest [required] parsing skips comments and blanks" \
+    || bad "manifest [required] parsing"
+[[ "$(bootstrap_read_package_section "$PKG_FIX/manifest.txt" optional | tr '\n' ' ')" == "delta " ]] \
+    && ok "manifest [optional] parsing is section-scoped" \
+    || bad "manifest [optional] parsing"
+[[ -z "$(bootstrap_read_package_section "$PKG_FIX/manifest.txt" nosuchsection)" ]] \
+    && ok "unknown manifest section yields nothing" || bad "unknown manifest section"
+
+# A package name is interpolated straight onto the apt command line, so the
+# validator is a security boundary and not just a typo check.
+pkg_name_ok=1
+for name in libssl-dev g++ python3.12 p7zip-full node.js-x; do
+    bootstrap_valid_package_name "$name" || { bad "valid package name rejected: $name"; pkg_name_ok=0; }
+done
+for name in '' 'UPPER' '-leading' 'semi;rm -rf /' 'with space' 'sub$(id)' 'under_score'; do
+    bootstrap_valid_package_name "$name" && { bad "invalid package name accepted: $name"; pkg_name_ok=0; }
+done
+(( pkg_name_ok == 1 )) && ok "package name validation accepts and rejects correctly"
+
+manifest_bad=0
+while IFS= read -r name; do
+    bootstrap_valid_package_name "$name" || { bad "invalid name in shipped manifest: $name"; manifest_bad=1; }
+done < <(bootstrap_read_package_section config/packages.txt required
+         bootstrap_read_package_section config/packages.txt optional)
+(( manifest_bad == 0 )) && ok "shipped package manifest contains only valid names"
+[[ "$( { bootstrap_read_package_section config/packages.txt required
+         bootstrap_read_package_section config/packages.txt optional; } | sort | uniq -d | wc -l)" == 0 ]] \
+    && ok "shipped package manifest has no duplicates" || bad "duplicate package in manifest"
+[[ "$(bootstrap_read_package_section config/packages.txt required | wc -l)" -ge 40 ]] \
+    && ok "shipped manifest keeps a substantial [required] set" || bad "manifest [required] shrank unexpectedly"
+
 section "Generic bundle installation"
 FIX="$TMP/fix"; mkdir -p "$FIX/src/demo-1.0.0"
 printf '1.0.0\n' > "$FIX/src/demo-1.0.0/VERSION"
@@ -87,7 +133,7 @@ chmod 0755 "$FIX/src/demo-1.0.0/install.sh"
 tar -czf "$FIX/demo-1.0.0.tar.gz" -C "$FIX/src" demo-1.0.0
 sha256sum "$FIX/demo-1.0.0.tar.gz" > "$FIX/demo.sha256"
 STATE="$FIX/state"; MARK="$FIX/mark"
-if DEMO_MARK="$MARK" STATE_ROOT="$STATE" ./gpu-bundle-install \
+if DEMO_MARK="$MARK" STATE_ROOT="$STATE" ./server-bundle-install \
     --name demo --version 1.0.0 --archive "$FIX/demo-1.0.0.tar.gz" \
     --sha256-file "$FIX/demo.sha256" -- --alpha beta >/dev/null; then
     ok "valid bundle installs"
@@ -97,7 +143,7 @@ else bad "valid bundle install failed"; fi
 [[ -s "$STATE/bundles/demo/archive-sha256" ]] && ok "archive hash state" || bad "archive hash state"
 
 rm -f "$MARK"
-if DEMO_MARK="$MARK" STATE_ROOT="$STATE" ./gpu-bundle-install \
+if DEMO_MARK="$MARK" STATE_ROOT="$STATE" ./server-bundle-install \
     --name demo --version 1.0.0 --archive "$FIX/demo-1.0.0.tar.gz" \
     --sha256-file "$FIX/demo.sha256" >/dev/null && [[ ! -e "$MARK" ]]; then
     ok "same version and hash is skipped"
@@ -105,7 +151,7 @@ else bad "idempotent skip"; fi
 
 cp "$FIX/demo-1.0.0.tar.gz" "$FIX/delete-me.tar.gz"
 sha256sum "$FIX/delete-me.tar.gz" > "$FIX/delete-me.sha256"
-if DEMO_MARK="$FIX/delete-mark" STATE_ROOT="$FIX/delete-state" ./gpu-bundle-install \
+if DEMO_MARK="$FIX/delete-mark" STATE_ROOT="$FIX/delete-state" ./server-bundle-install \
     --name delete-demo --version 1.0.0 --archive "$FIX/delete-me.tar.gz" \
     --sha256-file "$FIX/delete-me.sha256" --delete-after-success >/dev/null \
     && [[ ! -e "$FIX/delete-me.tar.gz" && ! -e "$FIX/delete-me.sha256" ]]; then
@@ -122,7 +168,7 @@ BAD
 chmod +x "$FIX/badsrc/bad-1.0.0/install.sh"
 tar -czf "$FIX/fail.tar.gz" -C "$FIX/badsrc" bad-1.0.0
 sha256sum "$FIX/fail.tar.gz" > "$FIX/fail.sha256"
-if STATE_ROOT="$FIX/fail-state" ./gpu-bundle-install --name fail-demo --version 1.0.0 \
+if STATE_ROOT="$FIX/fail-state" ./server-bundle-install --name fail-demo --version 1.0.0 \
     --archive "$FIX/fail.tar.gz" --sha256-file "$FIX/fail.sha256" \
     --delete-after-success >/dev/null 2>&1; then
     bad "failing installer accepted"
@@ -144,14 +190,14 @@ with tarfile.open(os.path.join(root,'symlink.tar.gz'),'w:gz') as t:
 PY
 mkdir -p "$TMP/xz-src/pkg"; printf 'ok\n' > "$TMP/xz-src/pkg/value.txt"
 tar -cJf "$TMP/valid.tar.xz" -C "$TMP/xz-src" pkg
-if bash -c 'set -e; source lib/archive.sh; gsb_extract_archive "$1" "$2" >/dev/null; [[ "$(cat "$2/pkg/value.txt")" == ok ]]' _ \
+if bash -c 'set -e; source lib/archive.sh; sb_extract_archive "$1" "$2" >/dev/null; [[ "$(cat "$2/pkg/value.txt")" == ok ]]' _ \
     "$TMP/valid.tar.xz" "$TMP/xz-out"; then
     ok "valid tar.xz extracts safely"
 else bad "tar.xz extraction"; fi
 
 for kind in traversal symlink; do
     sha256sum "$TMP/$kind.tar.gz" > "$TMP/$kind.sha256"
-    if STATE_ROOT="$TMP/$kind-state" ./gpu-bundle-install --name "$kind" --version 1.0.0 \
+    if STATE_ROOT="$TMP/$kind-state" ./server-bundle-install --name "$kind" --version 1.0.0 \
         --archive "$TMP/$kind.tar.gz" --sha256-file "$TMP/$kind.sha256" >/dev/null 2>&1; then
         bad "$kind archive accepted"
     else ok "$kind archive rejected"; fi
@@ -164,7 +210,7 @@ register_bootstrap ./base.tar.gz ./base.sha256
 register_bundle first 1.0.0 ./first.tar.gz ./first.sha256 install.sh --one
 register_bundle second 2.0.0 ./second.tar.gz ./second.sha256 install.sh --two
 PLAN
-output="$(./gpu-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run)"
+output="$(./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run)"
 [[ "$output" == *'Bundles: 2'* ]] && ok "dry-run counts bundles" || bad "dry-run count"
 first_line="$(printf '%s\n' "$output" | grep -n 'first 1.0.0' | cut -d: -f1)"
 second_line="$(printf '%s\n' "$output" | grep -n 'second 2.0.0' | cut -d: -f1)"
@@ -173,9 +219,9 @@ second_line="$(printf '%s\n' "$output" | grep -n 'second 2.0.0' | cut -d: -f1)"
 
 # A dry run is a preview and must stay read-only: no log directory, no lock,
 # no root. This regressed invisibly until CI ran the suite unprivileged, where
-# gpu-provision.sh died on mkdir /workspace/startup-logs before printing.
+# server-provision.sh died on mkdir /workspace/startup-logs before printing.
 DRY_WS="$TMP/dryrun-workspace"
-WORKSPACE_ROOT="$DRY_WS" ./gpu-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run >/dev/null 2>&1 \
+WORKSPACE_ROOT="$DRY_WS" ./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run >/dev/null 2>&1 \
     && [[ ! -e "$DRY_WS" ]] \
     && ok "dry run creates no workspace or log files" || bad "dry run has side effects"
 if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
@@ -184,7 +230,7 @@ if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
     chmod a+rx "$TMP" 2>/dev/null || true
     chmod -R a+rX "$PLAN_DIR" 2>/dev/null || true
     setpriv --reuid=65534 --regid=65534 --clear-groups \
-        ./gpu-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null | grep -q 'Bundles: 2' \
+        ./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null | grep -q 'Bundles: 2' \
         && ok "dry run works without root" || bad "dry run requires root"
 else
     ok "dry run without root (already unprivileged or setpriv absent)"
@@ -193,16 +239,16 @@ fi
 section "Provision integration"
 if (( EUID == 0 )); then
     FULL="$TMP/full"; mkdir -p "$FULL/bin" "$FULL/bootstrap-src/base-1.2.0"
-    cat > "$FULL/bootstrap-src/base-1.2.0/gpu-server-bootstrap.sh" <<'FAKEBOOT'
+    cat > "$FULL/bootstrap-src/base-1.2.0/server-bootstrap.sh" <<'FAKEBOOT'
 #!/usr/bin/env bash
 set -e
 printf 'bootstrap\n' >> "$PROVISION_ORDER_LOG"
-cat > "$PROVISION_FAKE_BIN/gpu-accept" <<'ACCEPT'
+cat > "$PROVISION_FAKE_BIN/server-accept" <<'ACCEPT'
 #!/usr/bin/env bash
 printf 'accept\n' >> "$PROVISION_ORDER_LOG"
 exit 0
 ACCEPT
-cat > "$PROVISION_FAKE_BIN/gpu-bundle-install" <<'BUNDLE'
+cat > "$PROVISION_FAKE_BIN/server-bundle-install" <<'BUNDLE'
 #!/usr/bin/env bash
 set -e
 name= archive= sha_file= delete=0
@@ -219,9 +265,9 @@ done
 printf 'bundle:%s\n' "$name" >> "$PROVISION_ORDER_LOG"
 (( delete == 0 )) || rm -f -- "$archive" "$sha_file"
 BUNDLE
-chmod 0755 "$PROVISION_FAKE_BIN/gpu-accept" "$PROVISION_FAKE_BIN/gpu-bundle-install"
+chmod 0755 "$PROVISION_FAKE_BIN/server-accept" "$PROVISION_FAKE_BIN/server-bundle-install"
 FAKEBOOT
-    chmod +x "$FULL/bootstrap-src/base-1.2.0/gpu-server-bootstrap.sh"
+    chmod +x "$FULL/bootstrap-src/base-1.2.0/server-bootstrap.sh"
     tar -czf "$FULL/base.tar.gz" -C "$FULL/bootstrap-src" base-1.2.0
     sha256sum "$FULL/base.tar.gz" > "$FULL/base.sha256"
     : > "$FULL/one.tar.gz"; sha256sum "$FULL/one.tar.gz" > "$FULL/one.sha256"
@@ -231,13 +277,13 @@ export WORKSPACE_ROOT="$PLAN_DIR/workspace"
 export PATH="$PLAN_DIR/bin:$PATH"
 export PROVISION_FAKE_BIN="$PLAN_DIR/bin"
 export PROVISION_ORDER_LOG="$PLAN_DIR/order.log"
-export GPU_ACCEPT_POLICY=reject-stop
+export ACCEPT_POLICY=reject-stop
 export DELETE_ARCHIVES_AFTER_SUCCESS=1
 register_bootstrap ./base.tar.gz ./base.sha256
 register_bundle one 1.0.0 ./one.tar.gz ./one.sha256 install.sh
 register_bundle two 2.0.0 ./two.tar.gz ./two.sha256 install.sh
 PLAN
-    if ./gpu-provision.sh --plan "$FULL/plan.sh" >/dev/null \
+    if ./server-provision.sh --plan "$FULL/plan.sh" >/dev/null \
         && [[ "$(cat "$FULL/order.log")" == $'bootstrap\naccept\nbundle:one\nbundle:two' ]] \
         && [[ ! -e "$FULL/base.tar.gz" && ! -e "$FULL/one.tar.gz" && ! -e "$FULL/two.tar.gz" ]]; then
         ok "full provision order and cleanup"
@@ -265,12 +311,12 @@ publisher.already
 publisher.missing
 EXT
 if VSCODE_INSTALL_LOG="$VSCODE_FIX/install.log" STATE_ROOT="$VSCODE_FIX/state" LOG_ROOT="$VSCODE_FIX/log" \
-    ./gpu-vscode-extensions --cli "$VSCODE_FIX/code" --manifest "$VSCODE_FIX/extensions.txt" >/dev/null \
+    ./server-vscode-extensions --cli "$VSCODE_FIX/code" --manifest "$VSCODE_FIX/extensions.txt" >/dev/null \
     && [[ "$(cat "$VSCODE_FIX/install.log")" == publisher.missing ]]; then
     ok "helper installs only missing extensions"
 else bad "VS Code helper idempotence"; fi
 if STATE_ROOT="$VSCODE_FIX/no-cli-state" LOG_ROOT="$VSCODE_FIX/no-cli-log" \
-    VSCODE_CLI=/does/not/exist ./gpu-vscode-extensions --manifest "$VSCODE_FIX/extensions.txt" >/dev/null 2>&1; then
+    VSCODE_CLI=/does/not/exist ./server-vscode-extensions --manifest "$VSCODE_FIX/extensions.txt" >/dev/null 2>&1; then
     bad "missing explicit VS Code CLI accepted"
 else ok "missing explicit VS Code CLI rejected"; fi
 cat > "$VSCODE_FIX/code-partial" <<'FAKEPARTIAL'
@@ -293,11 +339,33 @@ publisher.after
 EXTPARTIAL
 partial_rc=0
 VSCODE_INSTALL_LOG="$VSCODE_FIX/partial.log" STATE_ROOT="$VSCODE_FIX/partial-state" LOG_ROOT="$VSCODE_FIX/partial-logs" \
-    ./gpu-vscode-extensions --cli "$VSCODE_FIX/code-partial" --manifest "$VSCODE_FIX/extensions-partial.txt" >/dev/null 2>&1 || partial_rc=$?
+    ./server-vscode-extensions --cli "$VSCODE_FIX/code-partial" --manifest "$VSCODE_FIX/extensions-partial.txt" >/dev/null 2>&1 || partial_rc=$?
 if [[ "$partial_rc" == 4 && "$(cat "$VSCODE_FIX/partial.log")" == $'publisher.fail
 publisher.after' ]]; then
     ok "helper continues after an extension failure"
 else bad "VS Code helper partial-failure behavior"; fi
+
+section "Acceptance test is accelerator-optional"
+# A CPU-only box is a legitimate rental. Absent nvidia-smi must be a note, not a
+# rejection, unless the caller says it paid for a GPU.
+ACCEPT_FIX="$TMP/accept"; mkdir -p "$ACCEPT_FIX"
+if PATH=/usr/bin:/bin command -v nvidia-smi >/dev/null 2>&1; then
+    ok "accelerator-absent path skipped (this machine has nvidia-smi)"
+else
+    accept_rc=0
+    accept_json="$(PATH=/usr/bin:/bin MIN_DISK_GB=0 MIN_DISK_MBPS=0 WORKSPACE_ROOT="$ACCEPT_FIX" \
+        ./server-accept.sh --json)" || accept_rc=$?
+    if [[ "$accept_rc" == 0 ]] && grep -q '"level":"ok","check":"accelerator"' <<<"$accept_json"; then
+        ok "machine with no GPU is accepted by default"
+    else bad "no-GPU acceptance (exit $accept_rc)"; fi
+
+    accept_rc=0
+    accept_json="$(PATH=/usr/bin:/bin REQUIRE_ACCELERATOR=1 MIN_DISK_GB=0 MIN_DISK_MBPS=0 WORKSPACE_ROOT="$ACCEPT_FIX" \
+        ./server-accept.sh --json)" || accept_rc=$?
+    if [[ "$accept_rc" == 1 ]] && grep -q '"level":"reject","check":"accelerator"' <<<"$accept_json"; then
+        ok "REQUIRE_ACCELERATOR=1 rejects a machine with no GPU"
+    else bad "REQUIRE_ACCELERATOR rejection (exit $accept_rc)"; fi
+fi
 
 section "Configuration and documentation"
 grep -q 'UV_SHA256="${UV_SHA256:-[0-9a-fA-F]\{64\}}"' lib/bootstrap/config.sh \
@@ -318,9 +386,9 @@ grep -q 'INSTALL_CODEX="${INSTALL_CODEX:-1}"' lib/bootstrap/config.sh \
     && grep -q '@openai/codex@' lib/bootstrap/ai_cli.sh \
     && ok "Codex is enabled and version pinned" || bad "Codex defaults/pin"
 grep -q 'INSTALL_VSCODE_EXTENSIONS="${INSTALL_VSCODE_EXTENSIONS:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'gpu-vscode-extensions --auto' lib/bootstrap/shell.sh \
+    && grep -q 'server-vscode-extensions --auto' lib/bootstrap/shell.sh \
     && [[ "$(awk 'NF && $1 !~ /^#/ {n++} END{print n}' config/vscode-extensions.txt)" == 49 ]] \
-    && grep -q 'gpu-vscode-extensions" "$stage/gpu-vscode-extensions' lib/bootstrap/runtime.sh \
+    && grep -q 'server-vscode-extensions" "$stage/server-vscode-extensions' lib/bootstrap/runtime.sh \
     && grep -q 'config/vscode-extensions.txt" "$stage/config/vscode-extensions.txt' lib/bootstrap/runtime.sh \
     && ok "VS Code extension manifest and deferred installer" || bad "VS Code extension configuration"
 awk 'NF && $1 !~ /^#/ {print tolower($1)}' config/vscode-extensions.txt | grep -Eqv '^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9._-]*$' \
@@ -328,8 +396,20 @@ awk 'NF && $1 !~ /^#/ {print tolower($1)}' config/vscode-extensions.txt | grep -
 [[ "$(awk 'NF && $1 !~ /^#/ {print tolower($1)}' config/vscode-extensions.txt | sort | uniq -d | wc -l)" == 0 ]] \
     && ok "VS Code extension IDs are unique" || bad "duplicate VS Code extension IDs"
 
+grep -q 'INSTALL_GITHUB_CLI="${INSTALL_GITHUB_CLI:-1}"' lib/bootstrap/config.sh \
+    && grep -Eq 'GH_VERSION="\$\{GH_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' lib/bootstrap/config.sh \
+    && grep -Eq 'GH_SHA256_X64="\$\{GH_SHA256_X64:-[0-9a-fA-F]{64}\}"' lib/bootstrap/config.sh \
+    && grep -Eq 'GH_SHA256_ARM64="\$\{GH_SHA256_ARM64:-[0-9a-fA-F]{64}\}"' lib/bootstrap/config.sh \
+    && grep -q 'github.com/cli/cli/releases/download' lib/bootstrap/github_cli.sh \
+    && ok "GitHub CLI is enabled and checksum pinned" || bad "GitHub CLI defaults/checksums"
+# gh ships as a verified tarball, so it must never also be an apt package name:
+# two installers for one binary is how a pinned version silently regresses.
+grep -Eq '^gh$' config/packages.txt \
+    && bad "gh must be installed from the pinned release, not apt" \
+    || ok "gh is not duplicated in the apt manifest"
+
 grep -q 'INSTALL_ZSH="${INSTALL_ZSH:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'zsh ffmpeg' lib/bootstrap/packages.sh \
+    && grep -Eq '^zsh$' config/packages.txt && grep -Eq '^ffmpeg$' config/packages.txt \
     && ok "Zsh installed by default" || bad "Zsh package/default"
 grep -q 'INSTALL_OH_MY_ZSH="${INSTALL_OH_MY_ZSH:-1}"' lib/bootstrap/config.sh \
     && grep -Eq 'OH_MY_ZSH_REF="\$\{OH_MY_ZSH_REF:-[0-9a-fA-F]{40}\}"' lib/bootstrap/config.sh \
@@ -346,7 +426,7 @@ done
 
 section "Fitness: example plans are safe to copy and paste"
 # A plan carries a shebang and the executable bit, so it looks runnable. It is
-# not: register_bootstrap only exists while gpu-provision.sh sources it. Running
+# not: register_bootstrap only exists while server-provision.sh sources it. Running
 # one used to emit 'command not found' twice and exit 127.
 plan_guard_drift=0
 for plan in examples/provision-plan*.sh; do
@@ -370,13 +450,13 @@ else
     ok "default example plan registers no unavailable bundle"
 fi
 
-# The README must send people through gpu-provision.sh, never at a plan file.
+# The README must send people through server-provision.sh, never at a plan file.
 if grep -qE '^[[:space:]]*(sudo )?\./provision-plan[^[:space:]]*\.sh' README.md; then
     bad "README invokes a plan file directly"
-elif grep -q 'gpu-provision.sh --plan' README.md; then
-    ok "README quick start uses gpu-provision.sh --plan"
+elif grep -q 'server-provision.sh --plan' README.md; then
+    ok "README quick start uses server-provision.sh --plan"
 else
-    bad "README quick start does not show gpu-provision.sh --plan"
+    bad "README quick start does not show server-provision.sh --plan"
 fi
 
 section "Fitness: shipped version strings match VERSION"
@@ -394,10 +474,10 @@ while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
     bad "stale version string: $hit"
     version_drift=1
-done < <(grep -rnoE 'gpu-server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
+done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
     README.md config.example.env checksums/*.txt docs/PROVISIONING.md examples/*.sh 2>/dev/null \
-    | grep -vF "gpu-server-bootstrap $declared" \
-    | grep -vF "gpu-server-bootstrap-$declared" || true)
+    | grep -vF "server-bootstrap $declared" \
+    | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"
 
 section "Results"

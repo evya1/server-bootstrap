@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gpu-accept.sh — decide whether the box you just rented is the box you bought.
+# server-accept.sh — decide whether the box you just rented is the box you bought.
 #
-# Runs in under 60s on nvidia-smi + coreutils. No Python, no torch, no network
-# by default. Intended as the FIRST thing after gpu-server-bootstrap, while the
-# meter is running and destroying the instance is still cheap.
+# Runs in under 60s on coreutils alone. No Python, no torch, no network by
+# default. Intended as the FIRST thing after server-bootstrap, while the meter
+# is running and destroying the instance is still cheap.
 #
 # Exit codes:  0 accept   1 reject (hard failure)   2 warn (review)   3 usage
+#
+# CPU, RAM, and disk are checked on every machine. The accelerator section runs
+# only when nvidia-smi is present: a CPU-only box is a legitimate rental, so its
+# absence is reported and skipped rather than rejected. Set REQUIRE_ACCELERATOR=1
+# when you are paying for a GPU and a machine without one is a failed delivery.
 #
 # Rejects, in order of how often they actually happen on rental marketplaces:
 #   - PCIe link narrower than the card supports (x16 card on an x1/x4 riser).
@@ -26,15 +31,18 @@ MIN_RAM_GB="${MIN_RAM_GB:-0}"
 MIN_DISK_GB="${MIN_DISK_GB:-50}"
 MIN_DISK_MBPS="${MIN_DISK_MBPS:-100}"
 MAX_TEMP_C="${MAX_TEMP_C:-85}"
+REQUIRE_ACCELERATOR="${REQUIRE_ACCELERATOR:-0}"
 WORKSPACE="${WORKSPACE_ROOT:-/workspace}"
 JSON=0
 
 usage() {
     cat <<'EOF'
-Usage: gpu-accept.sh [--json]
+Usage: server-accept.sh [--json]
 Thresholds are environment variables (current defaults shown by --json):
-  MIN_VRAM_MIB MIN_PCIE_WIDTH MIN_PCIE_GEN MIN_CORES MIN_RAM_GB
-  MIN_DISK_GB MIN_DISK_MBPS MAX_TEMP_C WORKSPACE_ROOT
+  MIN_CORES MIN_RAM_GB MIN_DISK_GB MIN_DISK_MBPS WORKSPACE_ROOT
+Accelerator checks run only when nvidia-smi is present:
+  REQUIRE_ACCELERATOR (1 = reject a machine with no GPU; default 0)
+  MIN_VRAM_MIB MIN_PCIE_WIDTH MIN_PCIE_GEN MAX_TEMP_C
 Exit: 0 accept, 1 reject, 2 warn, 3 usage.
 EOF
 }
@@ -59,14 +67,20 @@ q() {  # q FIELD  -> first GPU's value for an nvidia-smi query field
         | head -n1 | sed 's/^ *//; s/ *$//'
 }
 
-(( JSON )) || echo "== gpu-accept =="
+(( JSON )) || echo "== server-accept =="
 
-# ---- GPU present ------------------------------------------------------------
+# ---- Accelerator (optional) -------------------------------------------------
+# A CPU-only machine is a valid rental, so a missing nvidia-smi is only a hard
+# failure when the caller says it paid for a GPU.
 if ! command -v nvidia-smi >/dev/null 2>&1; then
-    reject "gpu" "nvidia-smi absent — this box has no usable GPU"
+    if [[ "$REQUIRE_ACCELERATOR" == 1 ]]; then
+        reject "accelerator" "nvidia-smi absent but REQUIRE_ACCELERATOR=1 — this box has no usable GPU"
+    else
+        note "accelerator" "no NVIDIA GPU detected; accelerator checks skipped (set REQUIRE_ACCELERATOR=1 to reject)"
+    fi
 else
     NAME="$(q name)"; VRAM="$(q memory.total)"; DRIVER="$(q driver_version)"
-    note "gpu" "$NAME, ${VRAM}MiB, driver $DRIVER"
+    note "accelerator" "$NAME, ${VRAM}MiB, driver $DRIVER"
 
     if [[ "$MIN_VRAM_MIB" -gt 0 && "${VRAM:-0}" -lt "$MIN_VRAM_MIB" ]]; then
         reject "vram" "${VRAM}MiB < required ${MIN_VRAM_MIB}MiB"

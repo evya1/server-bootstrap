@@ -3,21 +3,23 @@
 The bootstrap is split by responsibility rather than kept as one large script.
 
 ```text
-gpu-server-bootstrap.sh       orchestration of the base host setup
-gpu-provision.sh              first-run and multi-bundle orchestration
-gpu-bundle-install            one-bundle command-line interface
-gpu-accept.sh                 rented-machine validation
-gpu-vscode-extensions         idempotent Remote-SSH extension installer
+server-bootstrap.sh           orchestration of the base host setup
+server-provision.sh           first-run and multi-bundle orchestration
+server-bundle-install         one-bundle command-line interface
+server-accept.sh              rented-machine validation
+server-vscode-extensions      idempotent Remote-SSH extension installer
+config/packages.txt           required and optional apt package manifest
 config/vscode-extensions.txt  requested extension manifest
 lib/core.sh                   logging, retries, checksums, verified downloads
 lib/archive.sh                safe gzip/xz tar and zip inspection/extraction
 lib/bundle.sh                 generic bundle lifecycle and state
 lib/bootstrap/config.sh       configuration defaults
 lib/bootstrap/workspace.sh    directories and caches
-lib/bootstrap/packages.sh     apt packages and command aliases
+lib/bootstrap/packages.sh     apt manifest parsing and command aliases
 lib/bootstrap/node.sh         pinned, verified Node.js binary installation
 lib/bootstrap/ai_cli.sh       isolated Claude Code and Codex npm installation
 lib/bootstrap/uv.sh           optional pinned uv installation
+lib/bootstrap/github_cli.sh   pinned, verified GitHub CLI binary installation
 lib/bootstrap/python.sh       isolated base Python environment
 lib/bootstrap/shell.sh        Zsh, Oh My Zsh, aliases, VS Code startup hook
 lib/bootstrap/vscode.sh       immediate-or-deferred extension orchestration
@@ -27,23 +29,23 @@ lib/bootstrap/report.sh       acceptance policy and system report
 
 ## Execution order
 
-`gpu-provision.sh` uses this order:
+`server-provision.sh` uses this order:
 
 ```text
 verify bootstrap archive
 → extract bootstrap safely
 → install server foundation
-→ run gpu-accept
+→ run server-accept
 → install registered bundles in plan order
 → write one provisioning summary
 ```
 
-`gpu-server-bootstrap.sh` itself uses this order:
+`server-bootstrap.sh` itself uses this order:
 
 ```text
 workspace → apt packages → persistent tools → Node.js → Claude/Codex
-→ uv → base Python → shell → VS Code extensions
-→ GPU acceptance → optional legacy add-on → report → state
+→ uv → GitHub CLI → base Python → shell → VS Code extensions
+→ acceptance → optional legacy add-on → report → state
 ```
 
 The acceptance test therefore still runs before every optional workload bundle.

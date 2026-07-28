@@ -4,8 +4,8 @@ set -Eeuo pipefail
 
 SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
 ROOT="$(cd -- "$(dirname -- "$SELF")" && pwd -P)"
-LIB_ROOT="${GSB_LIB_ROOT:-$ROOT/lib}"
-[[ -f "$LIB_ROOT/bundle.sh" ]] || LIB_ROOT=/usr/local/lib/gpu-server-bootstrap/lib
+LIB_ROOT="${SB_LIB_ROOT:-$ROOT/lib}"
+[[ -f "$LIB_ROOT/bundle.sh" ]] || LIB_ROOT=/usr/local/lib/server-bootstrap/lib
 # shellcheck source=lib/bundle.sh
 source "$LIB_ROOT/bundle.sh"
 
@@ -15,7 +15,7 @@ STATE_ROOT="${STATE_ROOT:-${WORKSPACE_ROOT:-/workspace}/.setup-state}"
 
 usage() {
     cat <<'USAGE'
-Usage: gpu-bundle-install --name NAME --version VERSION --source ARCHIVE_OR_HTTPS \
+Usage: server-bundle-install --name NAME --version VERSION --source ARCHIVE_OR_HTTPS \
        (--sha256 HEX | --sha256-file FILE) [options] [-- INSTALLER_ARGS...]
 
 Options:
@@ -53,11 +53,11 @@ INSTALLER_ARGS=("$@")
 if [[ -n "$SHA_FILE" ]]; then
     [[ -z "$SHA256" ]] || { echo "ERROR: use either --sha256 or --sha256-file" >&2; exit 2; }
     SHA_FILE="$(realpath -m -- "$SHA_FILE")"
-    SHA256="$(gsb_read_sha256_file "$SHA_FILE")"
+    SHA256="$(sb_read_sha256_file "$SHA_FILE")"
 fi
 [[ -n "$SHA256" ]] || { echo "ERROR: checksum is required" >&2; exit 2; }
 if [[ "$SOURCE_REF" != https://* ]]; then SOURCE_REF="$(realpath -m -- "${SOURCE_REF#file://}")"; fi
 
-GSB_LOG_PREFIX=gpu-bundle-install
-gsb_install_bundle "$NAME" "$VERSION" "$SOURCE_REF" "$SHA256" "$INSTALLER" \
+SB_LOG_PREFIX=server-bundle-install
+sb_install_bundle "$NAME" "$VERSION" "$SOURCE_REF" "$SHA256" "$INSTALLER" \
     "$DELETE_AFTER" "$FORCE" "$STATE_ROOT" "$SHA_FILE" "${INSTALLER_ARGS[@]}"

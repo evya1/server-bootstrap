@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# A provision plan is a DATA file read by gpu-provision.sh, not a script to run.
+# A provision plan is a DATA file read by server-provision.sh, not a script to run.
 # Paths are resolved relative to this plan file.
 
 if ! declare -F register_bootstrap >/dev/null 2>&1; then
-    echo "ERROR: this is a plan (data) file for gpu-provision.sh, not a script to run." >&2
-    echo "Run:   ./gpu-provision.sh --plan $0" >&2
+    echo "ERROR: this is a plan (data) file for server-provision.sh, not a script to run." >&2
+    echo "Run:   ./server-provision.sh --plan $0" >&2
     exit 2
 fi
 
@@ -14,7 +14,7 @@ export MIN_VRAM_MIB=0
 export MIN_CORES=0
 export MIN_RAM_GB=0
 export MIN_DISK_GB=50
-export GPU_ACCEPT_POLICY=reject-stop
+export ACCEPT_POLICY=reject-stop
 export DELETE_ARCHIVES_AFTER_SUCCESS=1
 
 # Optional pinned uv installation. Leave INSTALL_UV=0 until both values are set.
@@ -23,8 +23,8 @@ export UV_VERSION=0.9.2
 export UV_SHA256=b775bb84c72210c6c0b9670cfaad0ac2e3953f12a2947d52b57603b4fbae3798
 
 register_bootstrap \
-  "./gpu-server-bootstrap-1.4.0.tar.gz" \
-  "./gpu-server-bootstrap-1.4.0.tar.gz.sha256"
+  "./server-bootstrap-2.0.0.tar.gz" \
+  "./server-bootstrap-2.0.0.tar.gz.sha256"
 
 # As shipped this plan installs the server foundation only, so it runs green on
 # a fresh box with nothing else downloaded. Uncomment and edit the block below

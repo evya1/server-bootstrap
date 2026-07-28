@@ -16,9 +16,60 @@ convenient place to export them.
 | `INSTALL_CODEX` | `1` | install the pinned OpenAI Codex CLI |
 | `INSTALL_VSCODE_EXTENSIONS` | `1` | install or queue the Remote-SSH extension manifest |
 | `INSTALL_UV` | `1` | install pinned, checksum-verified uv |
+| `INSTALL_GITHUB_CLI` | `1` | install pinned, checksum-verified `gh` |
 | `INSTALL_BASE_PYTHON_ENV` | `1` | create isolated base Python environment |
 | `BASE_PYTHON_PACKAGES` | `numpy` | packages installed in that environment |
 | `RUN_ACCEPT_TEST` | `1` | bootstrap-local acceptance; provisioner runs it separately |
+
+## Distribution packages
+
+The apt package set lives in `config/packages.txt` rather than in shell code, so
+changing it never means editing a script. The manifest has two sections:
+
+- `[required]` is installed as one apt batch. If the batch fails, each package
+  is retried individually so a single unavailable name cannot block the rest.
+- `[optional]` is best effort. These are packages whose availability genuinely
+  varies across Ubuntu and Debian releases, so a miss is a warning, never a
+  failure.
+
+Blank lines, `#` comments, and trailing comments are ignored. Package names are
+validated against Debian's naming rules before they reach the apt command line.
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `PACKAGES_FILE` | `<root>/config/packages.txt` | manifest to read |
+| `EXTRA_PACKAGES` | *(empty)* | space-separated names appended to `[required]` |
+| `SKIP_PACKAGES` | *(empty)* | space-separated names removed from both sections |
+
+```bash
+EXTRA_PACKAGES="postgresql-client redis-tools"
+SKIP_PACKAGES="nmap tcpdump"
+```
+
+Tools that are pinned to a checksummed upstream release — Node.js, uv, `gh`,
+and the AI CLIs — are deliberately absent from the manifest. Adding one of them
+to it would install a second, unpinned copy.
+
+## GitHub CLI
+
+`gh` is installed from its pinned upstream release archive and verified by
+SHA-256 per architecture, then linked at `/usr/local/bin/gh` with its man pages:
+
+```bash
+GH_VERSION=2.96.0
+GH_SHA256_X64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
+GH_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+```
+
+The distribution package lags upstream by many minor versions and is missing
+entirely on older releases, and the vendor's own instructions add a third-party
+apt repository plus a signing key — more trust than one verified tarball needs.
+Reruns are idempotent: an already-matching `gh --version` short-circuits the
+download. Authentication is interactive and never stored in the bundle:
+
+```bash
+gh auth login
+```
 
 ## Node.js and coding-agent CLIs
 
@@ -39,7 +90,7 @@ Claude Code and Codex are installed at exact npm versions into an isolated
 system prefix:
 
 ```bash
-AI_CLI_PREFIX=/opt/gpu-ai-cli
+AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
 CLAUDE_CODE_VERSION=2.1.216
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
@@ -85,11 +136,11 @@ attempted even if an earlier one fails. With strict mode disabled, failures are
 reported and can be retried later:
 
 ```bash
-gpu-vscode-extensions
+server-vscode-extensions
 ```
 
 If VS Code Server does not exist during bootstrap, the result is marked pending.
-The generated Zsh configuration starts `gpu-vscode-extensions --auto` in the
+The generated Zsh configuration starts `server-vscode-extensions --auto` in the
 background on a VS Code integrated-terminal startup. Automatic attempts are
 rate-limited and stop after the full manifest succeeds.
 
@@ -131,5 +182,5 @@ remote installer script. The base Python environment can be created with
 ## Legacy one-add-on interface
 
 `INSTALL_ADDON` and the existing `ADDON_*` variables remain accepted. They use
-the same shared bundle engine as `gpu-bundle-install` and execute after GPU
+the same shared bundle engine as `server-bundle-install` and execute after hardware
 acceptance. New setups should prefer a provision plan.

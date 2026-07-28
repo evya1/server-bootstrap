@@ -26,7 +26,7 @@ The installer should:
 - perform a lightweight post-install check;
 - avoid starting long workloads or exposing public ports automatically.
 
-If `VERSION` exists beside the installer, `gpu-bundle-install` requires it to
+If `VERSION` exists beside the installer, `server-bundle-install` requires it to
 match the registered version.
 
 ## State and upgrades

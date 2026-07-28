@@ -4,13 +4,13 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
 VERSION="$(tr -d '[:space:]' < VERSION)"
-NAME=gpu-server-bootstrap
+NAME=server-bootstrap
 DIST=release/dist
 SOURCE_DATE="${SOURCE_DATE_EPOCH:-1700000000}"
 SKIP_TESTS=0
 [[ "${1:-}" == --skip-tests ]] && SKIP_TESTS=1
 
-mapfile -t SHELL_FILES < <(find . -type f \( -name '*.sh' -o -name 'gpu-bundle-install' -o -name 'gpu-vscode-extensions' \) \
+mapfile -t SHELL_FILES < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' -o -name 'server-vscode-extensions' \) \
     -not -path './release/dist/*' | LC_ALL=C sort)
 
 echo "==> Bash syntax"
@@ -80,7 +80,7 @@ find "$source_stage" -exec touch -d "@$SOURCE_DATE" {} +
 rm -rf "$source_stage"
 
 # First-run files are also copied beside the archives for direct upload.
-install -m 0755 gpu-provision.sh "$DIST/gpu-provision.sh"
+install -m 0755 server-provision.sh "$DIST/server-provision.sh"
 install -m 0644 examples/provision-plan.example.sh "$DIST/provision-plan.example.sh"
 install -m 0644 examples/provision-plan.whisper.example.sh "$DIST/provision-plan.whisper.example.sh"
 
@@ -93,13 +93,13 @@ cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
   "zip_sha256": "$sha_zip_1",
   "tests": "passed",
   "reproducible": true,
-  "entrypoints": ["gpu-server-bootstrap.sh", "gpu-provision.sh", "gpu-bundle-install", "gpu-accept.sh", "gpu-vscode-extensions"]
+  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions"]
 }
 JSON
 
 verify="$(mktemp -d)"
 tar -xzf "$DIST/$NAME-$VERSION.tar.gz" -C "$verify"
-for file in gpu-server-bootstrap.sh gpu-provision.sh gpu-bundle-install gpu-accept.sh gpu-vscode-extensions config/vscode-extensions.txt lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/vscode.sh docs/QUICKSTART.md; do
+for file in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions config/vscode-extensions.txt config/packages.txt lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/github_cli.sh lib/bootstrap/vscode.sh docs/QUICKSTART.md; do
     [[ -f "$verify/$NAME-$VERSION/$file" ]] || { echo "ERROR: missing from release: $file" >&2; exit 1; }
 done
 rm -rf "$verify"

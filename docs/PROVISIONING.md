@@ -1,6 +1,6 @@
 # Provisioning plans
 
-A plan is a small Bash data file sourced by `gpu-provision.sh`. It should contain
+A plan is a small Bash data file sourced by `server-provision.sh`. It should contain
 configuration exports plus registration calls; it should not perform downloads
 or installation itself.
 
@@ -8,8 +8,8 @@ or installation itself.
 
 ```bash
 register_bootstrap \
-  "./gpu-server-bootstrap-1.4.0.tar.gz" \
-  "./gpu-server-bootstrap-1.4.0.tar.gz.sha256"
+  "./server-bootstrap-2.0.0.tar.gz" \
+  "./server-bootstrap-2.0.0.tar.gz.sha256"
 ```
 
 Only one bootstrap may be registered.
@@ -46,30 +46,35 @@ checksum, extraction, installer, or policy failure.
 For one debugging run:
 
 ```bash
-sudo ./gpu-provision.sh --keep-archives
+sudo ./server-provision.sh --keep-archives
 ```
 
-## GPU acceptance policy
+## Hardware acceptance policy
 
 ```bash
-GPU_ACCEPT_POLICY=reject-stop   # default
-GPU_ACCEPT_POLICY=warn-stop
-GPU_ACCEPT_POLICY=off
+ACCEPT_POLICY=reject-stop   # default
+ACCEPT_POLICY=warn-stop
+ACCEPT_POLICY=off
 ```
 
 - `reject-stop`: continue on warnings, stop on a hard rejection.
 - `warn-stop`: continue only on a clean acceptance.
 - `off`: skip the acceptance test.
 
-Thresholds such as `MIN_VRAM_MIB`, `MIN_RAM_GB`, and `MIN_CORES` can be exported
-in the plan and are inherited by `gpu-accept`.
+Thresholds such as `MIN_RAM_GB`, `MIN_CORES`, `MIN_DISK_GB`, and `MIN_VRAM_MIB`
+can be exported in the plan and are inherited by `server-accept`.
+
+CPU, RAM, and disk are checked on every machine. The accelerator checks run only
+when `nvidia-smi` is present, because a CPU-only box is a legitimate rental. Set
+`REQUIRE_ACCELERATOR=1` in the plan when you are paying for a GPU and a machine
+without one is a failed delivery.
 
 ## Direct one-bundle installation
 
 After the bootstrap is installed:
 
 ```bash
-gpu-bundle-install \
+server-bundle-install \
   --name toolkit-name \
   --version 1.0.0 \
   --archive ./toolkit-name-1.0.0.tar.gz \

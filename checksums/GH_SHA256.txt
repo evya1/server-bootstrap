@@ -1,0 +1,5 @@
+# Pinned GitHub CLI release used by server-bootstrap 2.0.0.
+# Assets: gh_2.96.0_linux_amd64.tar.gz / gh_2.96.0_linux_arm64.tar.gz
+# Source: https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_checksums.txt
+linux-amd64 83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
+linux-arm64 06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909

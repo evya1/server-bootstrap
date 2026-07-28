@@ -1,0 +1,156 @@
+# Distribution packages installed by server-bootstrap.
+#
+# One package per line. Blank lines, "#" comments, and trailing comments are
+# ignored. Section headers select how failures are treated:
+#
+#   [required]  Installed as a single apt batch. If the batch fails, every
+#               package is retried individually so one unavailable name cannot
+#               block the rest. Only names that exist on every supported
+#               Ubuntu/Debian release belong here.
+#   [optional]  Best effort. Availability genuinely varies across releases
+#               (universe-only, renamed, or backported), so a package that
+#               cannot be installed logs a warning and never fails the run.
+#
+# Override without editing this file:
+#   PACKAGES_FILE=/path/to/manifest.txt   read a different manifest
+#   EXTRA_PACKAGES="pkg-a pkg-b"          append to [required]
+#   SKIP_PACKAGES="pkg-a pkg-b"           drop from both sections
+#
+# Tools that are pinned to a checksummed upstream release rather than apt are
+# installed elsewhere and are deliberately absent here: Node.js, uv, the GitHub
+# CLI (gh), and the AI CLIs. See docs/CONFIGURATION.md.
+
+[required]
+
+# --- core fetch, transfer, and archive ---------------------------------------
+ca-certificates
+curl
+wget
+aria2
+rsync
+unzip
+zip
+xz-utils
+zstd
+pigz
+pv
+
+# --- version control ----------------------------------------------------------
+git
+git-lfs
+
+# --- shell, editors, and terminal ---------------------------------------------
+zsh
+tmux
+screen
+nano
+vim
+less
+bash-completion
+man-db
+
+# --- text, data, and file inspection ------------------------------------------
+jq
+sqlite3
+ripgrep
+fd-find
+bat
+tree
+file
+dos2unix
+rename
+bc
+
+# --- process and system inspection --------------------------------------------
+htop
+lsof
+procps
+psmisc
+strace
+sysstat
+iotop
+ncdu
+util-linux
+time
+parallel
+
+# --- networking and diagnostics -----------------------------------------------
+iproute2
+net-tools
+openssh-client
+dnsutils
+iputils-ping
+traceroute
+mtr-tiny
+netcat-openbsd
+socat
+whois
+iperf3
+tcpdump
+nmap
+iftop
+
+# --- build toolchain ------------------------------------------------------------
+build-essential
+pkg-config
+cmake
+autoconf
+automake
+libtool
+gettext
+gdb
+
+# --- Python runtime and headers -------------------------------------------------
+python3
+python3-pip
+python3-venv
+python3-dev
+
+# --- headers commonly needed to build Python versions and native wheels ---------
+libssl-dev
+zlib1g-dev
+libbz2-dev
+libreadline-dev
+libsqlite3-dev
+libffi-dev
+liblzma-dev
+tk-dev
+
+# --- media ------------------------------------------------------------------------
+ffmpeg
+
+# --- apt, keyring, and locale plumbing --------------------------------------------
+gnupg
+lsb-release
+software-properties-common
+apt-transport-https
+locales
+tzdata
+
+
+[optional]
+
+# Availability varies by release; a miss here is only a warning.
+
+# --- shell ergonomics ---------------------------------------------------------
+fzf
+zoxide
+direnv
+tldr
+
+# --- monitoring ----------------------------------------------------------------
+btop
+nvtop
+
+# --- network and transfer ------------------------------------------------------
+speedtest-cli
+httpie
+rclone
+
+# --- developer tooling ---------------------------------------------------------
+shellcheck
+moreutils
+neovim
+
+# --- archive formats (renamed to "7zip" on newer releases) ---------------------
+p7zip-full

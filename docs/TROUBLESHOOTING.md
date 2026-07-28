@@ -12,12 +12,12 @@ Check the pinned installation and launchers:
 ```bash
 node --version
 npm --version
-ls -l /opt/gpu-ai-cli/bin /usr/local/bin/claude /usr/local/bin/codex
+ls -l /opt/ai-cli/bin /usr/local/bin/claude /usr/local/bin/codex
 cat /workspace/.setup-state/claude-code-version
 cat /workspace/.setup-state/codex-version
 ```
 
-Rerun `gpu-server-bootstrap`. A failed exact-version npm install stops the
+Rerun `server-bootstrap`. A failed exact-version npm install stops the
 bootstrap rather than silently using another version.
 
 ## VS Code extensions are pending
@@ -27,7 +27,7 @@ Connect once, open an integrated terminal, and either allow the generated
 background hook to run or execute:
 
 ```bash
-gpu-vscode-extensions
+server-vscode-extensions
 ```
 
 Then reload the Remote-SSH window.
@@ -40,7 +40,7 @@ The helper continues through the full manifest and logs failed IDs under:
 /workspace/startup-logs/vscode-extensions-*.log
 ```
 
-Retry later with `gpu-vscode-extensions`. Use `--strict` when you want a nonzero
+Retry later with `server-vscode-extensions`. Use `--strict` when you want a nonzero
 exit if any Marketplace item cannot be installed. An extension may have been
 removed, renamed, made incompatible with the server architecture, or may need a
 later VS Code Server release.
@@ -59,8 +59,8 @@ Read:
 cat /workspace/startup-logs/latest-provision-summary.txt
 ```
 
-A GPU rejection intentionally stops before workload bundles. Review the
-`gpu-accept` findings and destroy the rented instance when the advertised
+An acceptance rejection intentionally stops before workload bundles. Review the
+`server-accept` findings and destroy the rented instance when the advertised
 hardware is not present.
 
 ## Checksum mismatch for a workload bundle
@@ -71,21 +71,21 @@ archives are retained, so replacing the incorrect file and rerunning is enough.
 ## Same version, different hash
 
 This usually means an archive was rebuilt without a version change. Prefer a
-new version. Use `gpu-bundle-install --force` only after intentionally reviewing
+new version. Use `server-bundle-install --force` only after intentionally reviewing
 the changed artifact.
 
 
-## `gpu-bundle-install` says required arguments are missing
+## `server-bundle-install` says required arguments are missing
 
 That command is a generic installer for a separate verified add-on; it is not the
-next stage of `gpu-server-bootstrap`. Running it with no arguments intentionally
+next stage of `server-bootstrap`. Running it with no arguments intentionally
 prints usage. To continue or retry the server setup, run:
 
 ```bash
-sudo gpu-server-bootstrap
+sudo server-bootstrap
 ```
 
-or rerun `gpu-server-bootstrap.sh` from the extracted release directory.
+or rerun `server-bootstrap.sh` from the extracted release directory.
 
 ## Bootstrap stopped on `command -v fd`
 
