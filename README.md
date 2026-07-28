@@ -10,13 +10,12 @@ Verifies the hardware you paid for, installs a pinned toolchain, and starts noth
 [![release](https://img.shields.io/github/v/release/evya1/server-bootstrap?color=2563eb&label=release)](https://github.com/evya1/server-bootstrap/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-2563eb.svg)](LICENSE)
 [![ubuntu](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
-[![bash](https://img.shields.io/badge/Bash-5-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![zsh](https://img.shields.io/badge/Zsh-login%20shell-4EAA25?logo=zsh&logoColor=white)](https://www.zsh.org/)
+[![oh my zsh](https://img.shields.io/badge/Oh%20My%20Zsh-pinned%20commit-8B5CF6?logo=zsh&logoColor=white)](https://ohmyz.sh/)
 
 </div>
 
----
-
-## Quick start
+## Install
 
 Paste this whole block into a freshly rented Ubuntu server, as root:
 
