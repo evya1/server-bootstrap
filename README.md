@@ -79,7 +79,9 @@ flowchart LR
 ```
 
 Acceptance runs **before** any workload. A rejected box stops provisioning, so
-you find out the riser is x1 while destroying the instance is still cheap.
+you find out the disk is slow or the riser is x1 while destroying the instance
+is still cheap. A machine with no GPU is accepted normally — set
+`REQUIRE_ACCELERATOR=1` when a missing GPU means a failed delivery.
 
 ---
 
@@ -126,6 +128,27 @@ the bootstrap has already installed, so add the files first.
 The provisioner installs the bootstrap, runs `server-accept`, installs each
 registered bundle in order, and deletes local archives only after success.
 
+## Customizing what gets installed
+
+The distribution packages live in [`config/packages.txt`](config/packages.txt),
+not in shell code. `[required]` is installed as one apt batch; `[optional]` is
+best effort, for packages whose availability varies across Ubuntu and Debian
+releases. Edit the file, or adjust it from the environment without touching it:
+
+```bash
+EXTRA_PACKAGES="postgresql-client redis-tools" \
+SKIP_PACKAGES="nmap tcpdump" \
+  server-bootstrap
+```
+
+Each subsystem can also be switched off individually — `INSTALL_GITHUB_CLI=0`,
+`INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and so on. See
+[CONFIGURATION](docs/CONFIGURATION.md) for the full list.
+
+Tools pinned to a checksummed upstream release — Node.js, uv, `gh`, and the AI
+CLIs — are deliberately absent from the manifest. Adding one of them to it would
+install a second, unpinned copy.
+
 ---
 
 ## Security model
@@ -155,10 +178,11 @@ accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
 
 <br>
 
-- SHA-256 is checked before Node.js or bundle archive extraction.
+- SHA-256 is checked before any downloaded archive is extracted.
 - Archives with absolute paths, `..` traversal, or escaping symlinks are rejected.
 - Remote sources and the npm registry must use HTTPS.
-- Node.js, Claude Code, Codex, uv, and Oh My Zsh are version-pinned by the release.
+- Node.js, `gh`, Claude Code, Codex, uv, and Oh My Zsh are version-pinned by the release.
+- Package names from the manifest are validated before reaching the apt command line.
 - Oh My Zsh is fetched at an exact commit; no upstream installer script is run.
 - AI CLI packages go to `/opt/ai-cli`, not the system npm tree.
 - Installation state records versions and completion status.
