@@ -459,6 +459,28 @@ else
     bad "README quick start does not show server-provision.sh --plan"
 fi
 
+section "Fitness: README tables only name commands bootstrap actually installs"
+# The Quick Reference table told people to run `server-provision.sh --plan …
+# --dry-run` after install, but bootstrap_install_runtime_tools() only ever
+# symlinks the bare `server-provision` onto PATH (the .sh suffix is not
+# stripped uniformly — server-accept is the sole exception, keeping both
+# names). Following the doc literally failed with 'command not found' (127).
+# The installed-command set is derived from lib/bootstrap/runtime.sh itself,
+# not hardcoded here, so this stays a docs-vs-reality check, not a snapshot.
+declare -A installed_commands=()
+while IFS= read -r name; do
+    [[ -n "$name" ]] && installed_commands["$name"]=1
+done < <(grep -oE '/usr/local/bin/[A-Za-z0-9_.-]+' lib/bootstrap/runtime.sh | sed 's#.*/##' | sort -u)
+
+readme_cmd_drift=0
+while IFS= read -r token; do
+    [[ -n "$token" ]] || continue
+    [[ "$token" == server-* ]] || continue
+    [[ -n "${installed_commands[$token]:-}" ]] \
+        || { bad "README table names '$token', which runtime.sh never symlinks onto PATH"; readme_cmd_drift=1; }
+done < <(grep '^|' README.md | grep -oE '`[^`]+`' | sed -E 's/^`//; s/`$//' | awk '{print $1}')
+(( readme_cmd_drift == 0 )) && ok "README command tables match commands bootstrap installs"
+
 section "Fitness: shipped version strings match VERSION"
 # 1.3.2 shipped headers still advertising 1.3.1 because config.example.env and
 # checksums/*.txt are neither Markdown nor shell and were missed by a bump that

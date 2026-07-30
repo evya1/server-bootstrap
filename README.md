@@ -20,7 +20,7 @@ Verifies the hardware you paid for, installs a pinned toolchain, and starts noth
 Paste this whole block into a freshly rented Ubuntu server, as root:
 
 ```bash
-V=2.0.0
+V=2.0.1
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 wget -q --show-progress \
@@ -93,7 +93,7 @@ is still cheap. A machine with no GPU is accepted normally — set
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check that the rented box matches spec | `server-accept` |
 | Install or repair the VS Code extension list | `server-vscode-extensions` |
-| Preview a plan without touching anything | `server-provision.sh --plan … --dry-run` |
+| Preview a plan without touching anything | `server-provision --plan … --dry-run` |
 
 > [!WARNING]
 > **Never execute a `provision-plan*.sh` file directly.** A plan is a data file,
@@ -115,8 +115,8 @@ green with nothing else downloaded. To add a workload, put its archive and
 ```text
 server-provision.sh
 provision-plan.example.sh
-server-bootstrap-2.0.0.tar.gz
-server-bootstrap-2.0.0.tar.gz.sha256
+server-bootstrap-2.0.1.tar.gz
+server-bootstrap-2.0.1.tar.gz.sha256
 <workload>-<version>.tar.gz
 <workload>-<version>.tar.gz.sha256
 ```

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.1
+
+- **Fixed a broken command in the README.** The "Which command do I run?"
+  table told people to preview a plan with `server-provision.sh --plan …
+  --dry-run` after install, but the bootstrap only ever symlinks the bare
+  `server-provision` onto `PATH` — running the documented line literally
+  failed with `command not found`. Corrected to `server-provision --plan …
+  --dry-run`.
+- **Added a fitness test** (`tests/run-tests.sh`) that derives the real
+  installed-command set from `lib/bootstrap/runtime.sh` and checks every
+  `server-*` command named in a README table against it, so a doc/reality
+  mismatch like this fails CI instead of shipping silently.
+
 ## 2.0.0
 
 Breaking: the project is no longer GPU-specific in name or behaviour. Nothing in
