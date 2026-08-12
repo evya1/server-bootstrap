@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.0
+
+- **Added `tools/shrink-silence-m4a.sh`.** A standalone utility, not wired into
+  the provisioning flow: shortens long silent regions in M4A recordings in
+  place via ffmpeg. Persists the exact cut list as a permanent
+  `<stem>.shrink_offsets.json` sidecar next to the shrunk file, so a
+  downstream consumer can map a timestamp in the shrunk audio back to the
+  original file's timeline — a naive silence-trim throws that mapping away,
+  which desyncs anything keyed to the original recording's clock. Its
+  `--analysis-only <path>` mode recovers that sidecar for a file already
+  shrunk before this existed, from a surviving unshrunk copy, without
+  touching either file. Ships with its Python helper,
+  `tools/build-silence-filter.py`.
+
 ## 2.0.1
 
 - **Fixed a broken command in the README.** The "Which command do I run?"
