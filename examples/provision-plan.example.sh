@@ -23,8 +23,8 @@ export UV_VERSION=0.9.2
 export UV_SHA256=b775bb84c72210c6c0b9670cfaad0ac2e3953f12a2947d52b57603b4fbae3798
 
 register_bootstrap \
-  "./server-bootstrap-2.0.1.tar.gz" \
-  "./server-bootstrap-2.0.1.tar.gz.sha256"
+  "./server-bootstrap-2.1.0.tar.gz" \
+  "./server-bootstrap-2.1.0.tar.gz.sha256"
 
 # As shipped this plan installs the server foundation only, so it runs green on
 # a fresh box with nothing else downloaded. Uncomment and edit the block below

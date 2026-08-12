@@ -8,8 +8,8 @@ or installation itself.
 
 ```bash
 register_bootstrap \
-  "./server-bootstrap-2.0.1.tar.gz" \
-  "./server-bootstrap-2.0.1.tar.gz.sha256"
+  "./server-bootstrap-2.1.0.tar.gz" \
+  "./server-bootstrap-2.1.0.tar.gz.sha256"
 ```
 
 Only one bootstrap may be registered.
