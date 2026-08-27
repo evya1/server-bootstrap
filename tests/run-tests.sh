@@ -35,6 +35,50 @@ for file in server-bootstrap.sh server-bundle-install lib/*.sh lib/bootstrap/*.s
 done
 (( term_hit == 0 )) && ok "neutral runtime code"
 
+section "Security and privacy guards"
+for forbidden in \
+    'box you just rented' \
+    'box you bought' \
+    'while the meter is running' \
+    'rental scam' \
+    "someone's garage" \
+    'destroy this instance and rent another'; do
+    if grep -Fqi -- "$forbidden" server-accept.sh; then
+        bad "personal-use wording remains in server-accept.sh: $forbidden"
+    fi
+done
+[[ -s .gitleaks.toml ]] && ok "Gitleaks policy is present" || bad "missing Gitleaks policy"
+for allowed in '/root' '/workspace' 'localhost' '127\.0\.0\.1' '::1' \
+    'example\.(?:com|org|net)' 'CHANGE_ME' 'EXAMPLE_TOKEN'; do
+    grep -Fq -- "$allowed" .gitleaks.toml \
+        && ok "allowlist entry is explicit: $allowed" \
+        || bad "missing allowlist entry: $allowed"
+done
+if grep -Eq '(^|[[:space:]])(paths|regexes)[[:space:]]*=.*\.\*' .gitleaks.toml; then
+    bad "Gitleaks allowlist contains a broad wildcard"
+else
+    ok "Gitleaks allowlist has no broad wildcard"
+fi
+for ignored in .env .env.local config/local.env credentials/api.token \
+    .ssh/id_ed25519 .aws/credentials .npmrc .kube/config state.tfstate; do
+    git check-ignore --no-index -q -- "$ignored" \
+        && ok "credential/config artifact is ignored: $ignored" \
+        || bad "credential/config artifact is not ignored: $ignored"
+done
+for visible in config.example.env examples/addon.env.example; do
+    git check-ignore -q -- "$visible" \
+        && bad "intentional example is ignored: $visible" \
+        || ok "intentional example remains visible: $visible"
+done
+tracked_ignored=0
+while IFS= read -r file; do
+    if git check-ignore -q -- "$file"; then
+        bad "tracked file is now ignored: $file"
+        tracked_ignored=1
+    fi
+done < <(git ls-files)
+(( tracked_ignored == 0 )) && ok "tracked files are not hidden by ignore rules"
+
 grep -q 'STEP=acceptance' server-bootstrap.sh && grep -q 'STEP=addon' server-bootstrap.sh \
     && [[ "$(grep -n 'STEP=acceptance' server-bootstrap.sh | cut -d: -f1)" -lt "$(grep -n 'STEP=addon' server-bootstrap.sh | cut -d: -f1)" ]] \
     && ok "acceptance precedes optional add-on" || bad "acceptance ordering"
@@ -420,7 +464,7 @@ grep -q "alias c='clear'" lib/bootstrap/shell.sh \
 grep -q 'bootstrap_set_default_zsh' lib/bootstrap/shell.sh \
     && grep -q 'usermod --shell' lib/bootstrap/shell.sh \
     && ok "Zsh login shell enforcement" || bad "Zsh default shell enforcement"
-for doc in QUICKSTART PROVISIONING ARCHITECTURE BUNDLE-CONTRACT CONFIGURATION TROUBLESHOOTING; do
+for doc in QUICKSTART PROVISIONING ARCHITECTURE BUNDLE-CONTRACT CONFIGURATION TROUBLESHOOTING SECURITY-SCANNING; do
     [[ -s "docs/$doc.md" ]] && ok "documentation: $doc" || bad "missing documentation: $doc"
 done
 

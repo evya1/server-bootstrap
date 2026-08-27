@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # =============================================================================
-# server-accept.sh — decide whether the box you just rented is the box you bought.
+# server-accept.sh — validate that the host matches its declared specification.
 #
 # Runs in under 60s on coreutils alone. No Python, no torch, no network by
-# default. Intended as the FIRST thing after server-bootstrap, while the meter
-# is running and destroying the instance is still cheap.
+# default. Intended to run immediately after server-bootstrap, before workload
+# execution.
 #
 # Exit codes:  0 accept   1 reject (hard failure)   2 warn (review)   3 usage
 #
 # CPU, RAM, and disk are checked on every machine. The accelerator section runs
-# only when nvidia-smi is present: a CPU-only box is a legitimate rental, so its
-# absence is reported and skipped rather than rejected. Set REQUIRE_ACCELERATOR=1
-# when you are paying for a GPU and a machine without one is a failed delivery.
+# only when nvidia-smi is present: a CPU-only host is valid, so its absence is
+# reported and skipped rather than rejected. Set REQUIRE_ACCELERATOR=1 when the
+# declared specification requires an accelerator.
 #
-# Rejects, in order of how often they actually happen on rental marketplaces:
+# Rejects, in order of operational impact:
 #   - PCIe link narrower than the card supports (x16 card on an x1/x4 riser).
-#     Costs you nothing at idle and 5x on every model load and H2D copy.
-#   - Persistent thermal/power throttling (box in someone's garage in August).
+#     Costs little at idle and increases transfer time during workload execution.
+#   - Persistent thermal/power throttling (an unsuitable thermal environment).
 #   - Volatile uncorrected ECC errors (walk away; do not debug).
 #   - Less VRAM/RAM/vCPU than advertised.
 #   - Storage slower than the model download (a 3GB model at 40MB/s is a bad day).
@@ -86,7 +86,7 @@ else
         reject "vram" "${VRAM}MiB < required ${MIN_VRAM_MIB}MiB"
     fi
 
-    # -- PCIe. The classic rental scam and the classic false positive.
+# -- PCIe. A hardware/specification mismatch and a common false positive.
     # link.*.current downtrains to x1/gen1 at idle to save power, so reading it
     # on a quiet box tells you nothing. link.*.max is the negotiated ceiling —
     # that is the number that exposes a x16 card sitting on a x1 mining riser.
@@ -112,7 +112,7 @@ else
     TEMP="$(q temperature.gpu)"
     if [[ -n "$TEMP" && "$TEMP" =~ ^[0-9]+$ ]]; then
         if (( TEMP > MAX_TEMP_C )); then
-            reject "temp" "${TEMP}C > ${MAX_TEMP_C}C at IDLE — this box will throttle under load"
+            reject "temp" "${TEMP}C > ${MAX_TEMP_C}C at IDLE — the host may throttle under load"
         else
             note "temp" "${TEMP}C idle"
         fi
@@ -152,7 +152,7 @@ mkdir -p "$WORKSPACE" 2>/dev/null || true
 if [[ -d "$WORKSPACE" ]]; then
     FREE_GB="$(df -BG --output=avail "$WORKSPACE" 2>/dev/null | tail -n1 | tr -dc '0-9')"
     if [[ "${FREE_GB:-0}" -lt "$MIN_DISK_GB" ]]; then
-        reject "disk-free" "${FREE_GB}GB free < ${MIN_DISK_GB}GB (model + lectures will not fit)"
+        reject "disk-free" "${FREE_GB}GB free < ${MIN_DISK_GB}GB (declared workload data may not fit)"
     else
         note "disk-free" "${FREE_GB}GB free at $WORKSPACE"
     fi
@@ -198,7 +198,7 @@ if (( JSON )); then
 else
     echo
     if (( REJECT )); then
-        echo "VERDICT: REJECT ($REJECT hard, $WARN warn) — destroy this instance and rent another."
+        echo "VERDICT: REJECT ($REJECT hard, $WARN warn) — stop provisioning and replace the host."
     elif (( WARN )); then
         echo "VERDICT: WARN ($WARN) — usable, but read the warnings before a long batch."
     else
