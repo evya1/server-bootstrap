@@ -1,0 +1,20 @@
+title = "server-bootstrap secret scan"
+
+[extend]
+useDefault = true
+
+# These are exact, non-secret examples used by the documentation and runtime.
+# Keep this list small. regexTarget=secret prevents a real token on a line that
+# mentions one of these values from being suppressed by the allowlist.
+[allowlist]
+description = "Reviewed repository path, loopback, and example values"
+regexTarget = "secret"
+regexes = [
+  '''^/root(?:/.*)?$''',
+  '''^/workspace(?:/.*)?$''',
+  '''^localhost(?::[0-9]+)?$''',
+  '''^127\.0\.0\.1(?::[0-9]+)?$''',
+  '''^::1(?::[0-9]+)?$''',
+  '''^example\.(?:com|org|net)$''',
+  '''^(?:CHANGE_ME|EXAMPLE_TOKEN)$''',
+]
