@@ -5,6 +5,19 @@
 That is expected. Authentication is user-specific and is not placed in the
 bundle. Run `claude` or `codex` interactively and follow the browser/device flow.
 
+## API keys are not loaded in my shell
+
+The loader is sourced from `/root/.zshrc`, and Zsh reads `.zshrc` only for
+**interactive** shells. An SSH session or `exec zsh -l` gets it; `zsh -l -c '...'`
+does not, so a non-interactive check reports the keys as unset even when the
+setup is correct. Check with an interactive shell:
+
+```bash
+zsh -i -l -c 'aikeys status'
+```
+
+If that is empty too, inspect the file itself with `server-secrets status`.
+
 ## `claude` or `codex` is missing
 
 Check the pinned installation and launchers:
@@ -19,6 +32,24 @@ cat /workspace/.setup-state/codex-version
 
 Rerun `server-bootstrap`. A failed exact-version npm install stops the
 bootstrap rather than silently using another version.
+
+## A version other than the pinned one was installed
+
+Every setting is an environment override (`VAR="${VAR:-default}"`), so a
+variable already exported in the calling environment beats the release pin.
+Some tooling exports these: a Claude Code session sets `CLAUDE_CODE_VERSION`,
+and the bootstrap honours it. The state files record what was actually
+installed, not what was pinned:
+
+```bash
+cat /workspace/.setup-state/claude-code-version
+```
+
+Provision from a clean environment when you want the pinned defaults:
+
+```bash
+env -u CLAUDE_CODE_VERSION server-bootstrap
+```
 
 ## VS Code extensions are pending
 
