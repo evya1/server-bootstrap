@@ -4,15 +4,17 @@ bootstrap_install_runtime_tools() {
     [[ "$INSTALL_RUNTIME_TOOLS" == 1 ]] || return 0
     local source_root="$1" destination=/usr/local/lib/server-bootstrap stage
     stage="$(mktemp -d /usr/local/lib/.server-bootstrap.XXXXXX)"
-    mkdir -p "$stage/lib/bootstrap" "$stage/docs" "$stage/config"
+    mkdir -p "$stage/lib/bootstrap" "$stage/docs" "$stage/config" "$stage/examples"
     install -m 0755 "$source_root/server-bootstrap.sh" "$stage/server-bootstrap.sh"
     install -m 0755 "$source_root/server-bundle-install" "$stage/server-bundle-install"
     install -m 0755 "$source_root/server-provision.sh" "$stage/server-provision.sh"
     install -m 0755 "$source_root/server-accept.sh" "$stage/server-accept.sh"
     install -m 0755 "$source_root/server-vscode-extensions" "$stage/server-vscode-extensions"
+    install -m 0755 "$source_root/server-secrets" "$stage/server-secrets"
     install -m 0644 "$source_root/lib/core.sh" "$stage/lib/core.sh"
     install -m 0644 "$source_root/lib/archive.sh" "$stage/lib/archive.sh"
     install -m 0644 "$source_root/lib/bundle.sh" "$stage/lib/bundle.sh"
+    install -m 0644 "$source_root/lib/secrets-load.sh" "$stage/lib/secrets-load.sh"
     local module
     for module in "$source_root"/lib/bootstrap/*.sh; do
         install -m 0644 "$module" "$stage/lib/bootstrap/$(basename -- "$module")"
@@ -25,6 +27,8 @@ bootstrap_install_runtime_tools() {
     install -m 0644 "$source_root/VERSION" "$stage/VERSION"
     install -m 0644 "$source_root/config/vscode-extensions.txt" "$stage/config/vscode-extensions.txt"
     install -m 0644 "$source_root/config/packages.txt" "$stage/config/packages.txt"
+    install -m 0644 "$source_root/examples/secrets.env.example" "$stage/examples/secrets.env.example"
+    install -m 0644 "$source_root/examples/pi-models.example.json" "$stage/examples/pi-models.example.json"
     rm -rf -- "$destination"
     mv -- "$stage" "$destination"
     ln -sfn "$destination/server-bootstrap.sh" /usr/local/bin/server-bootstrap
@@ -33,5 +37,6 @@ bootstrap_install_runtime_tools() {
     ln -sfn "$destination/server-accept.sh" /usr/local/bin/server-accept
     ln -sfn "$destination/server-accept.sh" /usr/local/bin/server-accept.sh
     ln -sfn "$destination/server-vscode-extensions" /usr/local/bin/server-vscode-extensions
+    ln -sfn "$destination/server-secrets" /usr/local/bin/server-secrets
     sb_log "installed bootstrap runtime tools under $destination"
 }

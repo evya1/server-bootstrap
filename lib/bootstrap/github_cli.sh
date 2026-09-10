@@ -23,12 +23,24 @@ bootstrap_github_cli_checksum() {
 }
 
 bootstrap_github_cli_installed_version() {
-    gh --version 2>/dev/null | awk 'NR == 1 { print $3 }'
+    local binary="${1:-gh}"
+    command -v "$binary" >/dev/null 2>&1 || return 0
+    "$binary" --version 2>/dev/null | awk 'NR == 1 { print $3 }'
 }
 
 bootstrap_github_cli() {
     GITHUB_CLI_RESULT="disabled"
     [[ "$INSTALL_GITHUB_CLI" == 1 ]] || return 0
+
+    local arch checksum name url temp archive extracted tag
+
+    if sb_is_latest "$GH_VERSION"; then
+        tag="$(sb_latest_git_tag https://github.com/cli/cli.git)" || return
+        GH_VERSION="${tag#v}"
+        sb_log "resolved latest GitHub CLI: $GH_VERSION"
+        GH_SHA256_X64=""
+        GH_SHA256_ARM64=""
+    fi
 
     if [[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" ]]; then
         GITHUB_CLI_RESULT="gh $GH_VERSION"
@@ -36,12 +48,16 @@ bootstrap_github_cli() {
         return 0
     fi
 
-    local arch checksum name url temp archive extracted
     arch="$(bootstrap_github_cli_arch)" || return
+    name="gh_${GH_VERSION}_linux_${arch}"
     checksum="$(bootstrap_github_cli_checksum "$arch")" || return
+    if [[ -z "$checksum" ]]; then
+        checksum="$(sb_checksum_from_manifest \
+            "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_checksums.txt" \
+            "$name.tar.gz")" || return
+    fi
     sb_valid_sha256 "$checksum" || { sb_die "invalid GitHub CLI checksum for $arch"; return; }
 
-    name="gh_${GH_VERSION}_linux_${arch}"
     temp="$(mktemp -d)"
     archive="$temp/$name.tar.gz"
     extracted="$temp/extracted"
@@ -69,7 +85,7 @@ bootstrap_github_cli() {
     fi
     rm -rf -- "$temp"
 
-    [[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" ]] \
+    [[ "$(bootstrap_github_cli_installed_version /usr/local/bin/gh)" == "$GH_VERSION" ]] \
         || { sb_die "GitHub CLI version verification failed"; return; }
     GITHUB_CLI_RESULT="gh $GH_VERSION"
     printf '%s\n' "$GH_VERSION" > "$STATE_ROOT/github-cli-version"

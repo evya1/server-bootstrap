@@ -88,11 +88,12 @@ bootstrap_set_default_zsh() {
 }
 
 bootstrap_write_zsh_config() {
-    local zsh_dir common init old_line temp_zshrc plugin
+    local zsh_dir common init secrets_zsh old_line temp_zshrc plugin
     local -a plugins
     zsh_dir=/root/.config/zsh
     common="$zsh_dir/server-common.zsh"
     init="$zsh_dir/bootstrap-init.zsh"
+    secrets_zsh="$zsh_dir/server-secrets.zsh"
     mkdir -p "$zsh_dir"
 
     cat > "$common" <<ZSHEOF
@@ -119,6 +120,14 @@ if [[ -n "\${VSCODE_IPC_HOOK_CLI:-}" && -x /usr/local/bin/server-vscode-extensio
 fi
 ZSHEOF
     fi
+    if [[ "$INSTALL_PI" == 1 ]]; then
+        # pi is pinned by this release, so its update check and install
+        # telemetry add nothing the bootstrap wants.
+        cat >> "$common" <<'ZSHEOF'
+export PI_TELEMETRY=0
+export PI_SKIP_VERSION_CHECK=1
+ZSHEOF
+    fi
     command -v ss >/dev/null 2>&1 && echo "alias ports='ss -ltnp'" >> "$common"
     command -v python3 >/dev/null 2>&1 && echo "alias py='python3'" >> "$common"
     command -v nvidia-smi >/dev/null 2>&1 && printf "%s\n%s\n" \
@@ -141,6 +150,7 @@ ZSHEOF
         printf 'source "$ZSH/oh-my-zsh.sh"\n' >> "$init"
     fi
     printf '[ -f %q ] && source %q\n' "$common" "$common" >> "$init"
+    printf '[ -f %q ] && source %q\n' "$secrets_zsh" "$secrets_zsh" >> "$init"
 
     touch /root/.zshrc
     old_line="[ -f $common ] && source $common"

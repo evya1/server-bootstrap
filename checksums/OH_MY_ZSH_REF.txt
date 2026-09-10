@@ -1,3 +1,3 @@
-# Pinned Oh My Zsh commit used by server-bootstrap 2.1.0.
-# Upstream commit date: 2026-07-07.
-677a4592b18c08ddea737f8aca70bac0e9fc9313
+# Pinned Oh My Zsh commit used by server-bootstrap 2.2.0.
+# Upstream commit date: 2026-09-09.
+cd320b5506998f32284d37799592cb2ba43a3188

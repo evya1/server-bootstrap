@@ -1,0 +1,37 @@
+{
+  "_comment": "Custom providers for pi (~/.pi/agent/models.json). pi already ships built-in catalogs for Anthropic, OpenAI and OpenRouter, so this file is only for providers it does not know about. Replace the REPLACE-ME ids, or delete a provider you do not use. apiKey values starting with $ are read from the environment, so no secret is stored here.",
+  "providers": {
+    "local-openai-compatible": {
+      "baseUrl": "http://localhost:8000/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "REPLACE-ME-WITH-YOUR-SERVED-MODEL-ID",
+          "name": "Local model (vLLM, Ollama, LM Studio)",
+          "contextWindow": 128000,
+          "maxTokens": 16384,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    },
+    "openrouter-custom": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "api": "openai-completions",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "models": [
+        {
+          "id": "REPLACE-ME-WITH-AN-OPENROUTER-MODEL-ID",
+          "name": "OpenRouter custom entry",
+          "input": ["text"],
+          "contextWindow": 200000,
+          "maxTokens": 32000
+        }
+      ]
+    }
+  }
+}

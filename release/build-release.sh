@@ -10,7 +10,8 @@ SOURCE_DATE="${SOURCE_DATE_EPOCH:-1700000000}"
 SKIP_TESTS=0
 [[ "${1:-}" == --skip-tests ]] && SKIP_TESTS=1
 
-mapfile -t SHELL_FILES < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' -o -name 'server-vscode-extensions' \) \
+mapfile -t SHELL_FILES < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' \
+    -o -name 'server-vscode-extensions' -o -name 'server-secrets' \) \
     -not -path './release/dist/*' | LC_ALL=C sort)
 
 echo "==> Bash syntax"
@@ -93,13 +94,13 @@ cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
   "zip_sha256": "$sha_zip_1",
   "tests": "passed",
   "reproducible": true,
-  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions"]
+  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets"]
 }
 JSON
 
 verify="$(mktemp -d)"
 tar -xzf "$DIST/$NAME-$VERSION.tar.gz" -C "$verify"
-for file in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions config/vscode-extensions.txt config/packages.txt lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/github_cli.sh lib/bootstrap/vscode.sh docs/QUICKSTART.md; do
+for file in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions server-secrets config/vscode-extensions.txt config/packages.txt lib/secrets-load.sh lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/pi.sh lib/bootstrap/secrets.sh lib/bootstrap/github_cli.sh lib/bootstrap/vscode.sh examples/secrets.env.example examples/pi-models.example.json docs/QUICKSTART.md; do
     [[ -f "$verify/$NAME-$VERSION/$file" ]] || { echo "ERROR: missing from release: $file" >&2; exit 1; }
 done
 rm -rf "$verify"

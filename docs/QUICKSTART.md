@@ -38,16 +38,36 @@ exec zsh -l
 ```
 
 Oh My Zsh and the generated aliases, including `c` for `clear`, load
-automatically. Then authenticate the installed coding agents:
+automatically.
+
+## 6. Paste your API keys
+
+The bundle embeds no key or token. One root-only file, mode 0600, holds them
+and every login shell loads it:
+
+```bash
+server-secrets set ANTHROPIC_API_KEY     # prompts; nothing reaches shell history
+server-secrets set OPENAI_API_KEY
+server-secrets set OPENROUTER_API_KEY
+server-secrets status                    # masked list of what is set
+```
+
+`server-secrets edit` opens the file in `$EDITOR` if you would rather paste
+several at once, and `server-secrets path` prints its location. Open a new
+shell, or run `aikeys on`, to pick up changes.
+
+While `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set, `claude` and `codex` bill
+per token through the API instead of using a Claude Pro/Max or ChatGPT
+subscription. Run `aikeys off` for subscription mode, then sign in
+interactively:
 
 ```bash
 claude
 codex
+pi
 ```
 
-The bundle does not embed API keys or account tokens.
-
-## 6. Finish Remote-SSH extension setup
+## 7. Finish Remote-SSH extension setup
 
 When VS Code Server already existed, the bootstrap attempted the extension list
 immediately. On a fresh server, first connect with VS Code Remote-SSH and open an
@@ -60,6 +80,12 @@ server-vscode-extensions
 
 Reload the VS Code window after first-time installation. The manifest is at
 `/usr/local/lib/server-bootstrap/config/vscode-extensions.txt`.
+
+## 8. Optional: custom pi providers
+
+pi already knows Anthropic, OpenAI and OpenRouter. To add a local vLLM or
+Ollama server, edit `/root/.pi/agent/models.json`, seeded from the shipped
+template on first install and never overwritten afterwards.
 
 ## Reruns
 

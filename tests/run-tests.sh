@@ -12,15 +12,17 @@ section(){ printf '\n== %s ==\n' "$1"; }
 section "Syntax and structure"
 while IFS= read -r file; do
     bash -n "$file" && ok "bash -n $file" || bad "syntax: $file"
-done < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' -o -name 'server-vscode-extensions' \) \
+done < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' \
+    -o -name 'server-vscode-extensions' -o -name 'server-secrets' \) \
     -not -path './release/dist/*' | LC_ALL=C sort)
 for file in lib/core.sh lib/archive.sh lib/bundle.sh \
     lib/bootstrap/config.sh lib/bootstrap/workspace.sh lib/bootstrap/packages.sh \
     lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/vscode.sh lib/bootstrap/uv.sh lib/bootstrap/python.sh lib/bootstrap/shell.sh \
-    lib/bootstrap/github_cli.sh lib/bootstrap/runtime.sh lib/bootstrap/report.sh; do
+    lib/bootstrap/github_cli.sh lib/bootstrap/runtime.sh lib/bootstrap/report.sh \
+    lib/secrets-load.sh lib/bootstrap/secrets.sh lib/bootstrap/pi.sh; do
     [[ -f "$file" ]] && ok "module present: $file" || bad "missing module: $file"
 done
-for command in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions; do
+for command in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions server-secrets; do
     [[ -x "$command" ]] && ok "executable: $command" || bad "not executable: $command"
 done
 
@@ -412,21 +414,22 @@ else
 fi
 
 section "Configuration and documentation"
-grep -q 'UV_SHA256="${UV_SHA256:-[0-9a-fA-F]\{64\}}"' lib/bootstrap/config.sh \
-    && ok "uv checksum pinned" || bad "uv checksum default"
+grep -q 'UV_SHA256_X64="${UV_SHA256_X64:-[0-9a-fA-F]\{64\}}"' lib/bootstrap/config.sh \
+    && grep -q 'UV_SHA256_ARM64="${UV_SHA256_ARM64:-[0-9a-fA-F]\{64\}}"' lib/bootstrap/config.sh \
+    && ok "uv checksum pinned for both architectures" || bad "uv checksum default"
 grep -q 'INSTALL_NODEJS="${INSTALL_NODEJS:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'NODE_VERSION="${NODE_VERSION:-24.18.0}"' lib/bootstrap/config.sh \
-    && grep -q '55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742' lib/bootstrap/config.sh \
-    && grep -q '58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6' lib/bootstrap/config.sh \
+    && grep -q 'NODE_VERSION="${NODE_VERSION:-24.21.0}"' lib/bootstrap/config.sh \
+    && grep -q 'fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6' lib/bootstrap/config.sh \
+    && grep -q '6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2' lib/bootstrap/config.sh \
     && ok "Node.js LTS is enabled and checksum pinned" || bad "Node.js defaults/checksums"
 grep -q 'INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.216}"' lib/bootstrap/config.sh \
+    && grep -q 'CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.267}"' lib/bootstrap/config.sh \
     && grep -q '@anthropic-ai/claude-code@' lib/bootstrap/ai_cli.sh \
     && grep -q 'CLAUDE_CODE_DISABLE_AUTOUPDATER="${CLAUDE_CODE_DISABLE_AUTOUPDATER:-1}"' lib/bootstrap/config.sh \
     && grep -q 'export DISABLE_AUTOUPDATER=1' lib/bootstrap/ai_cli.sh \
     && ok "Claude Code is enabled, pinned, and update-controlled" || bad "Claude Code defaults/pin"
 grep -q 'INSTALL_CODEX="${INSTALL_CODEX:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'CODEX_VERSION="${CODEX_VERSION:-0.145.0}"' lib/bootstrap/config.sh \
+    && grep -q 'CODEX_VERSION="${CODEX_VERSION:-0.154.0}"' lib/bootstrap/config.sh \
     && grep -q '@openai/codex@' lib/bootstrap/ai_cli.sh \
     && ok "Codex is enabled and version pinned" || bad "Codex defaults/pin"
 grep -q 'INSTALL_VSCODE_EXTENSIONS="${INSTALL_VSCODE_EXTENSIONS:-1}"' lib/bootstrap/config.sh \
@@ -524,6 +527,253 @@ while IFS= read -r token; do
         || { bad "README table names '$token', which runtime.sh never symlinks onto PATH"; readme_cmd_drift=1; }
 done < <(grep '^|' README.md | grep -oE '`[^`]+`' | sed -E 's/^`//; s/`$//' | awk '{print $1}')
 (( readme_cmd_drift == 0 )) && ok "README command tables match commands bootstrap installs"
+
+section "API key file: parsing"
+# One fixture drives every parsing rule. The point of most of these cases is
+# that the file is parsed, not sourced.
+KEYS_FIXTURE="$TMP/secrets.env"
+cat > "$KEYS_FIXTURE" <<'FIXTURE'
+# a comment
+ANTHROPIC_API_KEY=fixture-anthropic-value-1234
+   # an indented comment
+
+  OPENAI_API_KEY = name-with-space-is-invalid
+OPENAI_API_KEY=fixture-openai-value-9c11
+export OPENROUTER_API_KEY=fixture-openrouter-value-4de0
+DOUBLE_QUOTED="fixture-double-quoted"
+SINGLE_QUOTED='fixture-single-quoted'
+EMPTY_KEY=
+INJECTED=`id`$(id);echo pwned
+WITH_EQUALS=a=b=c
+TRAILING=fixture-with-trailing-space   
+9BADNAME=x
+BAD-NAME=y
+no_equals_line
+FIXTURE
+chmod 600 "$KEYS_FIXTURE"
+
+keys_probe() {
+    # A subshell so exported fixture values never reach the rest of the suite.
+    ( set +u
+      # shellcheck source=/dev/null
+      . ./lib/secrets-load.sh
+      server_secrets_load "$KEYS_FIXTURE" >/dev/null 2>&1
+      eval "printf '%s' \"\${$1-__UNSET__}\"" )
+}
+
+[[ "$(keys_probe ANTHROPIC_API_KEY)" == 'fixture-anthropic-value-1234' ]] \
+    && ok "plain KEY=VALUE is exported" || bad "plain KEY=VALUE"
+[[ "$(keys_probe OPENROUTER_API_KEY)" == 'fixture-openrouter-value-4de0' ]] \
+    && ok "an export prefix is stripped" || bad "export prefix handling"
+[[ "$(keys_probe DOUBLE_QUOTED)" == 'fixture-double-quoted' ]] \
+    && ok "double quotes are stripped" || bad "double-quote handling"
+[[ "$(keys_probe SINGLE_QUOTED)" == 'fixture-single-quoted' ]] \
+    && ok "single quotes are stripped" || bad "single-quote handling"
+[[ "$(keys_probe WITH_EQUALS)" == 'a=b=c' ]] \
+    && ok "only the first = splits the line" || bad "value containing ="
+[[ "$(keys_probe TRAILING)" == 'fixture-with-trailing-space' ]] \
+    && ok "trailing whitespace is trimmed" || bad "trailing whitespace"
+[[ "$(keys_probe EMPTY_KEY)" == '__UNSET__' ]] \
+    && ok "an empty value is not exported" || bad "empty value was exported"
+# Probed through the loaded-name list: "9BADNAME" is not a valid parameter
+# name, so ${9BADNAME-...} would be a syntax error rather than a test.
+loaded_names="$( set +u
+    # shellcheck source=/dev/null
+    . ./lib/secrets-load.sh
+    server_secrets_load "$KEYS_FIXTURE" >/dev/null 2>&1
+    printf ' %s ' "$SERVER_SECRETS_LOADED" )"
+[[ "$loaded_names" != *' 9BADNAME '* \
+    && "$loaded_names" != *' BAD-NAME '* \
+    && "$loaded_names" != *' no_equals_line '* \
+    && "$loaded_names" == *' ANTHROPIC_API_KEY '* ]] \
+    && ok "invalid names and non-assignments are skipped" || bad "invalid line handling"
+# The decisive one: command substitution in a value must survive as text.
+[[ "$(keys_probe INJECTED)" == '`id`$(id);echo pwned' ]] \
+    && ok "the keys file is parsed, not sourced" || bad "value was evaluated instead of parsed"
+
+# The generated loader must behave identically in the shell that actually runs
+# it. Zsh does not word-split unquoted expansions, which is easy to get wrong.
+if command -v zsh >/dev/null 2>&1; then
+    zsh_probe="$(zsh -c '
+        . ./lib/secrets-load.sh
+        server_secrets_load "'"$KEYS_FIXTURE"'" >/dev/null 2>&1
+        printf "%s|%s" "$ANTHROPIC_API_KEY" "$SERVER_SECRETS_LOADED"
+        server_secrets_unload
+        printf "|%s" "${ANTHROPIC_API_KEY-__UNSET__}"' 2>/dev/null)"
+    [[ "$zsh_probe" == 'fixture-anthropic-value-1234|'*'|__UNSET__' ]] \
+        && ok "Zsh loads and unloads the same way Bash does" || bad "Zsh parity: $zsh_probe"
+else
+    ok "Zsh parity skipped (zsh not installed)"
+fi
+
+mask_out="$( set +u; . ./lib/secrets-load.sh; server_secrets_mask 'fixture-anthropic-value-1234' )"
+[[ "$mask_out" == 'fixture...1234' ]] \
+    && ok "masking keeps only the ends" || bad "masking output: $mask_out"
+[[ "$( set +u; . ./lib/secrets-load.sh; server_secrets_mask 'short' )" == '********' ]] \
+    && ok "a short value is masked completely" || bad "short-value masking"
+
+section "API key file: server-secrets"
+KEYS_HOME="$TMP/keyshome"; mkdir -p "$KEYS_HOME"
+export SERVER_SECRETS_FILE="$KEYS_HOME/secrets.env"
+
+./server-secrets check >/dev/null 2>&1 \
+    && bad "check passed with no keys set" || ok "check fails before any key is set"
+./server-secrets init >/dev/null 2>&1 \
+    && [[ -f "$SERVER_SECRETS_FILE" ]] || bad "init did not create the keys file"
+[[ "$(stat -c '%a' "$SERVER_SECRETS_FILE")" == 600 ]] \
+    && ok "keys file is created mode 0600" || bad "keys file mode"
+[[ "$(stat -c '%a' "$KEYS_HOME")" == 700 ]] \
+    && ok "keys directory is 0700" || bad "keys directory mode"
+
+printf 'user-edit-must-survive\n' >> "$SERVER_SECRETS_FILE"
+./server-secrets init >/dev/null 2>&1
+grep -q 'user-edit-must-survive' "$SERVER_SECRETS_FILE" \
+    && ok "init is idempotent and never clobbers an edited file" || bad "init overwrote the keys file"
+
+printf 'suite-openrouter-value-0001\n' | ./server-secrets set OPENROUTER_API_KEY >/dev/null 2>&1
+printf 'suite-openrouter-value-0002\n' | ./server-secrets set OPENROUTER_API_KEY >/dev/null 2>&1
+[[ "$(grep -c '^OPENROUTER_API_KEY=' "$SERVER_SECRETS_FILE")" == 1 ]] \
+    && grep -q '^OPENROUTER_API_KEY=suite-openrouter-value-0002$' "$SERVER_SECRETS_FILE" \
+    && ok "set replaces in place instead of appending duplicates" || bad "set duplicate handling"
+printf 'x\n' | ./server-secrets set 'BAD-NAME' >/dev/null 2>&1 \
+    && bad "set accepted an invalid variable name" || ok "set rejects an invalid variable name"
+
+# Status must describe the file, not the ambient environment: reporting an
+# unrelated inherited token would leak a credential this file does not own.
+GITHUB_TOKEN='ambient-value-must-not-appear' ./server-secrets status 2>/dev/null \
+    | grep -q 'ambient-value-must-not-appear' \
+    && bad "status leaked a value from the environment" \
+    || ok "status reports the file, not the environment"
+./server-secrets status 2>/dev/null | grep -q 'suite-openrouter-value-0002' \
+    && bad "status printed a key in full" || ok "status never prints a key in full"
+unset SERVER_SECRETS_FILE
+
+grep -q 'server_secrets_load' lib/bootstrap/secrets.sh \
+    && grep -q 'aikeys()' lib/bootstrap/secrets.sh \
+    && grep -q 'server-secrets.zsh' lib/bootstrap/shell.sh \
+    && ok "the generated Zsh startup file loads keys and defines aikeys" || bad "Zsh key wiring"
+grep -q 'chmod 0700 "$SECRETS_DIR"' lib/bootstrap/secrets.sh \
+    && grep -q 'chmod 0600 "$SECRETS_FILE"' lib/bootstrap/secrets.sh \
+    && ok "bootstrap enforces key file permissions" || bad "key file permission enforcement"
+# Comments may explain why not; no executable line may actually go there.
+grep -v '^[[:space:]]*#' lib/bootstrap/secrets.sh | grep -q 'profile\.d' \
+    && bad "keys are written to world-readable /etc/profile.d" \
+    || ok "keys stay out of world-readable /etc/profile.d"
+grep -Eq '^(ANTHROPIC|OPENAI|OPENROUTER)_API_KEY=$' examples/secrets.env.example \
+    && ok "the shipped key template is empty" || bad "key template placeholders"
+grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=.+' examples/secrets.env.example \
+    && bad "the shipped key template contains a value" || ok "no value is committed in the key template"
+
+section "pi coding agent"
+grep -q 'INSTALL_PI="${INSTALL_PI:-1}"' lib/bootstrap/config.sh \
+    && grep -qE 'PI_VERSION="\$\{PI_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' lib/bootstrap/config.sh \
+    && grep -q '@earendil-works/pi-coding-agent@' lib/bootstrap/ai_cli.sh \
+    && ok "pi is enabled and version pinned" || bad "pi defaults/pin"
+grep -q 'ln -sfn "$AI_CLI_PREFIX/bin/pi" /usr/local/bin/pi' lib/bootstrap/ai_cli.sh \
+    && ok "pi is linked into /usr/local/bin" || bad "pi link"
+grep -q 'PI_TELEMETRY=0' lib/bootstrap/shell.sh \
+    && grep -q 'PI_SKIP_VERSION_CHECK=1' lib/bootstrap/shell.sh \
+    && ok "pi telemetry and version check are disabled" || bad "pi network defaults"
+python3 -m json.tool examples/pi-models.example.json >/dev/null 2>&1 \
+    && ok "the pi model template is valid JSON" || bad "pi model template is not valid JSON"
+grep -q '"\$OPENROUTER_API_KEY"' examples/pi-models.example.json \
+    && ok "the pi model template reads the key from the environment" || bad "pi template key reference"
+grep -Eq '"(apiKey|key)"[[:space:]]*:[[:space:]]*"sk-' examples/pi-models.example.json \
+    && bad "the pi model template contains a literal key" || ok "no literal key in the pi model template"
+grep -q 'e "$target"' lib/bootstrap/pi.sh && grep -q 'kept existing pi model configuration' lib/bootstrap/pi.sh \
+    && ok "an existing models.json is never overwritten" || bad "models.json overwrite guard"
+
+section "Upstream version resolution"
+# shellcheck source=lib/core.sh
+source lib/core.sh
+manifest_table="$(printf '%s\n%s\n' \
+    'fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6  node-v24.21.0-linux-x64.tar.xz' \
+    '6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2  node-v24.21.0-linux-arm64.tar.xz')"
+[[ "$(sb_sha256_from_manifest_body "$manifest_table" node-v24.21.0-linux-arm64.tar.xz)" \
+    == '6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2' ]] \
+    && ok "a checksum table resolves the requested file" || bad "manifest table parsing"
+[[ "$(sb_sha256_from_manifest_body 'ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509  uv-x86_64-unknown-linux-gnu.tar.gz' uv-x86_64-unknown-linux-gnu.tar.gz)" \
+    == 'ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509' ]] \
+    && ok "a bare sidecar resolves" || bad "sidecar parsing"
+sb_sha256_from_manifest_body "$manifest_table" 'node-v24.21.0-linux-ppc64le.tar.xz' >/dev/null 2>&1 \
+    && bad "a missing filename returned a checksum" || ok "a filename absent from the manifest fails"
+sb_sha256_from_manifest_body 'not-a-checksum  some-file.tar.gz' some-file.tar.gz >/dev/null 2>&1 \
+    && bad "a malformed manifest returned a checksum" || ok "a malformed manifest fails"
+sb_sha256_from_manifest_body '' anything >/dev/null 2>&1 \
+    && bad "an empty manifest returned a checksum" || ok "an empty manifest fails"
+sb_checksum_from_manifest 'http://example.com/checksums.txt' file >/dev/null 2>&1 \
+    && bad "a plain-HTTP manifest was accepted" || ok "a manifest URL must use HTTPS"
+
+# Resolution must feed the same verification gate as a pin, never bypass it.
+resolution_guard=0
+for module in lib/bootstrap/node.sh lib/bootstrap/github_cli.sh lib/bootstrap/uv.sh; do
+    grep -q 'sb_is_latest' "$module" || { bad "no latest support in $module"; resolution_guard=1; }
+    grep -q 'sb_valid_sha256' "$module" || { bad "no checksum gate in $module"; resolution_guard=1; }
+done
+(( resolution_guard == 0 )) && ok "every resolved download still passes sb_valid_sha256"
+grep -q 'sb_is_latest' lib/bootstrap/ai_cli.sh \
+    && ok "the npm CLIs accept latest" || bad "npm latest support"
+grep -q 'git ls-remote' lib/core.sh \
+    && ok "tag discovery avoids the rate-limited GitHub API" || bad "tag discovery method"
+
+if [[ "${SB_TEST_NETWORK:-0}" == 1 ]]; then
+    # shellcheck source=lib/bootstrap/node.sh
+    source lib/bootstrap/node.sh
+    live_node="$(bootstrap_node_resolve_latest 2>/dev/null || true)"
+    [[ "$live_node" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && ok "live: Node.js LTS resolves to $live_node" || bad "live Node.js LTS resolution"
+    live_sha="$(sb_checksum_from_manifest "https://nodejs.org/dist/v$live_node/SHASUMS256.txt" \
+        "node-v$live_node-linux-x64.tar.xz" 2>/dev/null || true)"
+    sb_valid_sha256 "$live_sha" \
+        && ok "live: the published manifest yields a valid SHA-256" || bad "live checksum resolution"
+else
+    ok "live upstream resolution skipped (set SB_TEST_NETWORK=1 to run it)"
+fi
+
+section "Version checks survive a shadowing PATH"
+# A machine with its own node/gh/uv earlier in PATH must not break the run, and
+# must not silently satisfy a check with the wrong binary. Found by an
+# end-to-end run on a host carrying a preinstalled Node.
+grep -q '"$current/bin/node" --version' lib/bootstrap/node.sh \
+    && ! grep -qE '\[\[ "\$\(node --version' lib/bootstrap/node.sh \
+    && ok "Node is verified through the path it was installed to" \
+    || bad "Node verification still resolves node through PATH"
+grep -q 'export PATH="$current/bin:$PATH"' lib/bootstrap/node.sh \
+    && ok "the pinned Node leads PATH for the npm steps that follow" \
+    || bad "later steps may npm-install against an unpinned Node"
+grep -q 'bootstrap_github_cli_installed_version /usr/local/bin/gh' lib/bootstrap/github_cli.sh \
+    && ok "gh is verified through the path it was installed to" || bad "gh post-install verification"
+grep -q 'bootstrap_uv_installed_version /usr/local/bin/uv' lib/bootstrap/uv.sh \
+    && ok "uv is verified through the path it was installed to" || bad "uv post-install verification"
+# The run summary is how an operator learns what is on the box, so it must
+# never report a version read from a binary the bootstrap did not install.
+grep -q '"$AI_CLI_PREFIX/bin/claude" --version' lib/bootstrap/ai_cli.sh \
+    && grep -q '"$AI_CLI_PREFIX/bin/codex" --version' lib/bootstrap/ai_cli.sh \
+    && ok "the summary reports the agent launchers that were installed" \
+    || bad "agent versions in the summary still come from PATH"
+grep -q '/usr/local/bin/uv --version' lib/bootstrap/report.sh \
+    && ! grep -qE '\(command -v uv >/dev/null 2>&1 && uv --version' lib/bootstrap/report.sh \
+    && ok "the report reads uv from the path it was installed to" \
+    || bad "the uv report line still resolves uv through PATH"
+# The pre-install short-circuit is meant to stay PATH-based: it asks whether a
+# suitable binary is already usable, which is a different question.
+grep -q 'if \[\[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" \]\]' lib/bootstrap/github_cli.sh \
+    && ok "the gh already-installed short-circuit stays PATH-based" || bad "gh short-circuit changed"
+
+section "Runtime installation of the new files"
+for entry in 'server-secrets" "$stage/server-secrets' \
+    'lib/secrets-load.sh" "$stage/lib/secrets-load.sh' \
+    'examples/secrets.env.example" "$stage/examples/secrets.env.example' \
+    'examples/pi-models.example.json" "$stage/examples/pi-models.example.json'; do
+    grep -qF -- "$entry" lib/bootstrap/runtime.sh \
+        && ok "runtime installs $(printf '%s' "$entry" | cut -d'"' -f1)" \
+        || bad "runtime.sh does not install $entry"
+done
+grep -q 'ln -sfn "$destination/server-secrets" /usr/local/bin/server-secrets' lib/bootstrap/runtime.sh \
+    && ok "server-secrets is linked into PATH" || bad "server-secrets link"
+grep -q 'STEP=secrets; bootstrap_secrets' server-bootstrap.sh \
+    && grep -q 'STEP=pi-config; bootstrap_pi_config' server-bootstrap.sh \
+    && ok "the entrypoint runs the new steps" || bad "entrypoint wiring"
 
 section "Fitness: shipped version strings match VERSION"
 # 1.3.2 shipped headers still advertising 1.3.1 because config.example.env and

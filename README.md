@@ -20,7 +20,7 @@ Verifies the hardware you paid for, installs a pinned toolchain, and starts noth
 Paste this whole block into a freshly rented Ubuntu server, as root:
 
 ```bash
-V=2.1.0
+V=2.2.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 wget -q --show-progress \
@@ -38,16 +38,33 @@ That is the whole installation — roughly five minutes, most of it `apt`.
 > Rented hosts hand you a root shell and often ship without `sudo`.
 > Prefix the last command with `sudo` only if you are not root.
 
-Then start the new shell and sign in to the two coding agents, which are
-installed but deliberately **not** authenticated:
+Then start the new shell and paste your API keys once, into the one file every
+login shell loads:
 
 ```bash
 exec zsh -l
+server-secrets set ANTHROPIC_API_KEY     # prompts, nothing reaches your history
+server-secrets set OPENAI_API_KEY
+server-secrets set OPENROUTER_API_KEY
+server-secrets status                    # masked list of what is set
+```
+
+The three coding agents are installed but deliberately **not** authenticated.
+With keys in place they are ready; without them, sign in interactively instead:
+
+```bash
 claude
 codex
+pi
 ```
 
 Nothing else starts on its own: no workload, no model download, no public port.
+
+> [!IMPORTANT]
+> While `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set, `claude` and `codex`
+> bill per token through the API rather than using a Claude Pro/Max or ChatGPT
+> subscription. Run `aikeys off` to clear the keys from the current shell and
+> get subscription login back, `aikeys on` to reload them.
 
 ---
 
@@ -57,14 +74,17 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | --- | --- |
 | **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear` and disk/mem/GPU aliases |
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
-| **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.96.0 (`gh`) |
-| **Node** | Checksum-verified Node.js 24.18.0 LTS, x64 or ARM64 |
-| **Agents** | Claude Code 2.1.216 and OpenAI Codex 0.145.0, isolated in `/opt/ai-cli` |
+| **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.100.0 (`gh`) |
+| **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
+| **Agents** | Claude Code 2.1.267, OpenAI Codex 0.154.0 and pi 0.85.1, isolated in `/opt/ai-cli` |
+| **API keys** | One root-only `secrets.env` (mode 0600) loaded into every login shell, managed with `server-secrets` |
 | **Python** | uv, plus an isolated base environment |
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
 | **Hardware** | A `server-accept` report: CPU, RAM, disk speed, and — when a GPU is present — PCIe link width, thermals, ECC |
 
 Every version above is pinned by the release and checksum-verified before use.
+Set any version variable to `latest` to track upstream instead, or run
+`tools/refresh-pins.sh --check` to see how far behind the pins have fallen.
 
 ## How it works
 
@@ -93,6 +113,7 @@ is still cheap. A machine with no GPU is accepted normally — set
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check that the rented box matches spec | `server-accept` |
 | Install or repair the VS Code extension list | `server-vscode-extensions` |
+| Paste, inspect or edit your API keys | `server-secrets` |
 | Preview a plan without touching anything | `server-provision --plan … --dry-run` |
 
 > [!WARNING]
@@ -115,8 +136,8 @@ green with nothing else downloaded. To add a workload, put its archive and
 ```text
 server-provision.sh
 provision-plan.example.sh
-server-bootstrap-2.1.0.tar.gz
-server-bootstrap-2.1.0.tar.gz.sha256
+server-bootstrap-2.2.0.tar.gz
+server-bootstrap-2.2.0.tar.gz.sha256
 <workload>-<version>.tar.gz
 <workload>-<version>.tar.gz.sha256
 ```
@@ -148,6 +169,16 @@ Tools pinned to a checksummed upstream release — Node.js, uv, `gh`, and the AI
 CLIs — are deliberately absent from the manifest. Adding one of them to it would
 install a second, unpinned copy.
 
+### Keeping the pinned versions fresh
+
+```bash
+tools/refresh-pins.sh            # report drift against upstream, exit 1 when stale
+tools/refresh-pins.sh --write    # apply it to config.sh, config.example.env, checksums/
+```
+
+Tag discovery uses `git ls-remote`, not the GitHub API, so it needs no token and
+works from restricted networks.
+
 ---
 
 ## Security model
@@ -166,6 +197,12 @@ and pinning the expected SHA-256 in your own provision plan.
 There is deliberately **no `curl | sh` installer**; it would defeat the verified
 archive model the rest of this bundle is built on.
 
+Setting a version variable to `latest` keeps the verification but moves the
+expected hash: it comes from the publisher's own checksum manifest, fetched
+over HTTPS from the same origin as the artifact. That is the same
+integrity-not-authenticity trade as above, made at run time instead of at
+release time. Pinned versions remain the default for exactly that reason.
+
 `server-provision.sh` resolves plan entries as local paths, so the bootstrap
 archive must be downloaded first. Workload bundles do not: `server-bundle-install`
 accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
@@ -180,7 +217,10 @@ accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
 - SHA-256 is checked before any downloaded archive is extracted.
 - Archives with absolute paths, `..` traversal, or escaping symlinks are rejected.
 - Remote sources and the npm registry must use HTTPS.
-- Node.js, `gh`, Claude Code, Codex, uv, and Oh My Zsh are version-pinned by the release.
+- Node.js, `gh`, Claude Code, Codex, pi, uv, and Oh My Zsh are version-pinned by the release.
+- API keys live in one root-owned file at mode 0600, never in `/etc/profile.d`, which is world-readable.
+- That file is parsed, not sourced: a backtick or `$(...)` in a pasted value is data, not a command.
+- An empty key is not exported, so an untouched placeholder is never mistaken for a credential.
 - Package names from the manifest are validated before reaching the apt command line.
 - Oh My Zsh is fetched at an exact commit; no upstream installer script is run.
 - AI CLI packages go to `/opt/ai-cli`, not the system npm tree.
@@ -206,6 +246,7 @@ accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
 | `server-bundle-install` | Install one verified bundle archive |
 | `server-accept` | Validate CPU, RAM, disk, and any GPU before you pay for the hour |
 | `server-vscode-extensions` | Install or repair the Remote-SSH extension manifest |
+| `server-secrets` | Store and inspect the API keys every login shell loads |
 
 The release also ships `server-provision.sh` as a standalone file, for the first
 run before the bootstrap has installed any commands.
@@ -245,6 +286,15 @@ The bootstrap installs Zsh, sets it as root's default login shell, installs a
 pinned Oh My Zsh revision, and loads it from `/root/.zshrc`. The generated
 server aliases include `c` for `clear`. Reconnect after the first run, or run
 `exec zsh -l`, to enter the new login shell immediately.
+
+The same startup configuration loads `/root/.config/server-bootstrap/secrets.env`
+and defines `aikeys`:
+
+```bash
+aikeys status   # masked list of the keys the file defines
+aikeys off      # clear them from this shell, for subscription login
+aikeys on       # reload them
+```
 
 </details>
 
