@@ -745,6 +745,16 @@ grep -q 'bootstrap_github_cli_installed_version /usr/local/bin/gh' lib/bootstrap
     && ok "gh is verified through the path it was installed to" || bad "gh post-install verification"
 grep -q 'bootstrap_uv_installed_version /usr/local/bin/uv' lib/bootstrap/uv.sh \
     && ok "uv is verified through the path it was installed to" || bad "uv post-install verification"
+# The run summary is how an operator learns what is on the box, so it must
+# never report a version read from a binary the bootstrap did not install.
+grep -q '"$AI_CLI_PREFIX/bin/claude" --version' lib/bootstrap/ai_cli.sh \
+    && grep -q '"$AI_CLI_PREFIX/bin/codex" --version' lib/bootstrap/ai_cli.sh \
+    && ok "the summary reports the agent launchers that were installed" \
+    || bad "agent versions in the summary still come from PATH"
+grep -q '/usr/local/bin/uv --version' lib/bootstrap/report.sh \
+    && ! grep -qE '\(command -v uv >/dev/null 2>&1 && uv --version' lib/bootstrap/report.sh \
+    && ok "the report reads uv from the path it was installed to" \
+    || bad "the uv report line still resolves uv through PATH"
 # The pre-install short-circuit is meant to stay PATH-based: it asks whether a
 # suitable binary is already usable, which is a different question.
 grep -q 'if \[\[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" \]\]' lib/bootstrap/github_cli.sh \

@@ -61,7 +61,7 @@ CLAUDEWRAPPER
         else
             ln -sfn "$AI_CLI_PREFIX/bin/claude" /usr/local/bin/claude
         fi
-        CLAUDE_RESULT="$(claude --version 2>/dev/null || printf '%s' "$resolved")"
+        CLAUDE_RESULT="$("$AI_CLI_PREFIX/bin/claude" --version 2>/dev/null || printf '%s' "$resolved")"
         printf '%s\n' "$resolved" > "$STATE_ROOT/claude-code-version"
     fi
 
@@ -69,7 +69,7 @@ CLAUDEWRAPPER
         resolved="$(bootstrap_verify_npm_package_version '@openai/codex' "$CODEX_VERSION")" || return
         [[ -x "$AI_CLI_PREFIX/bin/codex" ]] || { sb_die "Codex executable missing"; return; }
         ln -sfn "$AI_CLI_PREFIX/bin/codex" /usr/local/bin/codex
-        CODEX_RESULT="$(codex --version 2>/dev/null || printf '%s' "$resolved")"
+        CODEX_RESULT="$("$AI_CLI_PREFIX/bin/codex" --version 2>/dev/null || printf '%s' "$resolved")"
         printf '%s\n' "$resolved" > "$STATE_ROOT/codex-version"
     fi
 

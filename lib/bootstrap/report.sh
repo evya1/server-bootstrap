@@ -31,7 +31,13 @@ bootstrap_report() {
     echo "pi:         ${PI_RESULT:-not-run}"
     echo "api keys:   ${SECRETS_RESULT:-not-run}"
     echo "vscode ext: ${VSCODE_EXTENSIONS_RESULT:-not-run}"
-    echo "uv:         $(command -v uv >/dev/null 2>&1 && uv --version || echo absent)"
+    if [[ -x /usr/local/bin/uv ]]; then
+        echo "uv:         $(/usr/local/bin/uv --version)"
+    elif command -v uv >/dev/null 2>&1; then
+        echo "uv:         $(uv --version) (found on PATH; not installed by this bootstrap)"
+    else
+        echo "uv:         absent"
+    fi
     echo "gh:         ${GITHUB_CLI_RESULT:-not-run}"
     echo "base numpy: $NUMPY_VERSION"
     if command -v nvidia-smi >/dev/null 2>&1; then
