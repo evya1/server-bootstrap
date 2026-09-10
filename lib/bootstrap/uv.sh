@@ -17,7 +17,9 @@ bootstrap_uv_checksum() {
 }
 
 bootstrap_uv_installed_version() {
-    uv --version 2>/dev/null | awk 'NR == 1 { print $2 }'
+    local binary="${1:-uv}"
+    command -v "$binary" >/dev/null 2>&1 || return 0
+    "$binary" --version 2>/dev/null | awk 'NR == 1 { print $2 }'
 }
 
 bootstrap_uv() {
@@ -62,7 +64,7 @@ bootstrap_uv() {
         install -m 0755 "$found" "/usr/local/bin/$binary"
     done
 
-    [[ "$(bootstrap_uv_installed_version)" == "$UV_VERSION" ]] \
+    [[ "$(bootstrap_uv_installed_version /usr/local/bin/uv)" == "$UV_VERSION" ]] \
         || { sb_die "uv version verification failed"; return; }
     printf '%s\n' "$UV_VERSION" > "$STATE_ROOT/uv-version"
     sb_log "installed uv $UV_VERSION ($target)"

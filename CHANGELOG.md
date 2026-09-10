@@ -47,6 +47,13 @@
 
 ### Fixed
 
+- A host with its own Node, `gh` or `uv` earlier in `PATH` no longer breaks the
+  run. Post-install version checks used a bare command name, so a preinstalled
+  Node satisfied the lookup and failed the comparison, aborting the whole
+  bootstrap at the `nodejs` step. Each check now verifies the binary it just
+  installed, and the pinned Node leads `PATH` for the npm steps that follow, so
+  the coding-agent CLIs can no longer be installed against an unpinned runtime.
+  Found by a full provisioning run on Ubuntu 24.04, not by the unit tests.
 - `bootstrap_nodejs` now also refuses to skip Node.js when only pi is enabled.
 
 ## 2.1.0

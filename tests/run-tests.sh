@@ -730,6 +730,26 @@ else
     ok "live upstream resolution skipped (set SB_TEST_NETWORK=1 to run it)"
 fi
 
+section "Version checks survive a shadowing PATH"
+# A machine with its own node/gh/uv earlier in PATH must not break the run, and
+# must not silently satisfy a check with the wrong binary. Found by an
+# end-to-end run on a host carrying a preinstalled Node.
+grep -q '"$current/bin/node" --version' lib/bootstrap/node.sh \
+    && ! grep -qE '\[\[ "\$\(node --version' lib/bootstrap/node.sh \
+    && ok "Node is verified through the path it was installed to" \
+    || bad "Node verification still resolves node through PATH"
+grep -q 'export PATH="$current/bin:$PATH"' lib/bootstrap/node.sh \
+    && ok "the pinned Node leads PATH for the npm steps that follow" \
+    || bad "later steps may npm-install against an unpinned Node"
+grep -q 'bootstrap_github_cli_installed_version /usr/local/bin/gh' lib/bootstrap/github_cli.sh \
+    && ok "gh is verified through the path it was installed to" || bad "gh post-install verification"
+grep -q 'bootstrap_uv_installed_version /usr/local/bin/uv' lib/bootstrap/uv.sh \
+    && ok "uv is verified through the path it was installed to" || bad "uv post-install verification"
+# The pre-install short-circuit is meant to stay PATH-based: it asks whether a
+# suitable binary is already usable, which is a different question.
+grep -q 'if \[\[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" \]\]' lib/bootstrap/github_cli.sh \
+    && ok "the gh already-installed short-circuit stays PATH-based" || bad "gh short-circuit changed"
+
 section "Runtime installation of the new files"
 for entry in 'server-secrets" "$stage/server-secrets' \
     'lib/secrets-load.sh" "$stage/lib/secrets-load.sh' \

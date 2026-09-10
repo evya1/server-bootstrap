@@ -23,7 +23,9 @@ bootstrap_github_cli_checksum() {
 }
 
 bootstrap_github_cli_installed_version() {
-    gh --version 2>/dev/null | awk 'NR == 1 { print $3 }'
+    local binary="${1:-gh}"
+    command -v "$binary" >/dev/null 2>&1 || return 0
+    "$binary" --version 2>/dev/null | awk 'NR == 1 { print $3 }'
 }
 
 bootstrap_github_cli() {
@@ -83,7 +85,7 @@ bootstrap_github_cli() {
     fi
     rm -rf -- "$temp"
 
-    [[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" ]] \
+    [[ "$(bootstrap_github_cli_installed_version /usr/local/bin/gh)" == "$GH_VERSION" ]] \
         || { sb_die "GitHub CLI version verification failed"; return; }
     GITHUB_CLI_RESULT="gh $GH_VERSION"
     printf '%s\n' "$GH_VERSION" > "$STATE_ROOT/github-cli-version"

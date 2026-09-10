@@ -89,9 +89,16 @@ bootstrap_nodejs() {
         ln -sfn "$current/bin/$command" "/usr/local/bin/$command"
     done
 
-    [[ "$(node --version 2>/dev/null)" == "v$NODE_VERSION" ]] \
+    # Verify the binary just installed rather than whatever PATH resolves to.
+    # A machine with its own Node earlier in PATH would otherwise fail this
+    # check, or worse pass it and install the agent CLIs against an unpinned
+    # runtime, which is exactly what pinning is supposed to prevent.
+    [[ "$("$current/bin/node" --version 2>/dev/null)" == "v$NODE_VERSION" ]] \
         || { sb_die "Node.js version verification failed"; return; }
-    NODE_RESULT="$(node --version) / npm $(npm --version)"
+    # Later steps run npm; they must use the runtime this step just pinned.
+    export PATH="$current/bin:$PATH"
+    hash -r 2>/dev/null || true
+    NODE_RESULT="$("$current/bin/node" --version) / npm $("$current/bin/npm" --version)"
     printf '%s\n' "$NODE_VERSION" > "$STATE_ROOT/node-version"
     sb_log "installed Node.js $NODE_VERSION ($arch)"
 }
