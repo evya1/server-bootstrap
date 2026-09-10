@@ -30,18 +30,32 @@ bootstrap_github_cli() {
     GITHUB_CLI_RESULT="disabled"
     [[ "$INSTALL_GITHUB_CLI" == 1 ]] || return 0
 
+    local arch checksum name url temp archive extracted tag
+
+    if sb_is_latest "$GH_VERSION"; then
+        tag="$(sb_latest_git_tag https://github.com/cli/cli.git)" || return
+        GH_VERSION="${tag#v}"
+        sb_log "resolved latest GitHub CLI: $GH_VERSION"
+        GH_SHA256_X64=""
+        GH_SHA256_ARM64=""
+    fi
+
     if [[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" ]]; then
         GITHUB_CLI_RESULT="gh $GH_VERSION"
         sb_log "GitHub CLI $GH_VERSION already installed"
         return 0
     fi
 
-    local arch checksum name url temp archive extracted
     arch="$(bootstrap_github_cli_arch)" || return
+    name="gh_${GH_VERSION}_linux_${arch}"
     checksum="$(bootstrap_github_cli_checksum "$arch")" || return
+    if [[ -z "$checksum" ]]; then
+        checksum="$(sb_checksum_from_manifest \
+            "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_checksums.txt" \
+            "$name.tar.gz")" || return
+    fi
     sb_valid_sha256 "$checksum" || { sb_die "invalid GitHub CLI checksum for $arch"; return; }
 
-    name="gh_${GH_VERSION}_linux_${arch}"
     temp="$(mktemp -d)"
     archive="$temp/$name.tar.gz"
     extracted="$temp/extracted"

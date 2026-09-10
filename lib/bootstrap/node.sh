@@ -8,6 +8,19 @@ bootstrap_node_arch() {
     esac
 }
 
+# Newest LTS from the official release index. Entries are ordered newest
+# first; an LTS release carries a codename string where a current release
+# carries false.
+bootstrap_node_resolve_latest() {
+    local index version
+    index="$(sb_retry 4 curl -fsSL --proto '=https' --tlsv1.2 https://nodejs.org/dist/index.json 2>/dev/null || true)"
+    [[ -n "$index" ]] || { sb_die "could not fetch the Node.js release index"; return; }
+    version="$(printf '%s\n' "$index" | tr '{' '\n' | grep -m1 '"lts":"' \
+        | sed -n 's/.*"version":"v\([0-9][0-9.]*\)".*/\1/p')"
+    [[ -n "$version" ]] || { sb_die "could not resolve the latest Node.js LTS"; return; }
+    printf '%s\n' "$version"
+}
+
 bootstrap_node_checksum() {
     case "$1" in
         x64) printf '%s\n' "$NODE_SHA256_X64" ;;
@@ -19,19 +32,31 @@ bootstrap_node_checksum() {
 bootstrap_nodejs() {
     NODE_RESULT="disabled"
     if [[ "$INSTALL_NODEJS" != 1 ]]; then
-        if [[ "$INSTALL_CLAUDE_CODE" == 1 || "$INSTALL_CODEX" == 1 ]]; then
+        if [[ "$INSTALL_CLAUDE_CODE" == 1 || "$INSTALL_CODEX" == 1 || "$INSTALL_PI" == 1 ]]; then
             command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
-                || { sb_die "Claude Code or Codex requires Node.js/npm; enable INSTALL_NODEJS or provide them"; return; }
+                || { sb_die "the coding-agent CLIs require Node.js/npm; enable INSTALL_NODEJS or provide them"; return; }
         fi
         return 0
     fi
 
     local arch checksum name url temp archive extracted install_dir current
     arch="$(bootstrap_node_arch)" || return
-    checksum="$(bootstrap_node_checksum "$arch")" || return
-    sb_valid_sha256 "$checksum" || { sb_die "invalid Node.js checksum for $arch"; return; }
+
+    if sb_is_latest "$NODE_VERSION"; then
+        NODE_VERSION="$(bootstrap_node_resolve_latest)" || return
+        sb_log "resolved latest Node.js LTS: $NODE_VERSION"
+        NODE_SHA256_X64=""
+        NODE_SHA256_ARM64=""
+    fi
 
     name="node-v$NODE_VERSION-linux-$arch"
+    checksum="$(bootstrap_node_checksum "$arch")" || return
+    if [[ -z "$checksum" ]]; then
+        checksum="$(sb_checksum_from_manifest \
+            "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" "$name.tar.xz")" || return
+    fi
+    sb_valid_sha256 "$checksum" || { sb_die "invalid Node.js checksum for $arch"; return; }
+
     install_dir="$NODE_INSTALL_ROOT/$name"
     current="$NODE_INSTALL_ROOT/current"
 

@@ -14,10 +14,13 @@ convenient place to export them.
 | `INSTALL_NODEJS` | `1` | install checksum-verified Node.js LTS |
 | `INSTALL_CLAUDE_CODE` | `1` | install the pinned Claude Code CLI |
 | `INSTALL_CODEX` | `1` | install the pinned OpenAI Codex CLI |
+| `INSTALL_PI` | `1` | install the pinned pi coding agent |
 | `INSTALL_VSCODE_EXTENSIONS` | `1` | install or queue the Remote-SSH extension manifest |
 | `INSTALL_UV` | `1` | install pinned, checksum-verified uv |
 | `INSTALL_GITHUB_CLI` | `1` | install pinned, checksum-verified `gh` |
 | `INSTALL_BASE_PYTHON_ENV` | `1` | create isolated base Python environment |
+| `INSTALL_SECRETS_FILE` | `1` | create the API keys file and its shell loader |
+| `INSTALL_PI_MODELS_TEMPLATE` | `1` | seed `models.json` when pi has none |
 | `BASE_PYTHON_PACKAGES` | `numpy` | packages installed in that environment |
 | `RUN_ACCEPT_TEST` | `1` | bootstrap-local acceptance; provisioner runs it separately |
 
@@ -56,9 +59,9 @@ to it would install a second, unpinned copy.
 SHA-256 per architecture, then linked at `/usr/local/bin/gh` with its man pages:
 
 ```bash
-GH_VERSION=2.96.0
-GH_SHA256_X64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
-GH_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+GH_VERSION=2.100.0
+GH_SHA256_X64=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+GH_SHA256_ARM64=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961
 ```
 
 The distribution package lags upstream by many minor versions and is missing
@@ -73,28 +76,29 @@ gh auth login
 
 ## Node.js and coding-agent CLIs
 
-The release installs the official Node.js 24.18.0 LTS binary archive and checks
+The release installs the official Node.js 24.21.0 LTS binary archive and checks
 the architecture-specific SHA-256 before extraction:
 
 ```bash
-NODE_VERSION=24.18.0
-NODE_SHA256_X64=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
-NODE_SHA256_ARM64=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
+NODE_VERSION=24.21.0
+NODE_SHA256_X64=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+NODE_SHA256_ARM64=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
 NODE_INSTALL_ROOT=/opt/nodejs
 ```
 
 The stable symlink is `/opt/nodejs/current`; `node`, `npm`, `npx`, and
 `corepack` are exposed through `/usr/local/bin`.
 
-Claude Code and Codex are installed at exact npm versions into an isolated
-system prefix:
+Claude Code, Codex and pi are installed at exact npm versions into an isolated
+system prefix, in one npm transaction:
 
 ```bash
 AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
-CLAUDE_CODE_VERSION=2.1.216
+CLAUDE_CODE_VERSION=2.1.267
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
-CODEX_VERSION=0.145.0
+CODEX_VERSION=0.154.0
+PI_VERSION=0.85.1
 ```
 
 The bootstrap invokes npm directly while already running as root; it does not
@@ -102,15 +106,106 @@ run `sudo npm`. Package versions are verified from their installed
 `package.json` files, and the resulting `claude` and `codex` launchers are
 linked into `/usr/local/bin`. Claude Code automatic updates are disabled by the generated launcher by default so rerunning the bundle remains the version-control mechanism. Set `CLAUDE_CODE_DISABLE_AUTOUPDATER=0` to allow Claude Code to manage its own updates.
 
-Set either install flag to `0` to omit that CLI. If Node installation is
+Set any install flag to `0` to omit that CLI. If Node installation is
 disabled while an AI CLI is enabled, a usable preinstalled `node` and `npm` are
-required.
+required. pi needs Node 22.19 or newer, which the pinned Node satisfies.
 
-Authentication is intentionally interactive and is never stored in the bundle:
+pi needs no update wrapper: the generated Zsh configuration exports
+`PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`, so a release-pinned pi performs
+no startup network call of its own.
+
+Authentication is interactive, or comes from the API keys file below:
 
 ```bash
 claude
 codex
+pi
+```
+
+### pi model configuration
+
+pi ships built-in catalogs for Anthropic, OpenAI, OpenRouter and a dozen more
+providers, so `models.json` is needed only for providers it does not know
+about — a local vLLM or Ollama server, or a proxy.
+
+```bash
+PI_CONFIG_DIR=/root/.pi/agent
+INSTALL_PI_MODELS_TEMPLATE=1
+PI_MODELS_TEMPLATE=/usr/local/lib/server-bootstrap/examples/pi-models.example.json
+```
+
+The template is installed to `$PI_CONFIG_DIR/models.json` **only when that file
+does not exist**, so your edits are never replaced. It contains no secret: its
+OpenRouter entry uses pi's `"$OPENROUTER_API_KEY"` interpolation, which reads
+the value the shell already exported. pi re-reads the file every time you open
+`/model`, so an edit needs no restart.
+
+## API keys
+
+One root-owned file holds every provider key, and the generated Zsh startup
+configuration loads it into each login shell:
+
+```bash
+SECRETS_DIR=/root/.config/server-bootstrap
+SECRETS_FILE=/root/.config/server-bootstrap/secrets.env
+SECRETS_TEMPLATE=/usr/local/lib/server-bootstrap/examples/secrets.env.example
+```
+
+The directory is `0700` and the file is `0600`. It is deliberately not in
+`/etc/profile.d`, which is world-readable and applies to every user.
+
+The file is **parsed, never sourced**. Only `NAME=VALUE` lines are accepted, an
+optional `export ` prefix and one layer of matching quotes are stripped, and a
+name that is not `[A-Za-z_][A-Za-z0-9_]*` is reported and skipped. A backtick
+or `$(...)` inside a value is exported literally, not executed. An empty value
+is not exported at all, so an untouched placeholder is never mistaken for a
+configured credential.
+
+Manage it with `server-secrets`:
+
+| Command | Purpose |
+|---|---|
+| `server-secrets status` | masked list of every key the file names |
+| `server-secrets set NAME` | prompt for one value; nothing reaches shell history |
+| `server-secrets edit` | open the file in `$EDITOR`, then recheck permissions |
+| `server-secrets check` | exit non-zero when no key is set |
+| `server-secrets path` | print the file path |
+| `server-secrets init` | create the file from the template if it is missing |
+
+Inside an interactive shell, `aikeys status`, `aikeys off` and `aikeys on`
+show, clear and reload the keys. `aikeys off` is what returns `claude` and
+`codex` to Claude Pro/Max and ChatGPT subscription login, because both prefer
+an API key whenever one is present.
+
+`SERVER_SECRETS_FILE` overrides the path for a single shell or command, which
+is what the test suite uses.
+
+## Tracking upstream versions
+
+Every version variable also accepts the literal `latest`:
+
+| Variable | Resolved from |
+|---|---|
+| `NODE_VERSION` | newest LTS in `nodejs.org/dist/index.json`, then `SHASUMS256.txt` |
+| `GH_VERSION` | newest `cli/cli` tag, then `gh_<version>_checksums.txt` |
+| `UV_VERSION` | newest `astral-sh/uv` tag, then the `.sha256` sidecar |
+| `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `PI_VERSION` | the npm `latest` dist-tag |
+| `OH_MY_ZSH_REF` | current `master` commit, then the existing exact-commit verify |
+
+The download path does not change: the resolved SHA-256 goes through the same
+`sb_fetch_verified` gate as a pinned one, and a manifest that yields no valid
+hash is a hard failure. What changes is where the expectation comes from — the
+publisher's manifest, fetched from the same origin as the artifact. That proves
+integrity, not authenticity, so pinned versions stay the default.
+
+Tag discovery uses `git ls-remote`, not `api.github.com`: no rate limit, no
+token, and it works from restricted networks.
+
+To refresh the pins themselves rather than resolve at run time:
+
+```bash
+tools/refresh-pins.sh            # report drift, exit 1 when stale
+tools/refresh-pins.sh --write    # rewrite config.sh, config.example.env, checksums/
 ```
 
 ## VS Code Remote-SSH extensions
@@ -155,14 +250,17 @@ listed in `/etc/shells`, and sets it as root's login shell. It generates:
 /root/.config/zsh/server-common.zsh
 ```
 
+plus `/root/.config/zsh/server-secrets.zsh`, which loads the API keys file and
+defines `aikeys`.
+
 The common aliases include `alias c='clear'`. The generated init file loads Oh
-My Zsh first and then the server aliases, so the bundle aliases take precedence.
-Reconnect after installation, or run `exec zsh -l`.
+My Zsh first, then the server aliases, then the keys, so the bundle aliases
+take precedence. Reconnect after installation, or run `exec zsh -l`.
 
 Oh My Zsh is pinned by default:
 
 ```bash
-OH_MY_ZSH_REF=677a4592b18c08ddea737f8aca70bac0e9fc9313
+OH_MY_ZSH_REF=cd320b5506998f32284d37799592cb2ba43a3188
 OH_MY_ZSH_SHA256=
 OH_MY_ZSH_THEME=robbyrussell
 OH_MY_ZSH_PLUGINS=git
@@ -174,10 +272,14 @@ bootstrap owns the pinned revision.
 
 ## uv and base Python
 
-The release pins both `UV_VERSION` and its matching x86_64 Linux archive
-checksum. A mismatched checksum aborts, and the bootstrap never falls back to a
-remote installer script. The base Python environment can be created with
-`python -m venv` when uv is disabled.
+The release pins `UV_VERSION` and a matching archive checksum per architecture,
+`UV_SHA256_X64` and `UV_SHA256_ARM64`. The older single-value `UV_SHA256` is
+still accepted and overrides the x86_64 entry. A mismatched checksum aborts,
+and the bootstrap never falls back to a remote installer script.
+
+uv is reinstalled when the installed version differs from the pinned one, so a
+version bump takes effect on rerun. The base Python environment can be created
+with `python -m venv` when uv is disabled.
 
 ## Legacy one-add-on interface
 

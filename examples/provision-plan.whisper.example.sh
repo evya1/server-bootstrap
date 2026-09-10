@@ -18,12 +18,13 @@ export DELETE_ARCHIVES_AFTER_SUCCESS=1
 
 # Whisper installation uses this pinned and checksum-verified uv release.
 export INSTALL_UV=1
-export UV_VERSION=0.9.2
-export UV_SHA256=b775bb84c72210c6c0b9670cfaad0ac2e3953f12a2947d52b57603b4fbae3798
+export UV_VERSION=0.12.12
+export UV_SHA256_X64=ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509
+export UV_SHA256_ARM64=fe08db50cc1b56cd1da7801065ed1103d27ed3f9571cd122386cfc7faf1b8df5
 
 register_bootstrap \
-  "./server-bootstrap-2.1.0.tar.gz" \
-  "./server-bootstrap-2.1.0.tar.gz.sha256"
+  "./server-bootstrap-2.2.0.tar.gz" \
+  "./server-bootstrap-2.2.0.tar.gz.sha256"
 
 register_bundle \
   "whisper-toolkit" \

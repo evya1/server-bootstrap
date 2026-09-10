@@ -28,6 +28,8 @@ bootstrap_report() {
     echo "node:       ${NODE_RESULT:-not-run}"
     echo "claude:     ${CLAUDE_RESULT:-not-run}"
     echo "codex:      ${CODEX_RESULT:-not-run}"
+    echo "pi:         ${PI_RESULT:-not-run}"
+    echo "api keys:   ${SECRETS_RESULT:-not-run}"
     echo "vscode ext: ${VSCODE_EXTENSIONS_RESULT:-not-run}"
     echo "uv:         $(command -v uv >/dev/null 2>&1 && uv --version || echo absent)"
     echo "gh:         ${GITHUB_CLI_RESULT:-not-run}"

@@ -1,5 +1,54 @@
 # Changelog
 
+## 2.2.0
+
+### Added
+
+- **pi coding agent.** `@earendil-works/pi-coding-agent` 0.85.1 installs beside
+  Claude Code and Codex in `/opt/ai-cli` and is linked as `pi`. Disable it with
+  `INSTALL_PI=0`. The generated Zsh configuration exports `PI_TELEMETRY=0` and
+  `PI_SKIP_VERSION_CHECK=1`, so a release-pinned pi does not phone home.
+- **A models.json template** at `examples/pi-models.example.json`, installed to
+  `/root/.pi/agent/models.json` only when that file does not already exist. It
+  covers custom providers only — pi ships built-in catalogs for Anthropic,
+  OpenAI and OpenRouter — and stores no secret: its OpenRouter entry reads
+  `$OPENROUTER_API_KEY` from the environment.
+- **One place for API keys.** `/root/.config/server-bootstrap/secrets.env`,
+  mode 0600, seeded from `examples/secrets.env.example` and loaded by every
+  login shell. The file is parsed, never sourced, so a backtick or `$(...)` in
+  a pasted value is data rather than a command, and an empty value is not
+  exported.
+- **`server-secrets`** to manage that file: `status` (masked), `set NAME`
+  (prompts, so nothing reaches shell history), `edit`, `check`, `path`, `init`.
+- **`aikeys on|off|status`** in the interactive shell. `aikeys off` clears the
+  keys from the current shell, which is what returns `claude` and `codex` to
+  Claude Pro/Max and ChatGPT subscription login.
+- **`latest` as a version.** `NODE_VERSION`, `GH_VERSION`, `UV_VERSION`,
+  `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `PI_VERSION` and `OH_MY_ZSH_REF` now
+  accept the literal `latest`. The resolved artifact is still checksum-verified
+  before extraction, using the publisher's own manifest. Pinned stays the
+  default: an upstream manifest proves integrity, not authenticity.
+- **`tools/refresh-pins.sh`** to report (`--check`, non-zero when stale) or
+  apply (`--write`) upstream drift across `lib/bootstrap/config.sh`,
+  `config.example.env` and `checksums/`. Tag discovery uses `git ls-remote`
+  rather than the GitHub API, so it needs no token.
+
+### Changed
+
+- Refreshed every pin: Node.js 24.18.0 to 24.21.0, GitHub CLI 2.96.0 to
+  2.100.0, uv 0.9.2 to 0.12.12, Claude Code 2.1.216 to 2.1.267, Codex 0.145.0
+  to 0.154.0, and Oh My Zsh to commit `cd320b55`.
+- uv installs on ARM64. It previously refused anything but x86_64, so
+  `UV_SHA256` became `UV_SHA256_X64` and `UV_SHA256_ARM64`; the old name still
+  works as an x86_64 override.
+- uv upgrades on rerun. It previously skipped whenever any `uv` was on `PATH`,
+  which meant a version bump never took effect; it now compares versions the
+  way the GitHub CLI module already did.
+
+### Fixed
+
+- `bootstrap_nodejs` now also refuses to skip Node.js when only pi is enabled.
+
 ## 2.1.0
 
 - **Added `tools/shrink-silence-m4a.sh`.** A standalone utility, not wired into
