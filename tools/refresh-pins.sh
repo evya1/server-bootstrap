@@ -145,6 +145,28 @@ names = [
 ]
 values = {n: os.environ[n] for n in names}
 
+# README.md's "What the run installs" table names five of these versions in
+# prose. tests/run-tests.sh asserts they match the config defaults, so they are
+# rewritten here rather than left to the maintainer -- a second copy of a value
+# that a tool updates only half of is how documentation goes stale.
+readme_tools = [
+    ("GitHub CLI", "GH_VERSION"),
+    ("Node.js", "NODE_VERSION"),
+    ("Claude Code", "CLAUDE_CODE_VERSION"),
+    ("OpenAI Codex", "CODEX_VERSION"),
+    ("pi", "PI_VERSION"),
+]
+
+# Every rewrite is resolved before anything is written, so a README the patterns
+# no longer fit aborts the run with the tree untouched instead of half updated.
+readme = pathlib.Path("README.md")
+readme_text = readme.read_text()
+for label, name in readme_tools:
+    pattern = re.compile(r'\b%s \d+\.\d+\.\d+' % re.escape(label))
+    readme_text, count = pattern.subn("%s %s" % (label, values[name]), readme_text)
+    if count != 1:
+        raise SystemExit("expected one %s version in README.md, found %d" % (label, count))
+
 config = pathlib.Path("lib/bootstrap/config.sh")
 text = config.read_text()
 for name, value in values.items():
@@ -153,6 +175,7 @@ for name, value in values.items():
     if count != 1:
         raise SystemExit("expected one default for %s in config.sh, found %d" % (name, count))
 config.write_text(text)
+readme.write_text(readme_text)
 
 example = pathlib.Path("config.example.env")
 text = example.read_text()
@@ -194,8 +217,11 @@ pathlib.Path("checksums/AI_CLI_VERSIONS.txt").write_text(
     "@anthropic-ai/claude-code %(CLAUDE_CODE_VERSION)s\n"
     "@openai/codex %(CODEX_VERSION)s\n"
     "@earendil-works/pi-coding-agent %(PI_VERSION)s\n" % values)
-print("updated lib/bootstrap/config.sh, config.example.env and checksums/")
+print("updated lib/bootstrap/config.sh, config.example.env, checksums/ and README.md")
 PY
 
-sb_log "pins updated; review the diff, then update README.md and CHANGELOG.md by hand"
-grep -rn --include=README.md --include=CHANGELOG.md -E "$(printf '%s|%s|%s' "$NODE_VERSION" "$GH_VERSION" "$CLAUDE_CODE_VERSION")" . 2>/dev/null | head -n 20 || true
+# CHANGELOG.md is still a hand edit: it records what a bump means, which no
+# pattern can write. The grep shows where the superseded versions are still
+# named, using the values as they were before the rewrite above.
+sb_log "pins updated; review the diff, then update CHANGELOG.md by hand"
+grep -rn --include=CHANGELOG.md -E "$(printf '%s|%s|%s' "$NODE_VERSION" "$GH_VERSION" "$CLAUDE_CODE_VERSION")" . 2>/dev/null | head -n 20 || true
