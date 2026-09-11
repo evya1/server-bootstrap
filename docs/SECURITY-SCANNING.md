@@ -1,7 +1,18 @@
 # Security scanning
 
-CI scans the complete Git history with Gitleaks and a pinned v8.30.1 release.
-Release work must also scan staged and unpacked artifacts before publication.
+CI scans the complete Git history with Gitleaks. The version and its release
+checksum are pinned in `tools/gitleaks.sh`, which is the only pin in the
+repository: CI, `release/build-release.sh`, and the release workflow all scan
+through it, so the scanner cannot drift between them.
+
+The release build scans the source staging tree and every extracted archive, and
+the release workflow scans `release/dist` again immediately before upload. That
+last pass descends into the archives — a flat scan of a directory of tarballs
+reads zero bytes and would pass anything.
+
+Findings are remediated with new commits. Published history is never rewritten
+and the allowlist is never broadened to silence a preserved finding; see
+[SECURITY.md](../SECURITY.md).
 
 The repository allowlist is intentionally small and covers only harmless example
 values already used by the project: `/root`, `/workspace`, `localhost`, loopback

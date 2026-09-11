@@ -9,6 +9,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      GITLEAKS_CACHE_DIR: ${{ runner.temp }}/gitleaks
     steps:
       - uses: actions/checkout@v4
 
@@ -19,10 +21,21 @@ jobs:
           [[ "$tag" == "$declared" ]] \
             || { echo "ERROR: tag $tag != VERSION $declared" >&2; exit 1; }
 
-      # Runs the full test suite, refreshes checksums, and builds every archive
-      # twice, failing if the two passes are not byte-identical.
+      - name: Install and verify the pinned Gitleaks
+        run: echo "GITLEAKS_BIN=$(bash tools/gitleaks.sh path)" >> "$GITHUB_ENV"
+
+      # Runs the full test suite, refreshes checksums, builds every archive
+      # twice failing if the two passes are not byte-identical, and scans the
+      # source staging tree and every extracted archive.
       - name: Build release
         run: bash release/build-release.sh
+
+      # The gate immediately before upload, deliberately independent of the
+      # build: it re-scans release/dist as it will be published, descending into
+      # the archives, and honours no skip switch. If this step fails the job
+      # fails and Publish assets never runs, so nothing is uploaded.
+      - name: Scan release artifacts before publication
+        run: bash tools/gitleaks.sh scan-artifacts release/dist "release artifacts"
 
       - name: Publish assets
         uses: softprops/action-gh-release@v2

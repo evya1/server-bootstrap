@@ -229,6 +229,10 @@ accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
 - No workload, model, dataset, or public service starts automatically.
 - The bootstrap never installs or replaces the NVIDIA driver.
 - Release archives are byte-reproducible and verified twice on every build.
+- Release staging trees and every extracted archive are secret-scanned, and
+  `release/dist` is scanned again immediately before upload.
+- Security fixes are additive: published history is never rewritten, so the
+  complete history stays available to the scanner. See [SECURITY.md](SECURITY.md).
 
 </details>
 
@@ -318,6 +322,8 @@ The old single-add-on environment variables remain supported by
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | Modules and responsibility boundaries |
 | [BUNDLE-CONTRACT](docs/BUNDLE-CONTRACT.md) | Requirements for future toolkit archives |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) | Failures and recovery |
+| [SECURITY](SECURITY.md) | Reporting, credential rotation, no-rewrite policy |
+| [SECURITY-SCANNING](docs/SECURITY-SCANNING.md) | Scanner pin and allowlist scope |
 
 ## License
 
