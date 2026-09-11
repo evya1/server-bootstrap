@@ -1,5 +1,66 @@
 # Changelog
 
+## 2.2.1
+
+Security hardening only. No behaviour on a provisioned server changes: nothing
+in `lib/bootstrap/`, and no entrypoint, was touched.
+
+> **Note:** 2.2.0 was bumped on `main` but never tagged, so no 2.2.0 release
+> exists. Upgrading from v2.1.0 therefore also picks up everything listed under
+> 2.2.0 below — the pi coding agent, the single API-key file, and the refreshed
+> pins. The 2.2.1 diff itself is security work alone.
+
+### Added
+
+- **One pinned scanner.** `tools/gitleaks.sh` holds the only Gitleaks version
+  and release checksum in the repository. CI, `release/build-release.sh` and the
+  release workflow all scan through it, so the gate that blocks a pull request
+  and the gate that blocks a publication cannot drift apart. The download is
+  checksum-verified before extraction and the script refuses to run on a
+  mismatch.
+- **Proof that full-history scanning works.** `tools/verify-history-scan.sh`
+  runs in CI against a throwaway repository where a credential is added in one
+  commit and the file deleted in the next, and asserts that a working-tree-only
+  scan misses it while the full-history scan finds it. The scan also refuses to
+  run against a shallow checkout, so a missing `fetch-depth` cannot quietly
+  shrink what it covers.
+- **Deterministic privacy guards.** `tests/privacy-guard.sh` checks the tracked
+  set for credential-shaped filenames, private-key material, high-signal
+  credential markers, credentials embedded in URLs, tracked build output,
+  private-use wording in `server-accept.sh`, and an allowlist that has grown
+  beyond the reviewed values. It runs offline, reports the violated policy and
+  location without reprinting the matching text, and every policy is exercised
+  against a fixture that must fail.
+- **Release staging and artifact scanning.** The release build scans the source
+  staging tree, each extracted archive, and `release/dist` itself; the release
+  workflow scans `release/dist` again immediately before upload. The final pass
+  descends into archives, because a flat scan of a directory of tarballs reads
+  zero bytes. A finding discards the staged release so a later upload cannot
+  pick up an artifact that failed the gate, and the archive hashes are
+  re-verified afterwards to prove scanning did not touch the published bytes.
+  The release manifest records `release_scan`.
+- **`SECURITY.md`.** Private reporting, and the history-preservation policy the
+  rest of this work follows: rotate an exposed credential out of band, remediate
+  with new commits, never rewrite published history, never delete release assets
+  or tags in place of remediation, and never broaden the allowlist to silence a
+  preserved finding. It also records the rule that no key-shaped string is ever
+  committed, not even as a fixture.
+
+### Changed
+
+- The test suite grows from 188 to 234 tests. The release-scan behaviour checks
+  skip rather than download when no pinned scanner is present, so the suite
+  still runs offline from a clean checkout.
+- The `shell` CI job fetches tags, so the check that published release tags
+  still resolve runs instead of skipping.
+
+### History
+
+No history was rewritten to produce this release. No force-push, no rebase or
+amend of a published commit, no tag replacement, and no release asset deleted.
+The tags `v1.4.0`, `v2.0.0`, `v2.0.1` and `v2.1.0` resolve to the same commits
+they always did, and CI scans the complete preserved history on every push.
+
 ## 2.2.0
 
 ### Added

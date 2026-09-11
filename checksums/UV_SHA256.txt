@@ -1,4 +1,4 @@
-# Pinned uv release used by server-bootstrap 2.2.0.
+# Pinned uv release used by server-bootstrap 2.2.1.
 # Assets: uv-x86_64-unknown-linux-gnu.tar.gz / uv-aarch64-unknown-linux-gnu.tar.gz
 # Source: https://github.com/astral-sh/uv/releases/download/0.12.12/
 x86_64-unknown-linux-gnu  ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509
