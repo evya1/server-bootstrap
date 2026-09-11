@@ -8,6 +8,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 ok(){ printf '  ok:   %s\n' "$1"; PASS=$((PASS+1)); }
 bad(){ printf '  FAIL: %s\n' "$1"; FAIL=$((FAIL+1)); }
 section(){ printf '\n== %s ==\n' "$1"; }
+skip(){ printf '  skip: %s\n' "$1"; }
 
 section "Syntax and structure"
 while IFS= read -r file; do
@@ -38,17 +39,9 @@ done
 (( term_hit == 0 )) && ok "neutral runtime code"
 
 section "Security and privacy guards"
-for forbidden in \
-    'box you just rented' \
-    'box you bought' \
-    'while the meter is running' \
-    'rental scam' \
-    "someone's garage" \
-    'destroy this instance and rent another'; do
-    if grep -Fqi -- "$forbidden" server-accept.sh; then
-        bad "personal-use wording remains in server-accept.sh: $forbidden"
-    fi
-done
+# Private-use wording, credential-shaped filenames, private-key material,
+# high-signal markers and tracked build output are all enforced by
+# tests/privacy-guard.sh, exercised against fixtures further down.
 [[ -s .gitleaks.toml ]] && ok "Gitleaks policy is present" || bad "missing Gitleaks policy"
 for allowed in '/root' '/workspace' 'localhost' '127\.0\.0\.1' '::1' \
     'example\.(?:com|org|net)' 'CHANGE_ME' 'EXAMPLE_TOKEN'; do
@@ -81,9 +74,216 @@ while IFS= read -r file; do
 done < <(git ls-files)
 (( tracked_ignored == 0 )) && ok "tracked files are not hidden by ignore rules"
 
+# The guard is only worth having if it fires, so every policy is exercised
+# against a fixture built at runtime. No fixture is ever committed: the
+# secret-scan job reads full history, so a committed fake token could only be
+# removed by rewriting history, which SECURITY.md forbids.
+guard_root="$TMP/privacy-guard"
+guard_out="$TMP/privacy-guard.out"
+guard_run(){ ./tests/privacy-guard.sh --dir "$guard_root" >"$guard_out" 2>&1; }
+
+[[ -x tests/privacy-guard.sh ]] \
+    && ok "executable: tests/privacy-guard.sh" || bad "not executable: tests/privacy-guard.sh"
+
+if ./tests/privacy-guard.sh >"$guard_out" 2>&1; then
+    ok "privacy guard passes on the tracked repository"
+else
+    bad "privacy guard reports a violation on the tracked repository"
+    sed 's/^/        /' "$guard_out"
+fi
+
+mkdir -p "$guard_root/examples"
+printf 'no secrets here\n' > "$guard_root/README.md"
+: > "$guard_root/config.example.env"
+: > "$guard_root/examples/addon.env.example"
+guard_run && ok "guard passes on the approved example templates" \
+    || bad "guard rejects config.example.env or examples/addon.env.example"
+
+# Deterministic, high-entropy and obviously synthetic: assembled here, asserted
+# on, then deleted. Grepping this file finds a recipe, never a token.
+fixture_token="sk-$(printf 'run-tests-privacy-fixture' | sha256sum | cut -c1-40)"
+printf 'api_key = "%s"\n' "$fixture_token" > "$guard_root/service.conf"
+if guard_run; then
+    bad "guard missed a fake high-signal token"
+else
+    ok "guard fails on a fake high-signal token"
+    grep -q 'vendor-credential-marker' "$guard_out" \
+        && ok "guard names the violated policy" || bad "guard did not name the violated policy"
+    grep -qF -- "$fixture_token" "$guard_out" \
+        && bad "guard printed the secret value" || ok "guard reports without printing the value"
+fi
+rm -f "$guard_root/service.conf"
+guard_run && ok "guard passes once the token fixture is removed" \
+    || bad "guard still fails after the token fixture was removed"
+
+# A PEM header assembled from fragments, for the same reason.
+pem_begin='-----BEGIN'; pem_kind='RSA PRIVATE'; pem_end='KEY-----'
+printf '%s %s %s\nMIIEowIBAAKCAQEA\n' "$pem_begin" "$pem_kind" "$pem_end" > "$guard_root/host.conf"
+guard_run && bad "guard missed a private-key header" \
+    || { ok "guard fails on a private-key header"; grep -q 'private-key-material' "$guard_out" \
+        && ok "guard names the private-key policy" || bad "guard did not name the private-key policy"; }
+rm -f "$guard_root/host.conf"
+
+: > "$guard_root/production.env"
+guard_run && bad "guard missed a prohibited filename" \
+    || { ok "guard fails on a prohibited filename"; grep -q 'credential-or-config-filename' "$guard_out" \
+        && ok "guard names the filename policy" || bad "guard did not name the filename policy"; }
+rm -f "$guard_root/production.env"
+
+mkdir -p "$guard_root/release/dist"
+: > "$guard_root/release/dist/server-bootstrap-0.0.0.tar.gz"
+guard_run && bad "guard missed tracked release output" \
+    || { ok "guard fails when release/dist is in the tracked set"; grep -q 'generated-artifact-tracked' "$guard_out" \
+        && ok "guard names the generated-artifact policy" || bad "guard did not name the artifact policy"; }
+rm -rf "$guard_root/release"
+
+guard_run && ok "guard is clean again once every fixture is removed" \
+    || bad "guard is not stable across repeated runs"
+
 grep -q 'STEP=acceptance' server-bootstrap.sh && grep -q 'STEP=addon' server-bootstrap.sh \
     && [[ "$(grep -n 'STEP=acceptance' server-bootstrap.sh | cut -d: -f1)" -lt "$(grep -n 'STEP=addon' server-bootstrap.sh | cut -d: -f1)" ]] \
     && ok "acceptance precedes optional add-on" || bad "acceptance ordering"
+
+section "Release scanning"
+# Structural assertions: every tree that becomes a release asset is scanned, the
+# gate sits between build and upload, and there is exactly one scanner pin.
+while IFS='|' read -r label expect; do
+    [[ -n "$label" ]] || continue
+    grep -qF -- "$expect" release/build-release.sh \
+        && ok "release build scans the $label" \
+        || bad "release build does not scan the $label"
+done <<'SCANS'
+source staging tree|scan_release_tree "$source_stage" "source staging tree"
+extracted tar.gz|scan_release_tree "$verify" "extracted $NAME-$VERSION.tar.gz"
+extracted zip|scan_release_tree "$unpack_zip" "extracted $NAME-$VERSION.zip"
+extracted source zip|scan_release_tree "$unpack_src" "extracted $NAME-$VERSION-source.zip"
+release/dist sidecars, manifest and standalone files|scan_release_tree "$DIST" "release/dist staging" scan-artifacts
+SCANS
+grep -qF 'rm -rf "$DIST"' release/build-release.sh \
+    && grep -qF 'discarding' release/build-release.sh \
+    && ok "a failed scan discards the staged release" \
+    || bad "a failed scan leaves release/dist in place"
+grep -qF 'release archives changed during scanning' release/build-release.sh \
+    && ok "archive hashes are re-verified after scanning" \
+    || bad "nothing re-verifies archive bytes after the scans"
+grep -qF '"release_scan": "$SCAN_STATUS"' release/build-release.sh \
+    && ok "the release manifest records the scan result" \
+    || bad "the release manifest does not record the scan result"
+
+# The upload gate must come after the build and before the publish action.
+gate="$(grep -n 'scan-artifacts release/dist' .github/workflows/release.yml | cut -d: -f1 | head -1)"
+build_at="$(grep -n 'name: Build release' .github/workflows/release.yml | cut -d: -f1 | head -1)"
+publish_at="$(grep -n 'name: Publish assets' .github/workflows/release.yml | cut -d: -f1 | head -1)"
+if [[ -n "$gate" && -n "$build_at" && -n "$publish_at" ]] \
+    && (( build_at < gate && gate < publish_at )); then
+    ok "release.yml scans release/dist between build and upload"
+else
+    bad "release.yml has no scan gate between build and upload"
+fi
+
+# One pin, reused. A second hardcoded version or checksum is how the CI scanner
+# and the release scanner silently drift apart.
+grep -qE '^GITLEAKS_VERSION=[0-9]+\.[0-9]+\.[0-9]+$' tools/gitleaks.sh \
+    && ok "tools/gitleaks.sh pins an exact Gitleaks version" \
+    || bad "tools/gitleaks.sh does not pin an exact version"
+grep -qE '^GITLEAKS_SHA256_LINUX_X64=[0-9a-f]{64}$' tools/gitleaks.sh \
+    && ok "tools/gitleaks.sh pins a release checksum" \
+    || bad "tools/gitleaks.sh does not pin a release checksum"
+pin_drift=0
+for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
+    grep -qE 'gitleaks_[0-9]+\.[0-9]+\.[0-9]+_linux|GITLEAKS_SHA256' "$workflow" \
+        && { bad "$workflow carries its own Gitleaks pin"; pin_drift=1; }
+    grep -qF 'tools/gitleaks.sh' "$workflow" \
+        || { bad "$workflow does not scan through tools/gitleaks.sh"; pin_drift=1; }
+done
+(( pin_drift == 0 )) && ok "both workflows scan through the single pinned helper"
+grep -qF 'tools/gitleaks.sh' release/build-release.sh \
+    && ok "the release build scans through the single pinned helper" \
+    || bad "the release build does not use the pinned helper"
+
+# Functional checks, only when a matching binary is already present. Downloading
+# one here would make the suite require network access, which it must not.
+pinned_version="$(bash tools/gitleaks.sh version)"
+gitleaks_ready=""
+for candidate in "${GITLEAKS_BIN:-}" "$(command -v gitleaks 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    [[ "$("$candidate" version 2>/dev/null)" == "$pinned_version" ]] || continue
+    gitleaks_ready="$candidate"; break
+done
+
+if [[ -z "$gitleaks_ready" ]]; then
+    skip "release scan behaviour (no pinned Gitleaks v$pinned_version available offline)"
+else
+    export GITLEAKS_BIN="$gitleaks_ready"
+    scan_root="$TMP/release-scan"
+    mkdir -p "$scan_root/payload"
+    printf 'nothing to see\n' > "$scan_root/payload/README.md"
+    bash tools/gitleaks.sh scan-dir "$scan_root/payload" "fixture" >/dev/null 2>&1 \
+        && ok "release scan passes on a clean staging tree" \
+        || bad "release scan fails on a clean staging tree"
+
+    # Same fixture recipe as the privacy guard: built here, never committed.
+    scan_token="sk-$(printf 'release-scan-fixture' | sha256sum | cut -c1-40)"
+    printf 'api_key = "%s"\n' "$scan_token" > "$scan_root/payload/service.conf"
+    bash tools/gitleaks.sh scan-dir "$scan_root/payload" "fixture" >"$TMP/scan.out" 2>&1 \
+        && bad "release scan missed a fake token in a staging tree" \
+        || ok "release scan fails on a fake token in a staging tree"
+    grep -qF -- "$scan_token" "$TMP/scan.out" \
+        && bad "release scan printed the secret value" \
+        || ok "release scan reports without printing the value"
+
+    # The pre-upload gate must see inside an archive: a flat scan of a directory
+    # of tarballs reads zero bytes and would pass anything.
+    mkdir -p "$scan_root/dist"
+    ( cd "$scan_root" && tar -czf dist/bundle.tar.gz payload )
+    rm -f "$scan_root/payload/service.conf"
+    bash tools/gitleaks.sh scan-artifacts "$scan_root/dist" "fixture artifacts" >/dev/null 2>&1 \
+        && bad "artifact scan missed a fake token inside an archive" \
+        || ok "artifact scan fails on a fake token inside an archive"
+    bash tools/gitleaks.sh scan-dir "$scan_root/dist" "fixture artifacts" >/dev/null 2>&1 \
+        && ok "a flat scan cannot see inside an archive (why the gate uses scan-artifacts)" \
+        || bad "flat-scan control behaved unexpectedly"
+    rm -rf "$scan_root"
+fi
+
+section "History-preservation policy"
+# The policy is only useful if it is discoverable and specific. These assert the
+# document exists, names the operations it forbids, and is linked from the
+# places a contributor actually looks.
+[[ -s SECURITY.md ]] && ok "SECURITY.md is present" || bad "SECURITY.md is missing"
+while IFS='|' read -r label needle; do
+    [[ -n "$label" ]] || continue
+    grep -Fqi -- "$needle" SECURITY.md \
+        && ok "policy names $label" \
+        || bad "policy does not name $label"
+done <<'POLICY'
+git filter-repo|filter-repo
+git filter-branch|filter-branch
+BFG|BFG
+force-push|force-push
+tag replacement|release tag
+credential rotation|Rotate first
+the no-key-shaped-fixture rule|Never commit a key-shaped string
+POLICY
+grep -Fq '](SECURITY.md)' README.md \
+    && ok "README links to SECURITY.md" || bad "README does not link to SECURITY.md"
+grep -Fq 'SECURITY.md' docs/SECURITY-SCANNING.md \
+    && ok "the scanning guide links to SECURITY.md" \
+    || bad "the scanning guide does not link to SECURITY.md"
+
+# The policy forbids rewriting published history, so the tags that existed when
+# it was written must still resolve. Skipped when tags were not fetched (a
+# shallow or filtered clone), rather than reported as a pass.
+if [[ -n "$(git tag -l 2>/dev/null)" ]]; then
+    tag_loss=0
+    for tag in v1.4.0 v2.0.0 v2.0.1 v2.1.0; do
+        git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+            || { bad "published tag is missing: $tag"; tag_loss=1; }
+    done
+    (( tag_loss == 0 )) && ok "every published release tag still resolves"
+else
+    skip "published tag check (no tags in this checkout)"
+fi
 
 section "Package command compatibility aliases"
 # shellcheck source=/dev/null
