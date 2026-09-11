@@ -20,7 +20,7 @@ Verifies the hardware you paid for, installs a pinned toolchain, and starts noth
 Paste this whole block into a freshly rented Ubuntu server, as root:
 
 ```bash
-V=2.2.1
+V=2.2.2
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 wget -q --show-progress \
@@ -136,8 +136,8 @@ green with nothing else downloaded. To add a workload, put its archive and
 ```text
 server-provision.sh
 provision-plan.example.sh
-server-bootstrap-2.2.1.tar.gz
-server-bootstrap-2.2.1.tar.gz.sha256
+server-bootstrap-2.2.2.tar.gz
+server-bootstrap-2.2.2.tar.gz.sha256
 <workload>-<version>.tar.gz
 <workload>-<version>.tar.gz.sha256
 ```

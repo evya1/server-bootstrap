@@ -272,9 +272,12 @@ grep -Fq 'SECURITY.md' docs/SECURITY-SCANNING.md \
     || bad "the scanning guide does not link to SECURITY.md"
 
 # The policy forbids rewriting published history, so the tags that existed when
-# it was written must still resolve. Skipped when tags were not fetched (a
-# shallow or filtered clone), rather than reported as a pass.
-if [[ -n "$(git tag -l 2>/dev/null)" ]]; then
+# it was written must still resolve. Opt-in, because only some checkouts can
+# answer the question: a tag checkout (what release.yml does) carries exactly
+# the one tag being built, and a shallow clone carries none. Presence of *a* tag
+# is not evidence that the full set was fetched -- treating it as such made this
+# check fail the release build for four tags the checkout was never given.
+if [[ "${SB_CHECK_PUBLISHED_TAGS:-0}" == 1 ]]; then
     tag_loss=0
     for tag in v1.4.0 v2.0.0 v2.0.1 v2.1.0; do
         git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
@@ -282,7 +285,7 @@ if [[ -n "$(git tag -l 2>/dev/null)" ]]; then
     done
     (( tag_loss == 0 )) && ok "every published release tag still resolves"
 else
-    skip "published tag check (no tags in this checkout)"
+    skip "published tag check (set SB_CHECK_PUBLISHED_TAGS=1 in a checkout with tags)"
 fi
 
 section "Package command compatibility aliases"

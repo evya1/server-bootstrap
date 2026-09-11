@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.2.2
+
+Fixes a bug in the 2.2.1 history-preservation check that made the release build
+fail under a tag checkout. **There is no 2.2.1 release**: the `v2.2.1` tag
+exists and points at the commit carrying that bug, so the release workflow
+failed at the build gate and published nothing. The tag is left in place rather
+than moved or deleted, because SECURITY.md forbids tag replacement — which is
+exactly the situation that policy is written for.
+
+### Fixed
+
+- **The published-tag check no longer assumes a checkout has every tag.** It
+  gated on `git tag -l` being non-empty. A tag checkout — what
+  `.github/workflows/release.yml` performs — carries exactly the one tag being
+  built, so the gate opened and then failed on the four historical tags the
+  checkout was never given. Presence of *a* tag was never evidence that the full
+  set had been fetched.
+
+  It is now opt-in via `SB_CHECK_PUBLISHED_TAGS=1`, matching the existing
+  `SB_TEST_NETWORK=1` convention, and the CI job that checks out with
+  `fetch-depth: 0` sets it. Every other checkout shape reports an explicit
+  `skip:` line instead of a false pass or a false failure. A genuinely missing
+  tag still fails the check where it runs.
+
+  Every CI job checks out a branch, so no CI job could reproduce this; only the
+  tag-triggered release workflow could.
+
 ## 2.2.1
 
 Security hardening only. No behaviour on a provisioned server changes: nothing
