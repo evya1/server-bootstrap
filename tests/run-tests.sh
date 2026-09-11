@@ -256,13 +256,16 @@ section "Release rehearsal in CI"
 # before the release job did, and both were too late. ci.yml's tag-checkout job
 # manufactures the shape on every branch push and pull request; these assertions
 # keep it from being quietly deleted or defanged.
-ci_yml=.github/workflows/ci.yml
-release_yml=.github/workflows/release.yml
+# Both workflows are read with their comment lines removed, everywhere below. A
+# command named only in a comment is not a command that runs, and an assertion a
+# comment can satisfy asserts nothing: commenting out the whole scan-artifacts
+# step still left the check below reporting that ci.yml ran it. Whole-line
+# stripping is enough here -- every comment in these files, including the shell
+# comments inside run: blocks, is on its own line.
+ci_live="$(grep -vE '^[[:space:]]*#' .github/workflows/ci.yml)"
+release_live="$(grep -vE '^[[:space:]]*#' .github/workflows/release.yml)"
 rehearsal_drift=0
-# Comments are stripped: the job explains in prose which variables it leaves
-# unset, and an assertion that reads prose asserts nothing.
-tag_job="$(awk '/^  tag-checkout:$/{f=1; next} /^  [A-Za-z]/{f=0} f' "$ci_yml" \
-    | grep -vE '^[[:space:]]*#')"
+tag_job="$(awk '/^  tag-checkout:$/{f=1; next} /^  [A-Za-z]/{f=0} f' <<< "$ci_live")"
 if [[ -z "$tag_job" ]]; then
     bad "ci.yml has no tag-checkout job"
     rehearsal_drift=1
@@ -290,10 +293,10 @@ fi
 # release-only code path cannot be introduced without this failing.
 while IFS= read -r command; do
     [[ -n "$command" ]] || continue
-    grep -qF -- "$command" "$ci_yml" \
+    grep -qF -- "$command" <<< "$ci_live" \
         && ok "ci.yml also runs '$command'" \
         || bad "release.yml runs '$command' but no ci.yml job does"
-done < <(grep -oE 'bash [A-Za-z0-9_./-]+\.sh( [a-z][a-z-]*)?' "$release_yml" | LC_ALL=C sort -u)
+done < <(grep -oE 'bash [A-Za-z0-9_./-]+\.sh( [a-z][a-z-]*)?' <<< "$release_live" | LC_ALL=C sort -u)
 
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
