@@ -64,3 +64,64 @@ jobs:
       # on the author's box. build-release.sh builds twice and fails on a diff,
       # then scans the staging trees and every extracted archive.
       - run: bash release/build-release.sh
+
+  tag-checkout:
+    runs-on: ubuntu-latest
+    steps:
+      # release.yml is triggered by a tag push, so actions/checkout hands it a
+      # detached, depth-1 checkout carrying exactly one tag. ci.yml gets that
+      # shape too -- but only on the tag push itself, which is after the version
+      # number has been spent, and SECURITY.md forbids reusing it. That is how
+      # PASS: 233 FAIL: 4 reached the v2.2.1 release instead of a pull request:
+      # ci.yml's release-build job failed with it three seconds before the
+      # release job did, and both were too late. This job manufactures the shape
+      # on every branch push and pull request. It is the regression test for the
+      # gap, not for that one bug.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A local tag plus a shallow single-branch clone of it reproduces all
+      # three properties of a tag build: detached HEAD, one commit, one tag.
+      # Annotated, because every published tag here is annotated; -c keeps the
+      # tagger identity local to the command. The tag never leaves the runner.
+      - name: Build a tag-shaped checkout
+        run: |
+          set -Eeuo pipefail
+          git -c user.name=ci -c user.email=ci@localhost \
+              tag -a v0.0.0-tagshape -m "tag-shaped checkout probe"
+          git clone --quiet --depth 1 --branch v0.0.0-tagshape \
+              "file://$GITHUB_WORKSPACE" "$RUNNER_TEMP/tag-shape"
+          cd "$RUNNER_TEMP/tag-shape"
+          # A commit that already carries a release tag hands the clone that tag
+          # as well; drop it so the shape is identical on every run.
+          mapfile -t extra < <(git tag -l | grep -vFx v0.0.0-tagshape || true)
+          (( ${#extra[@]} == 0 )) || git tag -d "${extra[@]}"
+          printf 'HEAD:    %s (%s)\n' "$(git rev-parse --short HEAD)" "$(git rev-parse --abbrev-ref HEAD)"
+          printf 'commits: %s\n' "$(git rev-list --count HEAD)"
+          printf 'tags:    %s\n' "$(git tag -l | tr '\n' ' ')"
+      - name: Install and verify the pinned Gitleaks
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/tag-shape"
+          echo "GITLEAKS_BIN=$(bash tools/gitleaks.sh path)" >> "$GITHUB_ENV"
+      # SB_CHECK_PUBLISHED_TAGS is deliberately not set: release.yml does not set
+      # it either, and the point is to prove the suite passes where it is absent.
+      # Setting it here would hide the shape this job exists to test.
+      - name: test suite
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/tag-shape"
+          bash tests/run-tests.sh
+      - name: reproducible release build
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/tag-shape"
+          bash release/build-release.sh
+      # The pre-upload gate, deliberately independent of the build. Until this
+      # job existed it was the one command in release.yml that no ci.yml job ran.
+      - name: Scan release artifacts before publication
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/tag-shape"
+          bash tools/gitleaks.sh scan-artifacts release/dist "release artifacts"

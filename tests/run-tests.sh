@@ -246,6 +246,55 @@ else
     rm -rf "$scan_root"
 fi
 
+section "Release rehearsal in CI"
+# release.yml only runs on a tag push, so its checkout is detached, one commit
+# deep, and carries a single tag. ci.yml is triggered by every push including
+# that one, so it does see the shape -- but only at the moment the tag lands,
+# which is after the version number has been spent and SECURITY.md forbids
+# reusing it. That is how PASS: 233 FAIL: 4 reached the v2.2.1 release instead
+# of a pull request: ci.yml's release-build job failed with it three seconds
+# before the release job did, and both were too late. ci.yml's tag-checkout job
+# manufactures the shape on every branch push and pull request; these assertions
+# keep it from being quietly deleted or defanged.
+ci_yml=.github/workflows/ci.yml
+release_yml=.github/workflows/release.yml
+rehearsal_drift=0
+# Comments are stripped: the job explains in prose which variables it leaves
+# unset, and an assertion that reads prose asserts nothing.
+tag_job="$(awk '/^  tag-checkout:$/{f=1; next} /^  [A-Za-z]/{f=0} f' "$ci_yml" \
+    | grep -vE '^[[:space:]]*#')"
+if [[ -z "$tag_job" ]]; then
+    bad "ci.yml has no tag-checkout job"
+    rehearsal_drift=1
+else
+    while IFS='|' read -r label needle; do
+        [[ -n "$label" ]] || continue
+        grep -qF -- "$needle" <<< "$tag_job" \
+            || { bad "the tag-checkout job does not $label"; rehearsal_drift=1; }
+    done <<'REHEARSAL'
+build a shallow single-tag clone|--depth 1 --branch
+run the test suite|bash tests/run-tests.sh
+run the release build|bash release/build-release.sh
+REHEARSAL
+    # The opt-in would hand the job every tag and hide the one shape it exists
+    # to reproduce, so its absence is the assertion.
+    if grep -qF -- 'SB_CHECK_PUBLISHED_TAGS' <<< "$tag_job"; then
+        bad "the tag-checkout job sets SB_CHECK_PUBLISHED_TAGS, hiding the shape it tests"
+        rehearsal_drift=1
+    fi
+fi
+(( rehearsal_drift == 0 )) && ok "ci.yml rehearses the release under a tag-shaped checkout"
+
+# The general form of that bug: a command whose first execution is the release.
+# Every script release.yml invokes must also be invoked by some ci.yml job, so a
+# release-only code path cannot be introduced without this failing.
+while IFS= read -r command; do
+    [[ -n "$command" ]] || continue
+    grep -qF -- "$command" "$ci_yml" \
+        && ok "ci.yml also runs '$command'" \
+        || bad "release.yml runs '$command' but no ci.yml job does"
+done < <(grep -oE 'bash [A-Za-z0-9_./-]+\.sh( [a-z][a-z-]*)?' "$release_yml" | LC_ALL=C sort -u)
+
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
 # document exists, names the operations it forbids, and is linked from the
