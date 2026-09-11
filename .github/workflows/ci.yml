@@ -97,9 +97,18 @@ jobs:
           # as well; drop it so the shape is identical on every run.
           mapfile -t extra < <(git tag -l | grep -vFx v0.0.0-tagshape || true)
           (( ${#extra[@]} == 0 )) || git tag -d "${extra[@]}"
-          printf 'HEAD:    %s (%s)\n' "$(git rev-parse --short HEAD)" "$(git rev-parse --abbrev-ref HEAD)"
-          printf 'commits: %s\n' "$(git rev-list --count HEAD)"
-          printf 'tags:    %s\n' "$(git tag -l | tr '\n' ' ')"
+          # Assert the shape rather than printing it. A clone that quietly came
+          # out full, or on a branch, or carrying more than the probe tag, would
+          # still run the suite green and this job would prove nothing.
+          head_ref="$(git rev-parse --abbrev-ref HEAD)"
+          commits="$(git rev-list --count HEAD)"
+          tags="$(git tag -l | tr '\n' ' ')"
+          printf 'HEAD: %s (%s)   commits: %s   tags: %s\n' \
+              "$(git rev-parse --short HEAD)" "$head_ref" "$commits" "$tags"
+          [[ "$head_ref" == HEAD ]] || { echo "not a detached checkout: $head_ref" >&2; exit 1; }
+          [[ "$commits" == 1 ]] || { echo "not depth-1: $commits commits" >&2; exit 1; }
+          [[ "$tags" == "v0.0.0-tagshape " ]] || { echo "not a single-tag checkout: $tags" >&2; exit 1; }
+          [[ -f .git/shallow ]] || { echo "clone is not shallow" >&2; exit 1; }
       - name: Install and verify the pinned Gitleaks
         run: |
           set -Eeuo pipefail
