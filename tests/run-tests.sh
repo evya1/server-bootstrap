@@ -626,7 +626,7 @@ grep -q 'INSTALL_NODEJS="${INSTALL_NODEJS:-1}"' lib/bootstrap/config.sh \
     && grep -q '6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2' lib/bootstrap/config.sh \
     && ok "Node.js LTS is enabled and checksum pinned" || bad "Node.js defaults/checksums"
 grep -q 'INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.267}"' lib/bootstrap/config.sh \
+    && grep -q 'CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.268}"' lib/bootstrap/config.sh \
     && grep -q '@anthropic-ai/claude-code@' lib/bootstrap/ai_cli.sh \
     && grep -q 'CLAUDE_CODE_DISABLE_AUTOUPDATER="${CLAUDE_CODE_DISABLE_AUTOUPDATER:-1}"' lib/bootstrap/config.sh \
     && grep -q 'export DISABLE_AUTOUPDATER=1' lib/bootstrap/ai_cli.sh \
