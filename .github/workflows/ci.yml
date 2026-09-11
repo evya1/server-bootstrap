@@ -45,6 +45,10 @@ jobs:
       - name: shellcheck (advisory)
         run: shellcheck -S warning $(find . -name '*.sh' -not -path './release/dist/*') server-bundle-install server-vscode-extensions server-secrets || true
       - name: test suite
+        env:
+          # This job checks out with fetch-depth: 0, so it has every tag and can
+          # assert the published ones still resolve. Other checkouts skip it.
+          SB_CHECK_PUBLISHED_TAGS: 1
         run: bash tests/run-tests.sh
 
   release-build:
