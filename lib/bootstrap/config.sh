@@ -44,7 +44,7 @@ bootstrap_load_config() {
     # Legacy single-architecture override; when set it wins on x86_64.
     UV_SHA256="${UV_SHA256:-}"
     [[ -z "$UV_SHA256" ]] || UV_SHA256_X64="$UV_SHA256"
-    OH_MY_ZSH_REF="${OH_MY_ZSH_REF:-cd320b5506998f32284d37799592cb2ba43a3188}"
+    OH_MY_ZSH_REF="${OH_MY_ZSH_REF:-c6e66edee824d83e84473ec666917b58323630df}"
     OH_MY_ZSH_SHA256="${OH_MY_ZSH_SHA256:-}"
     OH_MY_ZSH_THEME="${OH_MY_ZSH_THEME:-robbyrussell}"
     OH_MY_ZSH_PLUGINS="${OH_MY_ZSH_PLUGINS:-git}"
