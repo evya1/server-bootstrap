@@ -246,6 +246,89 @@ else
     rm -rf "$scan_root"
 fi
 
+section "Release rehearsal in CI"
+# release.yml only runs on a tag push, so its checkout is detached, one commit
+# deep, and carries a single tag. ci.yml is triggered by every push including
+# that one, so it does see the shape -- but only at the moment the tag lands,
+# which is after the version number has been spent and SECURITY.md forbids
+# reusing it. That is how PASS: 233 FAIL: 4 reached the v2.2.1 release instead
+# of a pull request: ci.yml's release-build job failed with it three seconds
+# before the release job did, and both were too late. ci.yml's tag-checkout job
+# manufactures the shape on every branch push and pull request; these assertions
+# keep it from being quietly deleted or defanged.
+# Every check in this section reads the workflows with comment lines removed. A
+# command named only in a comment is not a command that runs, and an assertion a
+# comment can satisfy asserts nothing: commenting out the whole scan-artifacts
+# step once left the check below still reporting that ci.yml ran it, and the
+# job's own prose saying it does not set SB_CHECK_PUBLISHED_TAGS once failed the
+# check for setting it. Whole-line stripping is enough -- every comment in these
+# files, including the shell comments inside run: blocks, is on its own line.
+rehearsal_drift=0
+tag_job="$(grep -vE '^[[:space:]]*#' .github/workflows/ci.yml \
+    | awk '/^  tag-checkout:$/{f=1; next} /^  [A-Za-z]/{f=0} f')"
+if [[ -z "$tag_job" ]]; then
+    bad "ci.yml has no tag-checkout job"
+    rehearsal_drift=1
+else
+    while IFS='|' read -r label needle; do
+        [[ -n "$label" ]] || continue
+        grep -qF -- "$needle" <<< "$tag_job" \
+            || { bad "the tag-checkout job does not $label"; rehearsal_drift=1; }
+    done <<'REHEARSAL'
+build a shallow single-tag clone|--depth 1 --branch
+run the test suite|bash tests/run-tests.sh
+run the release build|bash release/build-release.sh
+REHEARSAL
+    # The opt-in would hand the job every tag and hide the one shape it exists
+    # to reproduce, so its absence is the assertion.
+    if grep -qF -- 'SB_CHECK_PUBLISHED_TAGS' <<< "$tag_job"; then
+        bad "the tag-checkout job sets SB_CHECK_PUBLISHED_TAGS, hiding the shape it tests"
+        rehearsal_drift=1
+    fi
+fi
+(( rehearsal_drift == 0 )) && ok "ci.yml rehearses the release under a tag-shaped checkout"
+
+# The general form of that bug: a command whose first execution is the release.
+# Every script release.yml invokes must also be invoked by some ci.yml job, so a
+# release-only code path cannot be introduced without this failing.
+#
+# Each invocation is normalised to "<repo-relative path> <subcommand>" so that
+# spelling is not part of the key: bash tools/x.sh, sh ./tools/x.sh and
+# bash "$ROOT/tools/x.sh" are one command and must not be able to hide from each
+# other. A .sh path counts only where something actually runs it, which is what
+# keeps release.yml's files: list -- it names .sh release assets -- from being
+# read as a set of commands.
+workflow_commands() {
+    grep -vE '^[[:space:]]*#' "$1" | tr -s '[:space:]' '\n' | awk '
+        {
+            t = $0
+            gsub(/^["\047(]+/, "", t); gsub(/["\047)]+$/, "", t)
+            if (pending != "") {
+                if (t ~ /^[A-Za-z][A-Za-z0-9_-]*$/ && t !~ /\.sh$/) print pending " " t
+                else print pending
+                pending = ""
+            }
+            if (t ~ /\.sh$/ && (prev == "bash" || prev == "sh" || prev == "source" \
+                || prev == "." || prev ~ /\$\((bash|sh|source)$/ || t ~ /^\.\//)) {
+                sub(/^\.\//, "", t)
+                sub(/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\//, "", t)
+                pending = t
+            }
+            prev = t
+        }
+        END { if (pending != "") print pending }
+    ' | LC_ALL=C sort -u
+}
+ci_commands="$(workflow_commands .github/workflows/ci.yml)"
+while IFS= read -r command; do
+    [[ -n "$command" ]] || continue
+    # -x, not a substring match: "gitleaks.sh scan" must not be satisfied by
+    # "gitleaks.sh scan-history".
+    grep -qFx -- "$command" <<< "$ci_commands" \
+        && ok "ci.yml also runs '$command'" \
+        || bad "release.yml runs '$command' but no ci.yml job does"
+done < <(workflow_commands .github/workflows/release.yml)
+
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
 # document exists, names the operations it forbids, and is linked from the
