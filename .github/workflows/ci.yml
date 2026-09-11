@@ -5,10 +5,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      # One cache path for every step, so the pinned binary is downloaded and
-      # checksum-verified once per job rather than once per scan.
-      GITLEAKS_CACHE_DIR: ${{ runner.temp }}/gitleaks
     steps:
       # Full history is intentional: SECURITY-PREVENTION-01.9 forbids rewriting
       # history, so a credential in an older commit stays reachable and has to be
@@ -18,7 +14,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # tools/gitleaks.sh holds the only version and checksum pin in the repo;
-      # the release build and release workflow scan through the same script.
+      # the release build and release workflow scan through the same script. It
+      # caches the verified binary under a per-version path in the runner's temp
+      # dir, so later steps reuse it. Do not set that path from a job-level env:
+      # the runner context is not available there and the workflow fails to
+      # compile.
       - name: Install and verify the pinned Gitleaks
         run: |
           set -Eeuo pipefail
@@ -49,8 +49,6 @@ jobs:
 
   release-build:
     runs-on: ubuntu-latest
-    env:
-      GITLEAKS_CACHE_DIR: ${{ runner.temp }}/gitleaks
     steps:
       - uses: actions/checkout@v4
       # Resolved once and exported, so the release scans and the suite's

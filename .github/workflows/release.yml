@@ -9,8 +9,6 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    env:
-      GITLEAKS_CACHE_DIR: ${{ runner.temp }}/gitleaks
     steps:
       - uses: actions/checkout@v4
 
