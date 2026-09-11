@@ -999,6 +999,48 @@ done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
     | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"
 
+section "Fitness: README tool versions match the pinned defaults"
+# README.md's "What the run installs" table names five tool versions that
+# lib/bootstrap/config.sh also pins. tools/refresh-pins.sh --write rewrites the
+# config and the checksum files; before this test existed the README was left to
+# a log line, so a pin bump made the README quietly wrong. Same failure mode as
+# the VERSION drift above: a second copy of a value with nothing asserting the
+# two agree. The default is read out of config.sh by pattern, not by sourcing
+# it, so an ambiguous variable in the maintainer's environment cannot be
+# mistaken for what the repository pins -- the same reason refresh-pins.sh
+# reads it that way.
+readme_pin_drift=0
+while IFS='|' read -r label var; do
+    [[ -n "$label" ]] || continue
+    declared="$(sed -n "s|^[[:space:]]*$var=\"\\\${$var:-\(.*\)}\"[[:space:]]*\$|\1|p" \
+        lib/bootstrap/config.sh | head -n1)"
+    if [[ -z "$declared" ]]; then
+        bad "no default for $var in lib/bootstrap/config.sh"; readme_pin_drift=1; continue
+    fi
+    # Dots are escaped and the right-hand side is bounded, so a README claiming
+    # "pi 0.85.10" cannot satisfy a pinned "pi 0.85.1". \b on the left keeps
+    # "pi" from matching inside "api".
+    label_re="${label//./\\.}"
+    version_re="${declared//./\\.}"
+    grep -qE "\b$label_re $version_re([^0-9.]|\$)" README.md \
+        || { bad "README does not name the pinned $label ($declared)"; readme_pin_drift=1; }
+    # The forward check alone passes a README that names the pinned version and
+    # a stale one elsewhere, so every version this label carries must agree.
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] || continue
+        bad "README says '$hit' but config.sh pins $label $declared"
+        readme_pin_drift=1
+    done < <(grep -oE "\b$label_re [0-9]+\.[0-9]+\.[0-9]+" README.md \
+        | grep -vFx "$label $declared" || true)
+done <<'PINS'
+GitHub CLI|GH_VERSION
+Node.js|NODE_VERSION
+Claude Code|CLAUDE_CODE_VERSION
+OpenAI Codex|CODEX_VERSION
+pi|PI_VERSION
+PINS
+(( readme_pin_drift == 0 )) && ok "README tool versions match the pinned defaults"
+
 section "Results"
 printf 'PASS: %d   FAIL: %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
