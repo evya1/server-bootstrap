@@ -46,8 +46,37 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   distinguishes extra, missing, duplicate, stale, malformed and misordered
   entries, capped at 20 findings. ([#24])
 
+### Changed
+
+- **`tools/refresh-pins.sh` distinguishes two kinds of pin.** Node.js, `gh`, uv,
+  Claude Code, Codex and pi resolve to a published release and are `CURRENT` or
+  `STALE`. Oh My Zsh publishes no releases, so its pin tracks a branch head that
+  moves several times a day; that is now `MOVED`, reported but not failed.
+  `--check --all` opts into failing on it. `--write` leaves a branch head alone
+  unless `--all` is given, so moving it is a deliberate act. ([#25])
+- **`--check` exit codes are a documented contract:** `0` nothing actionable,
+  `1` a release pin is behind, `2` usage error, `3` at least one upstream could
+  not be resolved. `1` outranks `3`. Documented in `README.md`,
+  `docs/CONFIGURATION.md` and the script's own banner. ([#25])
+- **`tools/refresh-pins.sh` can be sourced without side effects.** Resolution,
+  reporting and rewriting moved behind a main guard, and the two decisions —
+  classify a row, turn rows into an exit code — are pure functions the offline
+  suite drives with synthetic rows. Sourcing it changes no shell options, which
+  matters because it sets `-Eeuo pipefail` and the suite deliberately does not.
+  ([#25])
+
 ### Fixed
 
+- **`tools/refresh-pins.sh` reported an unreachable upstream as `CURRENT` and
+  exited 0.** An empty resolution fell back to the pinned value, which then
+  compared equal to itself. With failing `curl` and `git` on `PATH`, all seven
+  rows printed `current` and the tool said "every pin is current". Those rows
+  are now `UNKNOWN`, the `LATEST` column says `unknown`, the exit code is `3`,
+  and `--write` refuses rather than writing a value it could not resolve.
+  ([#25])
+- **`--check` could not exit 0.** The Oh My Zsh row was `STALE` within hours of
+  any bump, so exit 1 was the steady state and could not distinguish "Node.js is
+  behind" from "it is Tuesday". ([#25])
 - **`release/build-release.sh` packaged untracked working-tree files.** It
   walked the tree with `find`, so a scratch file or a personal note sitting in a
   contributor's checkout was hashed into `checksums/SHA256SUMS` and packed into
@@ -69,6 +98,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 
 [#23]: https://github.com/evya1/server-bootstrap/issues/23
 [#24]: https://github.com/evya1/server-bootstrap/issues/24
+[#25]: https://github.com/evya1/server-bootstrap/issues/25
 
 ## 2.2.2
 

@@ -1358,6 +1358,119 @@ else
     ok "live upstream resolution skipped (set SB_TEST_NETWORK=1 to run it)"
 fi
 
+section "Pin drift classification and exit semantics"
+# tools/refresh-pins.sh --check could not exit 0 and could not be trusted when
+# it did. The Oh My Zsh row tracks refs/heads/master, which moves several times
+# a day, so treating that movement as staleness made exit 1 the steady state;
+# and an upstream that failed to resolve fell back to the pinned value, so seven
+# failed lookups printed seven "current" rows and exited 0. See #25.
+#
+# The decision now lives in two pure functions with no network, no clock and no
+# filesystem, so the whole thing is driven here with synthetic rows. Sourcing
+# the script must therefore be free of side effects -- including shell options:
+# it sets -Eeuo pipefail inside its main function, and setting -e in this suite
+# would abort it at the first intentionally failing probe.
+shell_opts_before="$-"
+# shellcheck source=tools/refresh-pins.sh
+source tools/refresh-pins.sh
+[[ "$-" == "$shell_opts_before" ]] \
+    && ok "sourcing refresh-pins.sh does not change shell options" \
+    || bad "sourcing refresh-pins.sh changed shell options: $shell_opts_before -> $-"
+grep -qF '[[ "${BASH_SOURCE[0]}" != "$0" ]] || refresh_pins_main "$@"' tools/refresh-pins.sh \
+    && ok "refresh-pins.sh has a main guard, so sourcing it resolves nothing" \
+    || bad "refresh-pins.sh has no main guard; sourcing it would hit the network"
+for fn in refresh_pins_kind refresh_pins_classify refresh_pins_exit_code; do
+    declare -F "$fn" >/dev/null \
+        && ok "sourcing defines $fn" || bad "sourcing did not define $fn"
+done
+
+# The classification itself, so it cannot silently flip. Oh My Zsh is the one
+# branch head; every other pin resolves to a published release.
+kind_drift=0
+while IFS='|' read -r tool expected_kind; do
+    [[ -n "$tool" ]] || continue
+    [[ "$(refresh_pins_kind "$tool")" == "$expected_kind" ]] \
+        || { bad "refresh-pins classifies $tool as $(refresh_pins_kind "$tool"), expected $expected_kind"; kind_drift=1; }
+done <<'KINDS'
+nodejs|release
+github-cli|release
+uv|release
+claude-code|release
+codex|release
+pi|release
+oh-my-zsh|branch-head
+KINDS
+(( kind_drift == 0 )) && ok "six release pins and one branch head, as registered"
+[[ "$(refresh_pins_kind not-a-tool 2>/dev/null || true)" == unknown ]] \
+    && ok "an unregistered tool is not silently classified" || bad "unregistered tool classification"
+
+# UNKNOWN is decided before the equality test, so a failed resolution can never
+# become CURRENT by comparing the pinned value against itself.
+classify_drift=0
+while IFS='|' read -r kind current latest expected; do
+    [[ -n "$kind" ]] || continue
+    actual="$(refresh_pins_classify "$kind" "$current" "$latest" 2>/dev/null || true)"
+    [[ "$actual" == "$expected" ]] \
+        || { bad "classify($kind, '$current', '$latest') = $actual, expected $expected"; classify_drift=1; }
+done <<'CLASSIFY'
+release|1.0.0|1.0.0|CURRENT
+release|1.0.0|1.0.1|STALE
+branch-head|aaaaaaa|aaaaaaa|CURRENT
+branch-head|aaaaaaa|bbbbbbb|MOVED
+release|1.0.0||UNKNOWN
+branch-head|aaaaaaa||UNKNOWN
+CLASSIFY
+(( classify_drift == 0 )) && ok "every state is reached from the values that produce it"
+
+# And the exit code, which is the thing automation reads. Rows are synthetic:
+# nothing here contacts an upstream, which is what tests/run-tests.sh requires.
+exit_code_drift=0
+probe_exit_code() {  # mode, expected, rows...
+    local mode="$1" expected="$2"; shift 2
+    local actual=0
+    printf '%s\n' "$@" | refresh_pins_exit_code "$mode" || actual=$?
+    [[ "$actual" == "$expected" ]] && return 0
+    bad "exit code $actual for [$mode: $*], expected $expected"
+    exit_code_drift=1
+}
+CURRENT_ROWS=("nodejs|24.21.0|24.21.0|CURRENT|release" "oh-my-zsh|aaa|aaa|CURRENT|branch-head")
+# The regression case this issue exists for: a moved branch head alone must not
+# make --check non-zero. The obvious later simplification is to collapse the two
+# kinds back into one, and the noise that reintroduces is invisible until the
+# weekly job has been crying wolf for a month.
+MOVED_ROWS=("nodejs|24.21.0|24.21.0|CURRENT|release" "oh-my-zsh|aaa|bbb|MOVED|branch-head")
+probe_exit_code default 0 "${CURRENT_ROWS[@]}"
+probe_exit_code all     0 "${CURRENT_ROWS[@]}"
+probe_exit_code default 0 "${MOVED_ROWS[@]}"
+probe_exit_code all     1 "${MOVED_ROWS[@]}"
+probe_exit_code default 1 "nodejs|24.21.0|24.22.0|STALE|release"
+probe_exit_code default 1 "nodejs|24.21.0|24.22.0|STALE|release" "oh-my-zsh|aaa|bbb|MOVED|branch-head"
+# UNKNOWN is its own result, never 0: a run whose upstream was unreachable is
+# not a clean week. And a definite stale pin outranks it, because there is
+# definitely work either way.
+probe_exit_code default 3 "nodejs|24.21.0||UNKNOWN|release" "uv|0.12.13|0.12.13|CURRENT|release"
+probe_exit_code all     3 "nodejs|24.21.0||UNKNOWN|release" "oh-my-zsh|aaa||UNKNOWN|branch-head"
+probe_exit_code default 1 "nodejs|24.21.0||UNKNOWN|release" "uv|0.12.13|0.13.0|STALE|release"
+probe_exit_code default 3 "oh-my-zsh|aaa||UNKNOWN|branch-head"
+probe_exit_code default 0 ""
+(( exit_code_drift == 0 )) && ok "every documented exit code is produced by the state that means it"
+
+# The exit codes are a published interface now, so they have to be written down.
+exit_doc_drift=0
+for code_line in \
+    '#   0  nothing actionable' \
+    '#   1  at least one release pin is STALE' \
+    '#   2  usage error' \
+    '#   3  nothing actionable was found, but at least one row is UNKNOWN'; do
+    grep -qF -- "$code_line" tools/refresh-pins.sh \
+        || { bad "refresh-pins.sh does not document: $code_line"; exit_doc_drift=1; }
+done
+grep -qF 'refresh-pins.sh --check --all' README.md \
+    || { bad "README does not document --all"; exit_doc_drift=1; }
+grep -qF 'exit 3' docs/CONFIGURATION.md \
+    || { bad "docs/CONFIGURATION.md does not document the UNKNOWN exit code"; exit_doc_drift=1; }
+(( exit_doc_drift == 0 )) && ok "the exit-code contract is documented where it is used"
+
 section "Version checks survive a shadowing PATH"
 # A machine with its own node/gh/uv earlier in PATH must not break the run, and
 # must not silently satisfy a check with the wrong binary. Found by an
