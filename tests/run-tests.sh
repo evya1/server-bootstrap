@@ -170,15 +170,26 @@ grep -qF '"release_scan": "$SCAN_STATUS"' release/build-release.sh \
     && ok "the release manifest records the scan result" \
     || bad "the release manifest does not record the scan result"
 
-# The upload gate must come after the build and before the publish action.
-gate="$(grep -n 'scan-artifacts release/dist' .github/workflows/release.yml | cut -d: -f1 | head -1)"
-build_at="$(grep -n 'name: Build release' .github/workflows/release.yml | cut -d: -f1 | head -1)"
-publish_at="$(grep -n 'name: Publish assets' .github/workflows/release.yml | cut -d: -f1 | head -1)"
-if [[ -n "$gate" && -n "$build_at" && -n "$publish_at" ]] \
-    && (( build_at < gate && gate < publish_at )); then
-    ok "release.yml scans release/dist between build and upload"
+# The upload gate must still come after the build and before the publish
+# action. Both moved into tools/release-preflight.sh, so the ordering is
+# asserted in two parts: the preflight runs before Publish assets, and inside it
+# the artifact scan runs after the build. Comment lines are stripped from both,
+# so a step described in prose cannot stand in for one that runs.
+release_body="$(grep -vE '^[[:space:]]*#' .github/workflows/release.yml)"
+preflight_body="$(grep -vE '^[[:space:]]*#' tools/release-preflight.sh)"
+preflight_at="$(grep -nF 'bash tools/release-preflight.sh' <<< "$release_body" | cut -d: -f1 | head -1)"
+publish_at="$(grep -nF 'name: Publish assets' <<< "$release_body" | cut -d: -f1 | head -1)"
+build_at="$(grep -nF 'release/build-release.sh' <<< "$preflight_body" | cut -d: -f1 | head -1)"
+gate_at="$(grep -nF 'scan-artifacts release/dist' <<< "$preflight_body" | cut -d: -f1 | head -1)"
+if [[ -n "$preflight_at" && -n "$publish_at" ]] && (( preflight_at < publish_at )); then
+    ok "release.yml runs the preflight before uploading"
 else
-    bad "release.yml has no scan gate between build and upload"
+    bad "release.yml uploads without running the preflight first"
+fi
+if [[ -n "$build_at" && -n "$gate_at" ]] && (( build_at < gate_at )); then
+    ok "the preflight scans release/dist after building it"
+else
+    bad "the preflight has no artifact scan after the build"
 fi
 
 # One pin, reused. A second hardcoded version or checksum is how the CI scanner
@@ -190,13 +201,20 @@ grep -qE '^GITLEAKS_SHA256_LINUX_X64=[0-9a-f]{64}$' tools/gitleaks.sh \
     && ok "tools/gitleaks.sh pins a release checksum" \
     || bad "tools/gitleaks.sh does not pin a release checksum"
 pin_drift=0
-for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
-    grep -qE 'gitleaks_[0-9]+\.[0-9]+\.[0-9]+_linux|GITLEAKS_SHA256' "$workflow" \
-        && { bad "$workflow carries its own Gitleaks pin"; pin_drift=1; }
-    grep -qF 'tools/gitleaks.sh' "$workflow" \
-        || { bad "$workflow does not scan through tools/gitleaks.sh"; pin_drift=1; }
+for file in .github/workflows/ci.yml .github/workflows/release.yml \
+    tools/release-preflight.sh release/build-release.sh; do
+    grep -qE 'gitleaks_[0-9]+\.[0-9]+\.[0-9]+_linux|GITLEAKS_SHA256' "$file" \
+        && { bad "$file carries its own Gitleaks pin"; pin_drift=1; }
 done
-(( pin_drift == 0 )) && ok "both workflows scan through the single pinned helper"
+for file in .github/workflows/ci.yml tools/release-preflight.sh; do
+    grep -qF 'tools/gitleaks.sh' "$file" \
+        || { bad "$file does not scan through tools/gitleaks.sh"; pin_drift=1; }
+done
+# release.yml reaches the scanner only through the preflight. Invoking it
+# directly would be a release-only path again, which is what #26 removed.
+grep -qF 'tools/gitleaks.sh' .github/workflows/release.yml \
+    && { bad "release.yml invokes the scanner directly instead of through the preflight"; pin_drift=1; }
+(( pin_drift == 0 )) && ok "every caller reaches the scanner through the single pinned helper"
 grep -qF 'tools/gitleaks.sh' release/build-release.sh \
     && ok "the release build scans through the single pinned helper" \
     || bad "the release build does not use the pinned helper"
@@ -421,17 +439,17 @@ section "Release rehearsal in CI"
 # that one, so it does see the shape -- but only at the moment the tag lands,
 # which is after the version number has been spent and SECURITY.md forbids
 # reusing it. That is how PASS: 233 FAIL: 4 reached the v2.2.1 release instead
-# of a pull request: ci.yml's release-build job failed with it three seconds
-# before the release job did, and both were too late. ci.yml's tag-checkout job
-# manufactures the shape on every branch push and pull request; these assertions
-# keep it from being quietly deleted or defanged.
-# Every check in this section reads the workflows with comment lines removed. A
-# command named only in a comment is not a command that runs, and an assertion a
-# comment can satisfy asserts nothing: commenting out the whole scan-artifacts
-# step once left the check below still reporting that ci.yml ran it, and the
-# job's own prose saying it does not set SB_CHECK_PUBLISHED_TAGS once failed the
-# check for setting it. Whole-line stripping is enough -- every comment in these
-# files, including the shell comments inside run: blocks, is on its own line.
+# of a pull request. ci.yml's tag-checkout job manufactures the shape on every
+# branch push and pull request; these assertions keep it from being quietly
+# deleted or defanged.
+#
+# It rehearses the Git metadata a tag build sees. It is not a tag event: it does
+# not reproduce GITHUB_REF_TYPE=tag, the event payload, the expression context
+# release.yml reads github.ref_name from, the origin URL, the fetch refspec, or
+# the checkout's authentication state.
+#
+# Every check here reads the workflows with comment lines removed. A command
+# named only in a comment is not a command that runs.
 rehearsal_drift=0
 tag_job="$(grep -vE '^[[:space:]]*#' .github/workflows/ci.yml \
     | awk '/^  tag-checkout:$/{f=1; next} /^  [A-Za-z]/{f=0} f')"
@@ -445,8 +463,9 @@ else
             || { bad "the tag-checkout job does not $label"; rehearsal_drift=1; }
     done <<'REHEARSAL'
 build a shallow single-tag clone|--depth 1 --branch
-run the test suite|bash tests/run-tests.sh
-run the release build|bash release/build-release.sh
+assert the clone is shallow|.git/shallow
+run the release preflight|bash tools/release-preflight.sh
+rehearse the tag check|--tag "v$(tr -d '[:space:]' < VERSION)"
 REHEARSAL
     # The opt-in would hand the job every tag and hide the one shape it exists
     # to reproduce, so its absence is the assertion.
@@ -457,46 +476,176 @@ REHEARSAL
 fi
 (( rehearsal_drift == 0 )) && ok "ci.yml rehearses the release under a tag-shaped checkout"
 
-# The general form of that bug: a command whose first execution is the release.
-# Every script release.yml invokes must also be invoked by some ci.yml job, so a
-# release-only code path cannot be introduced without this failing.
+# What replaced the old cross-check, and why the old one is gone.
 #
-# Each invocation is normalised to "<repo-relative path> <subcommand>" so that
-# spelling is not part of the key: bash tools/x.sh, sh ./tools/x.sh and
-# bash "$ROOT/tools/x.sh" are one command and must not be able to hide from each
-# other. A .sh path counts only where something actually runs it, which is what
-# keeps release.yml's files: list -- it names .sh release assets -- from being
-# read as a set of commands.
-workflow_commands() {
-    grep -vE '^[[:space:]]*#' "$1" | tr -s '[:space:]' '\n' | awk '
-        {
-            t = $0
-            gsub(/^["\047(]+/, "", t); gsub(/["\047)]+$/, "", t)
-            if (pending != "") {
-                if (t ~ /^[A-Za-z][A-Za-z0-9_-]*$/ && t !~ /\.sh$/) print pending " " t
-                else print pending
-                pending = ""
-            }
-            if (t ~ /\.sh$/ && (prev == "bash" || prev == "sh" || prev == "source" \
-                || prev == "." || prev ~ /\$\((bash|sh|source)$/ || t ~ /^\.\//)) {
-                sub(/^\.\//, "", t)
-                sub(/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\//, "", t)
-                pending = t
-            }
-            prev = t
-        }
-        END { if (pending != "") print pending }
-    ' | LC_ALL=C sort -u
+# It extracted "commands" from both workflows with an awk program over
+# whitespace-split YAML text and asserted the release set was a subset of the CI
+# set. Verified against that function on bf04bd0: it accepted
+# `- name: run bash tools/gitleaks.sh path` and `run: echo "bash tools/x.sh"`,
+# and could not see /usr/bin/bash, `bash -e`, an interpreter in a variable, a
+# make target, a composite action or a reusable workflow. It also normalised
+# arguments away, so `build-release.sh --skip-tests` counted as covering
+# `build-release.sh`. A green result was not evidence of the property it named,
+# and the one release-only step it could never see -- the inline tag check --
+# is exactly the kind of thing it existed to catch.
+#
+# There is nothing left to prove by reading YAML, because there is one
+# implementation: tools/release-preflight.sh. This asserts only that, and says
+# so plainly. It is a guard against release.yml growing a second script, not a
+# proof that CI runs everything release does. It can still be fooled by a
+# preflight invocation that is echoed rather than run -- but then nothing in the
+# job runs at all, which is not a subtle failure.
+workflow_scripts() {  # repository scripts a workflow file names, comments aside
+    grep -vE '^[[:space:]]*#' "$1" \
+        | grep -oE '\b(tools|tests|release)/[A-Za-z0-9_.-]+\.sh' \
+        | LC_ALL=C sort -u
 }
-ci_commands="$(workflow_commands .github/workflows/ci.yml)"
-while IFS= read -r command; do
-    [[ -n "$command" ]] || continue
-    # -x, not a substring match: "gitleaks.sh scan" must not be satisfied by
-    # "gitleaks.sh scan-history".
-    grep -qFx -- "$command" <<< "$ci_commands" \
-        && ok "ci.yml also runs '$command'" \
-        || bad "release.yml runs '$command' but no ci.yml job does"
-done < <(workflow_commands .github/workflows/release.yml)
+# One function, used for the shipped file and for every fixture below, so the
+# guard the suite reports on is the guard the fixtures exercise. It prints each
+# violation it finds and nothing when the file is acceptable.
+release_workflow_violations() {
+    local file="$1" body scripts named runs uses
+    body="$(grep -vE '^[[:space:]]*#' "$file")"
+    scripts="$(grep -oE '\b(tools|tests|release)/[A-Za-z0-9_.-]+\.sh' <<< "$body" \
+        | LC_ALL=C sort -u | tr '\n' ' ')"
+    [[ "$scripts" == "tools/release-preflight.sh " ]] \
+        || printf 'invokes [%s] instead of only the preflight\n' "${scripts% }"
+    # A script named in a step label runs nothing. That evasion satisfied the
+    # extractor this guard replaced.
+    named="$(grep -E '^[[:space:]]*-?[[:space:]]*name:' <<< "$body" \
+        | grep -oE '\b(tools|tests|release)/[A-Za-z0-9_.-]+\.sh' | LC_ALL=C sort -u | tr '\n' ' ')"
+    [[ -z "$named" ]] || printf 'names [%s] in a step label, which runs nothing\n' "${named% }"
+    # A script path is not the only way to add a release-only step: `make
+    # release`, a composite action and a reusable workflow all name no .sh file.
+    # Counting the steps closes that, and is a claim this file's shape supports:
+    # release.yml is a checkout, one run:, and one upload.
+    runs="$(grep -cE '^[[:space:]]*-?[[:space:]]*run:' <<< "$body" || true)"
+    [[ "$runs" == 1 ]] || printf 'has %s run: steps; a release-only one cannot be ruled out\n' "$runs"
+    uses="$(grep -oE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*\S+' <<< "$body" \
+        | sed -E 's|.*uses:[[:space:]]*||; s|@.*||' | LC_ALL=C sort -u | tr '\n' ' ')"
+    [[ "$uses" == "actions/checkout softprops/action-gh-release " ]] \
+        || printf 'uses [%s]; a new action is a release-only code path\n' "${uses% }"
+}
+release_violations="$(release_workflow_violations .github/workflows/release.yml)"
+[[ -z "$release_violations" ]] \
+    && ok "release.yml runs exactly one repository script, the preflight, and nothing else" \
+    || bad "release.yml ${release_violations//$'\n'/; }"
+workflow_scripts .github/workflows/ci.yml | grep -qFx tools/release-preflight.sh \
+    && ok "ci.yml runs the same preflight script" \
+    || bad "ci.yml does not run tools/release-preflight.sh"
+# The inline tag check moved into a script that takes the candidate as an
+# argument, so it is testable and so ci.yml can rehearse it.
+grep -qF "tr -d '[:space:]' < VERSION" .github/workflows/release.yml \
+    && bad "release.yml still verifies the tag inline instead of through the preflight" \
+    || ok "the tag check is a script, not inline release-only shell"
+# And the text extractor cannot come back: it is the thing that created false
+# confidence, and a narrower version of it would create less of it, not none.
+grep -qE '^workflow_commands\(\)' tests/run-tests.sh \
+    && bad "the YAML command-text extractor is back in tests/run-tests.sh" \
+    || ok "no YAML command-text extractor in the suite"
+
+# The guard, against fixture workflows -- including every evasion that defeated
+# its predecessor.
+release_guard() {  # label, expect (accept|reject), file
+    local label="$1" expect="$2" file="$3" violations
+    violations="$(release_workflow_violations "$file")"
+    if [[ -z "$violations" ]]; then
+        [[ "$expect" == accept ]] && ok "the release-workflow guard accepts $label" \
+            || bad "the release-workflow guard accepted $label"
+    else
+        [[ "$expect" == reject ]] && ok "the release-workflow guard rejects $label" \
+            || bad "the release-workflow guard rejected $label: $violations"
+    fi
+}
+guard_fixture="$TMP/release-fixture.yml"
+restore_guard_fixture() { cp .github/workflows/release.yml "$guard_fixture"; }
+restore_guard_fixture
+release_guard "the shipped release.yml" accept "$guard_fixture"
+printf '      - run: bash tools/other-thing.sh\n' >> "$guard_fixture"
+release_guard "a second script" reject "$guard_fixture"
+restore_guard_fixture
+printf '      - run: /usr/bin/bash tools/other-thing.sh\n' >> "$guard_fixture"
+release_guard "a second script run through an absolute interpreter path" reject "$guard_fixture"
+restore_guard_fixture
+printf '      - run: make release-extra\n' >> "$guard_fixture"
+release_guard "a make target, which names no script" reject "$guard_fixture"
+restore_guard_fixture
+printf '      - uses: ./.github/actions/extra\n' >> "$guard_fixture"
+release_guard "a composite action" reject "$guard_fixture"
+restore_guard_fixture
+printf '      - uses: ./.github/workflows/extra.yml\n' >> "$guard_fixture"
+release_guard "a reusable workflow" reject "$guard_fixture"
+restore_guard_fixture
+sed -i '/bash tools\/release-preflight.sh/d' "$guard_fixture"
+release_guard "the preflight removed" reject "$guard_fixture"
+restore_guard_fixture
+sed -i 's|^\( *\)run: bash tools/release-preflight.sh.*|\1name: run bash tools/release-preflight.sh|' "$guard_fixture"
+release_guard "a preflight named in a step label but never run" reject "$guard_fixture"
+
+# The tag check itself, offline, against a scratch VERSION file.
+tag_check_drift=0
+printf '2.2.2\n' > "$TMP/VERSION-fixture"
+while IFS='|' read -r candidate expected; do
+    [[ -n "$candidate" || "$expected" == 2 ]] || continue
+    actual=0
+    bash tools/check-release-tag.sh "$candidate" "$TMP/VERSION-fixture" >/dev/null 2>&1 || actual=$?
+    [[ "$actual" == "$expected" ]] \
+        || { bad "check-release-tag '$candidate' exited $actual, expected $expected"; tag_check_drift=1; }
+done <<'TAGS'
+v2.2.2|0
+v2.2.3|1
+v3.0.0|1
+2.2.2|2
+v2.2|2
+v2.2.2.1|2
+v2.2.2-rc1|2
+v2.2.2+build1|2
+refs/tags/v2.2.2|2
+v02.2.2|2
+V2.2.2|2
+v2.2.2 |2
+|2
+TAGS
+(( tag_check_drift == 0 )) && ok "the release tag check accepts only an exact, well-formed match"
+# A prerelease has never been published here, and accepting one would let it
+# publish as if it were the release. Keep the refusal explicit.
+prerelease_out="$(bash tools/check-release-tag.sh v2.2.2-rc1 "$TMP/VERSION-fixture" 2>&1 || true)"
+grep -qF 'expected v<major>.<minor>.<patch> with no suffix' <<< "$prerelease_out" \
+    && ok "a prerelease tag is refused with a reason" \
+    || bad "prerelease refusal message: $prerelease_out"
+# And against the repository's own VERSION, which is what release.yml passes.
+bash tools/check-release-tag.sh "v$(tr -d '[:space:]' < VERSION)" >/dev/null 2>&1 \
+    && ok "the current VERSION has a valid release tag form" \
+    || bad "v$(tr -d '[:space:]' < VERSION) is not accepted by the tag check"
+
+# Workflow syntax is validated by a YAML-aware linter, pinned and checksum
+# verified the same way the secret scanner is, rather than by regexes here.
+actionlint_drift=0
+grep -qF 'bash tools/actionlint.sh run' .github/workflows/ci.yml \
+    || { bad "ci.yml does not run actionlint"; actionlint_drift=1; }
+grep -qE '^ACTIONLINT_VERSION=[0-9]+\.[0-9]+\.[0-9]+$' tools/actionlint.sh \
+    || { bad "actionlint is not pinned to an exact version"; actionlint_drift=1; }
+grep -qE '^ACTIONLINT_SHA256_LINUX_X64=[0-9a-f]{64}$' tools/actionlint.sh \
+    || { bad "the actionlint download is not checksum-pinned"; actionlint_drift=1; }
+grep -qF 'sha256sum --check --status' tools/actionlint.sh \
+    || { bad "actionlint.sh does not verify the archive it downloads"; actionlint_drift=1; }
+(( actionlint_drift == 0 )) && ok "workflows are linted by a pinned, verified actionlint"
+
+# The preflight is the thing both workflows call, so its own sequence is the
+# release contract. Assert it still contains every gate rather than trusting
+# that moving a step out of a workflow moved it into here.
+preflight_drift=0
+while IFS='|' read -r label needle; do
+    [[ -n "$label" ]] || continue
+    grep -qF -- "$needle" tools/release-preflight.sh \
+        || { bad "the release preflight no longer $label"; preflight_drift=1; }
+done <<'PREFLIGHT'
+checks the candidate tag|tools/check-release-tag.sh
+resolves the pinned scanner|tools/gitleaks.sh" path
+runs the reproducible build|release/build-release.sh
+scans the artifacts before upload|scan-artifacts release/dist
+PREFLIGHT
+(( preflight_drift == 0 )) && ok "the release preflight still runs every pre-publication gate"
 
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the

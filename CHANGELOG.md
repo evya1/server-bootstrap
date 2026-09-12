@@ -46,6 +46,17 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   distinguishes extra, missing, duplicate, stale, malformed and misordered
   entries, capped at 20 findings. ([#24])
 
+- **`tools/release-preflight.sh`** — every release-critical pre-publication
+  step in one script: the tag check, the pinned Gitleaks, the reproducible
+  build, and the pre-upload artifact scan. `release.yml` and two `ci.yml` jobs
+  call it, so there is no release-only code path left to detect. ([#26])
+- **`tools/check-release-tag.sh`** — the "Verify tag matches VERSION" logic,
+  moved out of inline workflow shell into a script that takes the candidate tag
+  as an argument. It accepts only `v<major>.<minor>.<patch>` with no leading
+  zeros and no prerelease or build-metadata suffix. ([#26])
+- **`tools/actionlint.sh`** — a pinned, checksum-verified workflow linter, in
+  the shape of `tools/gitleaks.sh`, run as a blocking CI step. ([#26])
+
 ### Changed
 
 - **`tools/refresh-pins.sh` distinguishes two kinds of pin.** Node.js, `gh`, uv,
@@ -64,6 +75,24 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   suite drives with synthetic rows. Sourcing it changes no shell options, which
   matters because it sets `-Eeuo pipefail` and the suite deliberately does not.
   ([#25])
+
+- **The release-command assertion in `tests/run-tests.sh` is gone.** It
+  extracted commands from workflow YAML with an `awk` program over
+  whitespace-split text and claimed every release command also ran in CI.
+  Verified: it accepted a command named only in a step's `name:` line and one
+  inside an echoed string, and could not see `/usr/bin/bash`, `bash -e`, an
+  interpreter held in a variable, a `make` target, a composite action or a
+  reusable workflow. It also normalised arguments away, so `--skip-tests`
+  counted as covering a full build. What replaced it asserts only that
+  `release.yml` is a checkout, one `run:` invoking the preflight, and one
+  upload — a narrow claim with a real remedy, and one whose own fixtures cover
+  every evasion above. ([#26])
+- **The `tag-checkout` job is described accurately.** It rehearses the *Git
+  metadata* a tag build sees — detached HEAD, one commit, one tag, a shallow
+  clone. It does not reproduce `GITHUB_REF_TYPE=tag`, the tag event payload, the
+  expression context, the origin URL, the fetch refspec, or the checkout's
+  authentication state. It now runs the whole preflight, including the tag
+  check, inside that shape. ([#26])
 
 ### Fixed
 
@@ -99,6 +128,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#23]: https://github.com/evya1/server-bootstrap/issues/23
 [#24]: https://github.com/evya1/server-bootstrap/issues/24
 [#25]: https://github.com/evya1/server-bootstrap/issues/25
+[#26]: https://github.com/evya1/server-bootstrap/issues/26
 
 ## 2.2.2
 

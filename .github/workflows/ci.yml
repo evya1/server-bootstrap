@@ -44,6 +44,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: shellcheck (advisory)
         run: shellcheck -S warning $(find . -name '*.sh' -not -path './release/dist/*') server-bundle-install server-vscode-extensions server-secrets || true
+      # A YAML-aware linter for the workflow files themselves, pinned and
+      # checksum-verified through tools/actionlint.sh the same way the scanner
+      # is. Blocking, unlike shellcheck: a workflow that does not parse or names
+      # a context that does not exist is a build that fails at the wrong moment.
+      - name: actionlint
+        run: bash tools/actionlint.sh run
       - name: test suite
         env:
           # This job checks out with fetch-depth: 0, so it has every tag and can
@@ -55,15 +61,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Resolved once and exported, so the release scans and the suite's
-      # functional scan checks reuse one verified binary instead of downloading
-      # per scan or skipping.
-      - name: Install and verify the pinned Gitleaks
-        run: echo "GITLEAKS_BIN=$(bash tools/gitleaks.sh path)" >> "$GITHUB_ENV"
-      # Proves the archives are byte-reproducible on a clean machine, not just
-      # on the author's box. build-release.sh builds twice and fails on a diff,
-      # then scans the staging trees and every extracted archive.
-      - run: bash release/build-release.sh
+      # The same script release.yml runs, minus the tag: the pinned Gitleaks,
+      # the reproducible double build, and the pre-upload artifact scan. Running
+      # it here is what makes "release.yml has no code path CI does not run" a
+      # structural fact rather than something a test tries to prove by reading
+      # YAML text.
+      - name: Release preflight
+        run: bash tools/release-preflight.sh
 
   tag-checkout:
     runs-on: ubuntu-latest
@@ -75,8 +79,16 @@ jobs:
       # PASS: 233 FAIL: 4 reached the v2.2.1 release instead of a pull request:
       # ci.yml's release-build job failed with it three seconds before the
       # release job did, and both were too late. This job manufactures the shape
-      # on every branch push and pull request. It is the regression test for the
-      # gap, not for that one bug.
+      # on every branch push and pull request.
+      #
+      # What it is: a rehearsal of the Git metadata a tag build sees -- detached
+      # HEAD, one commit, one tag, a shallow clone. That is the part that broke.
+      #
+      # What it is not: a tag event. It does not reproduce GITHUB_REF_TYPE=tag,
+      # the tag event payload, the GitHub expression context release.yml reads
+      # github.ref_name from, the origin URL, the fetch refspec, or the
+      # checkout's authentication state. Anything depending on those is still
+      # first exercised by a real tag push.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -109,28 +121,12 @@ jobs:
           [[ "$commits" == 1 ]] || { echo "not depth-1: $commits commits" >&2; exit 1; }
           [[ "$tags" == "v0.0.0-tagshape " ]] || { echo "not a single-tag checkout: $tags" >&2; exit 1; }
           [[ -f .git/shallow ]] || { echo "clone is not shallow" >&2; exit 1; }
-      - name: Install and verify the pinned Gitleaks
+      # The whole release sequence, inside that shape, with the tag the next
+      # release would carry. SB_CHECK_PUBLISHED_TAGS is deliberately not set:
+      # release.yml does not set it either, and the point is to prove the suite
+      # passes where it is absent.
+      - name: Release preflight under the tag-shaped checkout
         run: |
           set -Eeuo pipefail
           cd "$RUNNER_TEMP/tag-shape"
-          echo "GITLEAKS_BIN=$(bash tools/gitleaks.sh path)" >> "$GITHUB_ENV"
-      # SB_CHECK_PUBLISHED_TAGS is deliberately not set: release.yml does not set
-      # it either, and the point is to prove the suite passes where it is absent.
-      # Setting it here would hide the shape this job exists to test.
-      - name: test suite
-        run: |
-          set -Eeuo pipefail
-          cd "$RUNNER_TEMP/tag-shape"
-          bash tests/run-tests.sh
-      - name: reproducible release build
-        run: |
-          set -Eeuo pipefail
-          cd "$RUNNER_TEMP/tag-shape"
-          bash release/build-release.sh
-      # The pre-upload gate, deliberately independent of the build. Until this
-      # job existed it was the one command in release.yml that no ci.yml job ran.
-      - name: Scan release artifacts before publication
-        run: |
-          set -Eeuo pipefail
-          cd "$RUNNER_TEMP/tag-shape"
-          bash tools/gitleaks.sh scan-artifacts release/dist "release artifacts"
+          bash tools/release-preflight.sh --tag "v$(tr -d '[:space:]' < VERSION)"

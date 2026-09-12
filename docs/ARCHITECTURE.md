@@ -34,6 +34,9 @@ tools/refresh-pins.sh         upstream pin drift report and rewrite
 tools/write-pins.py           applies a resolved pin set to every file recording it
 tools/check-pins.sh           offline check that those recordings still agree
 release/release-files.sh      the canonical release file set and its checksum manifest
+tools/release-preflight.sh    every pre-publication gate, run by CI and by the release
+tools/check-release-tag.sh    tag-versus-VERSION verification, testable offline
+tools/actionlint.sh           pinned, checksum-verified workflow linter
 ```
 
 ## Execution order
