@@ -2,7 +2,57 @@
 
 ## Unreleased
 
-Nothing here has shipped. `VERSION` is still `2.2.2`.
+Nothing merged since 2.2.3.
+
+## 2.2.3
+
+*Released 2026-09-12.*
+
+A release-engineering release. Nothing about what gets installed on a server
+changes except one pinned agent version — the work is in making the release
+itself verifiable, and in closing the gaps that let a broken release reach a tag
+in the first place.
+
+The short version of what is now true that was not before:
+
+- **The release file set is canonical.** One definition, resolved from the
+  tracked files, feeds the checksum manifest, the tar, the source stage and the
+  tests. `checksums/SHA256SUMS` is verified *exactly* — extra, missing,
+  duplicate, stale, malformed and misordered entries are all rejected. An
+  untracked scratch file can no longer be packed into a release archive.
+- **Every pinned value is checked against every file that records it.**
+  `tools/check-pins.sh` maps 13 pins across 59 recordings offline, with each
+  architecture anchored to its own label, so a half-applied bump or a swapped
+  x64/arm64 pair fails in CI instead of shipping.
+- **The example plans inherit the bundle's uv pin** instead of restating a
+  stale one. Both shipped plans had pinned uv `0.12.12` against a bundle pinned
+  to `0.12.13`, so the documented quick start installed an older uv than the
+  release did.
+- **Pin drift has meaningful exit codes and a weekly job.** `0` nothing
+  actionable, `1` a release pin is behind, `2` usage, `3` an upstream could not
+  be resolved — so a run whose network broke cannot read as a clean week. A
+  moved Oh My Zsh branch head is reported, not failed. A weekly workflow keeps
+  **one** issue open while a pin is behind rather than filing a new one.
+- **One shared release preflight.** `tools/release-preflight.sh` holds every
+  pre-publication gate, and CI runs the same script on every push — once
+  normally, once inside a manufactured tag-shaped checkout. There is no
+  release-only code path left to discover at tag time.
+- **Every GitHub Action is pinned to an immutable commit SHA** with a readable
+  version comment, permissions are scoped per job, and Dependabot keeps those
+  pins on an update channel. `actions/checkout` is on `v7.0.1` and
+  `softprops/action-gh-release` on `v3.0.3`; this release is the first
+  production run of the latter.
+- **Claude Code is pinned to `2.1.269`** (from `2.1.268`). Node.js `24.21.0`,
+  `gh` `2.100.0`, uv `0.12.13`, Codex `0.154.0` and pi `0.85.1` were each
+  confirmed current against upstream and are unchanged.
+- **Documentation says what the code does.** Three claims that had stopped being
+  true were corrected, and an empty code fence that rendered as a blank box in
+  the README is gone.
+- **A stale checksum manifest now explains itself.** Every Dependabot pull
+  request edits a tracked workflow file and cannot regenerate the manifest, so it
+  arrived red in a way indistinguishable from a real incompatibility. The
+  failure now names the one command that fixes it and prints the exact patch,
+  without weakening any verification or granting any new permission.
 
 ### Merged after the 2.2.2 release, previously unrecorded
 
@@ -179,8 +229,6 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   Markdown file has an empty or unclosed code fence — a few lines of Bash over
   the eleven tracked files, rather than a Markdown linter added for one fence.
   ([#43])
-
-### Changed
 
 - **Every GitHub Action is pinned to a full commit SHA** with a version comment,
   replacing the mutable `actions/checkout@v4` and
