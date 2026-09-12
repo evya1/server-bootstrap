@@ -12,28 +12,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches VERSION
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          declared="$(tr -d '[:space:]' < VERSION)"
-          [[ "$tag" == "$declared" ]] \
-            || { echo "ERROR: tag $tag != VERSION $declared" >&2; exit 1; }
-
-      - name: Install and verify the pinned Gitleaks
-        run: echo "GITLEAKS_BIN=$(bash tools/gitleaks.sh path)" >> "$GITHUB_ENV"
-
-      # Runs the full test suite, refreshes checksums, builds every archive
-      # twice failing if the two passes are not byte-identical, and scans the
-      # source staging tree and every extracted archive.
-      - name: Build release
-        run: bash release/build-release.sh
-
-      # The gate immediately before upload, deliberately independent of the
-      # build: it re-scans release/dist as it will be published, descending into
-      # the archives, and honours no skip switch. If this step fails the job
-      # fails and Publish assets never runs, so nothing is uploaded.
-      - name: Scan release artifacts before publication
-        run: bash tools/gitleaks.sh scan-artifacts release/dist "release artifacts"
+      # Every pre-publication gate lives in tools/release-preflight.sh: the tag
+      # check, the pinned Gitleaks, the reproducible build (which runs the suite
+      # and builds twice), and the artifact scan that runs immediately before
+      # upload. ci.yml runs the same script on every push and pull request, once
+      # in an ordinary checkout and once inside a manufactured tag-shaped one.
+      #
+      # Adding a step here rather than to that script is how a release-only code
+      # path gets introduced -- the failure mode that put PASS: 233 FAIL: 4 into
+      # the v2.2.1 release. tests/run-tests.sh asserts that this job invokes
+      # exactly one repository script, so growing a second one fails CI.
+      #
+      # GITHUB_REF_NAME arrives through the environment rather than a ${{ }}
+      # expression, so a tag name is data to the shell, never text spliced into
+      # the script before it runs.
+      - name: Release preflight
+        env:
+          CANDIDATE_TAG: ${{ github.ref_name }}
+        run: bash tools/release-preflight.sh --tag "$CANDIDATE_TAG"
 
       - name: Publish assets
         uses: softprops/action-gh-release@v2
