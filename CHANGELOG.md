@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased
+
+Nothing here has shipped. `VERSION` is still `2.2.2`.
+
+### Added
+
+- **`tools/check-pins.sh`** — one exact, keyed map of every pinned value against
+  every file that records it: `lib/bootstrap/config.sh` (canonical),
+  `config.example.env`, `checksums/*.txt`, `README.md` and
+  `docs/CONFIGURATION.md`. Each recording must be present exactly once, be well
+  formed, and equal the canonical value, with every architecture anchored to its
+  own label. Before it, a zeroed uv checksum, a swapped x64/arm64 pair, a
+  manifest-only edit and a two-release-stale `docs/CONFIGURATION.md` all passed
+  the suite, while a *correct* coordinated bump of Node.js, Claude Code or Codex
+  failed it until somebody hand-edited a test literal. ([#23])
+
+### Changed
+
+- **The example plans no longer restate the uv pin.** A plan is sourced by
+  `server-provision.sh` before the bootstrap runs, so an exported `UV_VERSION`
+  in a plan beats the bundle default. Both shipped plans pinned uv `0.12.12`
+  with its checksums against a bundle pinned to `0.12.13`, which meant the
+  documented quick start installed an older uv than the release. Neither plan
+  needed its own pin; both now inherit the bundle's. If a plan ever does need an
+  independent pin, `tools/check-pins.sh` requires it to be declared, mapped and
+  covered by the updater. ([#23])
+- **`tools/refresh-pins.sh --write` also rewrites `docs/CONFIGURATION.md`**, and
+  the rewrite logic moved to `tools/write-pins.py` so a coordinated bump can be
+  tested offline against a scratch tree. Its documented file list was wrong in
+  three places — `README.md`, `docs/CONFIGURATION.md` and the script's own
+  `--help` — all of which had said "config.sh, config.example.env, checksums/"
+  since #20 taught it to rewrite `README.md` too. ([#23])
+- **`tests/run-tests.sh` no longer hardcodes any pinned value.** The literal
+  Node.js, Claude Code and Codex assertions became shape assertions; the value
+  check now lives in the map. The `README` pin section is subsumed by it and was
+  removed. A standing assertion fails if a 40- or 64-hex literal reappears in
+  the suite outside the synthetic manifest-parser fixture. ([#23])
+
+### Fixed
+
+- **`docs/CONFIGURATION.md` named two superseded pins**: Claude Code `2.1.267`
+  and Oh My Zsh `cd320b55`, both superseded by #21. Nothing rewrote or checked
+  that file. ([#23])
+
+[#23]: https://github.com/evya1/server-bootstrap/issues/23
+
 ## 2.2.2
 
 Fixes a bug in the 2.2.1 history-preservation check that made the release build

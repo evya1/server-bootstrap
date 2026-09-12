@@ -16,11 +16,10 @@ export MIN_DISK_GB=50
 export ACCEPT_POLICY=reject-stop
 export DELETE_ARCHIVES_AFTER_SUCCESS=1
 
-# Whisper installation uses this pinned and checksum-verified uv release.
+# Whisper installation uses uv. Nothing here requires a different uv from the
+# one the bundle pins and checksum-verifies, so this plan does not restate the
+# version: a second copy is a second thing to bump, and this one went stale.
 export INSTALL_UV=1
-export UV_VERSION=0.12.12
-export UV_SHA256_X64=ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509
-export UV_SHA256_ARM64=fe08db50cc1b56cd1da7801065ed1103d27ed3f9571cd122386cfc7faf1b8df5
 
 register_bootstrap \
   "./server-bootstrap-2.2.2.tar.gz" \

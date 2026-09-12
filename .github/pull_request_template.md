@@ -15,7 +15,7 @@
 ## Release bookkeeping
 
 - [ ] `VERSION` and `CHANGELOG.md` updated, or: nothing user-facing shipped
-- [ ] Pins touched? `tools/refresh-pins.sh --check` is clean and `checksums/*.txt` agree
+- [ ] Pins touched? `tools/check-pins.sh` is clean, and `tools/refresh-pins.sh --check` reports no actionable drift
 - [ ] New file? registered in `lib/bootstrap/runtime.sh` **and** the verify list in `release/build-release.sh`
 
 ## Security model

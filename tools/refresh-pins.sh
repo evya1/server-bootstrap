@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Resolve the current upstream version of every pinned tool and report or apply
-# the drift. Run this instead of hand-editing pins in four files.
+# the drift. Run this instead of hand-editing pins across five files.
 #
 #   tools/refresh-pins.sh            # report drift, exit 1 when stale
 #   tools/refresh-pins.sh --write    # apply it
+#
+# --write rewrites lib/bootstrap/config.sh, config.example.env, checksums/*.txt,
+# README.md and docs/CONFIGURATION.md. CHANGELOG.md stays a hand edit.
+# tools/check-pins.sh asserts, offline, that those files still agree.
 #
 # Tag discovery uses git ls-remote rather than api.github.com: no rate limit,
 # no token, and it works from restricted networks.
@@ -19,7 +23,7 @@ MODE="check"
 case "${1:-}" in
     ''|--check) MODE="check" ;;
     --write) MODE="write" ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "usage: $0 [--check|--write]" >&2; exit 2 ;;
 esac
 
@@ -134,91 +138,7 @@ OH_MY_ZSH_REF="$OMZ_LATEST" OMZ_DATE="$(omz_commit_date "$OMZ_LATEST")" \
 NODE_SHA256_X64="$NEW_NODE_X64" NODE_SHA256_ARM64="$NEW_NODE_ARM64" \
 GH_SHA256_X64="$NEW_GH_X64" GH_SHA256_ARM64="$NEW_GH_ARM64" \
 UV_SHA256_X64="$NEW_UV_X64" UV_SHA256_ARM64="$NEW_UV_ARM64" \
-python3 - <<'PY'
-import os, pathlib, re
-
-names = [
-    "NODE_VERSION", "NODE_SHA256_X64", "NODE_SHA256_ARM64",
-    "GH_VERSION", "GH_SHA256_X64", "GH_SHA256_ARM64",
-    "UV_VERSION", "UV_SHA256_X64", "UV_SHA256_ARM64",
-    "CLAUDE_CODE_VERSION", "CODEX_VERSION", "PI_VERSION", "OH_MY_ZSH_REF",
-]
-values = {n: os.environ[n] for n in names}
-
-# README.md's "What the run installs" table names five of these versions in
-# prose. tests/run-tests.sh asserts they match the config defaults, so they are
-# rewritten here rather than left to the maintainer -- a second copy of a value
-# that a tool updates only half of is how documentation goes stale.
-readme_tools = [
-    ("GitHub CLI", "GH_VERSION"),
-    ("Node.js", "NODE_VERSION"),
-    ("Claude Code", "CLAUDE_CODE_VERSION"),
-    ("OpenAI Codex", "CODEX_VERSION"),
-    ("pi", "PI_VERSION"),
-]
-
-# Every rewrite is resolved before anything is written, so a README the patterns
-# no longer fit aborts the run with the tree untouched instead of half updated.
-readme = pathlib.Path("README.md")
-readme_text = readme.read_text()
-for label, name in readme_tools:
-    pattern = re.compile(r'\b%s \d+\.\d+\.\d+' % re.escape(label))
-    readme_text, count = pattern.subn("%s %s" % (label, values[name]), readme_text)
-    if count != 1:
-        raise SystemExit("expected one %s version in README.md, found %d" % (label, count))
-
-config = pathlib.Path("lib/bootstrap/config.sh")
-text = config.read_text()
-for name, value in values.items():
-    pattern = re.compile(r'^(\s*%s=")\$\{%s:-[^}]*(\}")$' % (name, name), re.M)
-    text, count = pattern.subn(lambda m: m.group(1) + "${%s:-" % name + value + m.group(2), text)
-    if count != 1:
-        raise SystemExit("expected one default for %s in config.sh, found %d" % (name, count))
-config.write_text(text)
-readme.write_text(readme_text)
-
-example = pathlib.Path("config.example.env")
-text = example.read_text()
-for name, value in values.items():
-    pattern = re.compile(r'^(# %s=).*$' % name, re.M)
-    text = pattern.sub(lambda m: m.group(1) + value, text)
-example.write_text(text)
-
-bundle = pathlib.Path("VERSION").read_text().strip()
-values["BUNDLE"] = bundle
-values["OMZ_DATE"] = os.environ.get("OMZ_DATE", "unknown")
-
-pathlib.Path("checksums/NODE_SHA256.txt").write_text(
-    "Node.js %(NODE_VERSION)s official release checksums:\n"
-    "linux-x64  %(NODE_SHA256_X64)s\n"
-    "linux-arm64 %(NODE_SHA256_ARM64)s\n"
-    "Source: https://nodejs.org/en/blog/release/v%(NODE_VERSION)s\n" % values)
-
-pathlib.Path("checksums/GH_SHA256.txt").write_text(
-    "# Pinned GitHub CLI release used by server-bootstrap %(BUNDLE)s.\n"
-    "# Assets: gh_%(GH_VERSION)s_linux_amd64.tar.gz / gh_%(GH_VERSION)s_linux_arm64.tar.gz\n"
-    "# Source: https://github.com/cli/cli/releases/download/v%(GH_VERSION)s/gh_%(GH_VERSION)s_checksums.txt\n"
-    "linux-amd64 %(GH_SHA256_X64)s\n"
-    "linux-arm64 %(GH_SHA256_ARM64)s\n" % values)
-
-pathlib.Path("checksums/UV_SHA256.txt").write_text(
-    "# Pinned uv release used by server-bootstrap %(BUNDLE)s.\n"
-    "# Assets: uv-x86_64-unknown-linux-gnu.tar.gz / uv-aarch64-unknown-linux-gnu.tar.gz\n"
-    "# Source: https://github.com/astral-sh/uv/releases/download/%(UV_VERSION)s/\n"
-    "x86_64-unknown-linux-gnu  %(UV_SHA256_X64)s\n"
-    "aarch64-unknown-linux-gnu %(UV_SHA256_ARM64)s\n" % values)
-
-pathlib.Path("checksums/OH_MY_ZSH_REF.txt").write_text(
-    "# Pinned Oh My Zsh commit used by server-bootstrap %(BUNDLE)s.\n"
-    "# Upstream commit date: %(OMZ_DATE)s.\n"
-    "%(OH_MY_ZSH_REF)s\n" % values)
-
-pathlib.Path("checksums/AI_CLI_VERSIONS.txt").write_text(
-    "@anthropic-ai/claude-code %(CLAUDE_CODE_VERSION)s\n"
-    "@openai/codex %(CODEX_VERSION)s\n"
-    "@earendil-works/pi-coding-agent %(PI_VERSION)s\n" % values)
-print("updated lib/bootstrap/config.sh, config.example.env, checksums/ and README.md")
-PY
+python3 "$ROOT/tools/write-pins.py"
 
 # CHANGELOG.md is still a hand edit: it records what a bump means, which no
 # pattern can write. The grep shows where the superseded versions are still

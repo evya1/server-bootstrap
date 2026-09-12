@@ -17,11 +17,12 @@ export MIN_DISK_GB=50
 export ACCEPT_POLICY=reject-stop
 export DELETE_ARCHIVES_AFTER_SUCCESS=1
 
-# Optional pinned uv installation. Leave INSTALL_UV=0 until both values are set.
+# uv is installed from the version and per-architecture checksum the bundle
+# pins. This plan does not restate them: a plan is sourced by
+# server-provision.sh before the bootstrap runs, so an exported UV_VERSION here
+# would win over the bundle default -- which is how this file spent two
+# releases quietly installing uv 0.12.12 against a bundle pinned to 0.12.13.
 export INSTALL_UV=1
-export UV_VERSION=0.12.12
-export UV_SHA256_X64=ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509
-export UV_SHA256_ARM64=fe08db50cc1b56cd1da7801065ed1103d27ed3f9571cd122386cfc7faf1b8df5
 
 register_bootstrap \
   "./server-bootstrap-2.2.2.tar.gz" \
