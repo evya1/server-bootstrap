@@ -173,8 +173,17 @@ install a second, unpinned copy.
 
 ```bash
 tools/refresh-pins.sh            # report drift against upstream, exit 1 when stale
-tools/refresh-pins.sh --write    # apply it to config.sh, config.example.env, checksums/
+tools/refresh-pins.sh --write    # apply it everywhere the value is recorded
+tools/check-pins.sh              # assert those recordings still agree, offline
 ```
+
+`--write` rewrites every file that records a pinned value:
+`lib/bootstrap/config.sh`, `config.example.env`, `checksums/*.txt`, `README.md`
+and `docs/CONFIGURATION.md`. `CHANGELOG.md` stays a hand edit, because it
+records what a bump means. `tools/check-pins.sh` is the offline half: it asserts
+that every one of those recordings is present exactly once and equals the
+canonical value in `config.sh`, with each architecture anchored to its own
+label, so a half-applied bump or a swapped x64/arm64 pair fails in CI.
 
 Tag discovery uses `git ls-remote`, not the GitHub API, so it needs no token and
 works from restricted networks.

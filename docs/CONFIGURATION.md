@@ -95,7 +95,7 @@ system prefix, in one npm transaction:
 ```bash
 AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
-CLAUDE_CODE_VERSION=2.1.267
+CLAUDE_CODE_VERSION=2.1.268
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
 CODEX_VERSION=0.154.0
 PI_VERSION=0.85.1
@@ -205,7 +205,8 @@ To refresh the pins themselves rather than resolve at run time:
 
 ```bash
 tools/refresh-pins.sh            # report drift, exit 1 when stale
-tools/refresh-pins.sh --write    # rewrite config.sh, config.example.env, checksums/
+tools/refresh-pins.sh --write    # rewrite every file that records a pin
+tools/check-pins.sh              # assert those files still agree, offline
 ```
 
 ## VS Code Remote-SSH extensions
@@ -260,7 +261,7 @@ take precedence. Reconnect after installation, or run `exec zsh -l`.
 Oh My Zsh is pinned by default:
 
 ```bash
-OH_MY_ZSH_REF=cd320b5506998f32284d37799592cb2ba43a3188
+OH_MY_ZSH_REF=c6e66edee824d83e84473ec666917b58323630df
 OH_MY_ZSH_SHA256=
 OH_MY_ZSH_THEME=robbyrussell
 OH_MY_ZSH_PLUGINS=git

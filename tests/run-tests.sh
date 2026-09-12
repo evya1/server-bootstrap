@@ -703,19 +703,25 @@ section "Configuration and documentation"
 grep -q 'UV_SHA256_X64="${UV_SHA256_X64:-[0-9a-fA-F]\{64\}}"' lib/bootstrap/config.sh \
     && grep -q 'UV_SHA256_ARM64="${UV_SHA256_ARM64:-[0-9a-fA-F]\{64\}}"' lib/bootstrap/config.sh \
     && ok "uv checksum pinned for both architectures" || bad "uv checksum default"
+# Shape only, here and below. The values themselves are checked against every
+# other surface that records them by tools/check-pins.sh, exercised in its own
+# section further down. Literal versions and checksums used to live in this
+# file for Node.js, Claude Code and Codex: they caught a wrong value, but they
+# also failed a correct coordinated bump until somebody hand-edited this file,
+# and they left uv, gh and Oh My Zsh with no value check at all. See #23.
 grep -q 'INSTALL_NODEJS="${INSTALL_NODEJS:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'NODE_VERSION="${NODE_VERSION:-24.21.0}"' lib/bootstrap/config.sh \
-    && grep -q 'fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6' lib/bootstrap/config.sh \
-    && grep -q '6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2' lib/bootstrap/config.sh \
+    && grep -Eq 'NODE_VERSION="\$\{NODE_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' lib/bootstrap/config.sh \
+    && grep -Eq 'NODE_SHA256_X64="\$\{NODE_SHA256_X64:-[0-9a-fA-F]{64}\}"' lib/bootstrap/config.sh \
+    && grep -Eq 'NODE_SHA256_ARM64="\$\{NODE_SHA256_ARM64:-[0-9a-fA-F]{64}\}"' lib/bootstrap/config.sh \
     && ok "Node.js LTS is enabled and checksum pinned" || bad "Node.js defaults/checksums"
 grep -q 'INSTALL_CLAUDE_CODE="${INSTALL_CLAUDE_CODE:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.268}"' lib/bootstrap/config.sh \
+    && grep -Eq 'CLAUDE_CODE_VERSION="\$\{CLAUDE_CODE_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' lib/bootstrap/config.sh \
     && grep -q '@anthropic-ai/claude-code@' lib/bootstrap/ai_cli.sh \
     && grep -q 'CLAUDE_CODE_DISABLE_AUTOUPDATER="${CLAUDE_CODE_DISABLE_AUTOUPDATER:-1}"' lib/bootstrap/config.sh \
     && grep -q 'export DISABLE_AUTOUPDATER=1' lib/bootstrap/ai_cli.sh \
     && ok "Claude Code is enabled, pinned, and update-controlled" || bad "Claude Code defaults/pin"
 grep -q 'INSTALL_CODEX="${INSTALL_CODEX:-1}"' lib/bootstrap/config.sh \
-    && grep -q 'CODEX_VERSION="${CODEX_VERSION:-0.154.0}"' lib/bootstrap/config.sh \
+    && grep -Eq 'CODEX_VERSION="\$\{CODEX_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' lib/bootstrap/config.sh \
     && grep -q '@openai/codex@' lib/bootstrap/ai_cli.sh \
     && ok "Codex is enabled and version pinned" || bad "Codex defaults/pin"
 grep -q 'INSTALL_VSCODE_EXTENSIONS="${INSTALL_VSCODE_EXTENSIONS:-1}"' lib/bootstrap/config.sh \
@@ -756,6 +762,173 @@ grep -q 'bootstrap_set_default_zsh' lib/bootstrap/shell.sh \
 for doc in QUICKSTART PROVISIONING ARCHITECTURE BUNDLE-CONTRACT CONFIGURATION TROUBLESHOOTING SECURITY-SCANNING; do
     [[ -s "docs/$doc.md" ]] && ok "documentation: $doc" || bad "missing documentation: $doc"
 done
+
+section "Fitness: every pinned value agrees on every surface that records it"
+# lib/bootstrap/config.sh is canonical. config.example.env, checksums/*.txt,
+# README.md and docs/CONFIGURATION.md are second recordings of the same
+# thirteen values, and tools/refresh-pins.sh --write writes all of them.
+# tools/check-pins.sh asserts each recording is present exactly once, is well
+# formed, and equals the canonical value -- with every architecture anchored to
+# its own label, so an x64/arm64 swap fails. Before it existed a zeroed uv
+# checksum, a swapped pair, and a two-release-stale docs/CONFIGURATION.md all
+# passed this suite. See #23.
+#
+# Not a security boundary: anyone who can edit config.sh can edit this file.
+# A wrong checksum fails closed at install time. This makes it visible in CI.
+check_pins_out="$(bash tools/check-pins.sh 2>&1)" \
+    && ok "every pinned value agrees on every surface" \
+    || bad "check-pins: $check_pins_out"
+
+# The adversarial half. Each case copies the pin surfaces into a scratch tree,
+# mutates one, and runs the real checker against it, so the tests exercise the
+# shipped code rather than a paraphrase of it -- and the working tree is never
+# touched. Each asserts the specific finding, not merely a non-zero exit: a
+# checker that failed for some unrelated reason would otherwise look covered.
+pin_surface_copy() {
+    local dest file
+    dest="$(mktemp -d "$TMP/pins.XXXXXX")"
+    for file in VERSION README.md config.example.env lib/bootstrap/config.sh \
+        docs/CONFIGURATION.md checksums/NODE_SHA256.txt checksums/GH_SHA256.txt \
+        checksums/UV_SHA256.txt checksums/OH_MY_ZSH_REF.txt \
+        checksums/AI_CLI_VERSIONS.txt examples/provision-plan.example.sh \
+        examples/provision-plan.whisper.example.sh; do
+        mkdir -p "$dest/$(dirname "$file")"
+        cp -- "$file" "$dest/$file"
+    done
+    printf '%s\n' "$dest"
+}
+pin_reject() {  # label, expected finding fragment, root
+    local label="$1" fragment="$2" root="$3" out
+    if out="$(bash tools/check-pins.sh "$root" 2>&1)"; then
+        bad "check-pins accepted $label"
+        return
+    fi
+    grep -qF -- "$fragment" <<< "$out" \
+        && ok "check-pins rejects $label" \
+        || bad "check-pins rejected $label, but not for '$fragment': $out"
+}
+
+ZERO64=0000000000000000000000000000000000000000000000000000000000000000
+
+# A wrong checksum, in either recording.
+root="$(pin_surface_copy)"
+sed -i "s|UV_SHA256_X64:-[0-9a-f]\{64\}|UV_SHA256_X64:-$ZERO64|" "$root/lib/bootstrap/config.sh"
+pin_reject "a zeroed uv checksum in config.sh" "UV_SHA256_X64" "$root"
+
+root="$(pin_surface_copy)"
+sed -i "s|^x86_64-unknown-linux-gnu  [0-9a-f]\{64\}$|x86_64-unknown-linux-gnu  $ZERO64|" "$root/checksums/UV_SHA256.txt"
+pin_reject "a zeroed uv checksum in the manifest" \
+    "mismatch: checksums/UV_SHA256.txt records $ZERO64 for UV_SHA256_X64" "$root"
+
+# The case grep -qF cannot see: both values are still present in the file, just
+# recorded against the wrong architecture.
+for pair in \
+    'checksums/UV_SHA256.txt|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu' \
+    'checksums/NODE_SHA256.txt|linux-x64|linux-arm64' \
+    'checksums/GH_SHA256.txt|linux-amd64|linux-arm64'; do
+    IFS='|' read -r file x64_label arm_label <<< "$pair"
+    root="$(pin_surface_copy)"
+    python3 - "$root/$file" "$x64_label" "$arm_label" <<'SWAP'
+import re, sys
+path, x64_label, arm_label = sys.argv[1:4]
+text = open(path).read()
+grab = lambda label: re.search(r'^%s( +)([0-9a-f]{64})$' % re.escape(label), text, re.M)
+a, b = grab(x64_label), grab(arm_label)
+text = text[:a.start(2)] + b.group(2) + text[a.end(2):]
+b = grab(arm_label)
+text = text[:b.start(2)] + a.group(2) + text[b.end(2):]
+open(path, 'w').write(text)
+SWAP
+    pin_reject "x64 and arm64 swapped in $file" "mismatch: $file" "$root"
+done
+
+# One-sided bumps, in each direction and on each surface.
+root="$(pin_surface_copy)"
+sed -i 's|NODE_VERSION:-[0-9.]*|NODE_VERSION:-99.0.0|' "$root/lib/bootstrap/config.sh"
+pin_reject "a config-only Node.js bump" "for NODE_VERSION" "$root"
+
+root="$(pin_surface_copy)"
+sed -i 's|^@anthropic-ai/claude-code .*|@anthropic-ai/claude-code 99.0.0|' "$root/checksums/AI_CLI_VERSIONS.txt"
+pin_reject "a manifest-only Claude Code bump" \
+    "mismatch: checksums/AI_CLI_VERSIONS.txt records 99.0.0 for CLAUDE_CODE_VERSION" "$root"
+
+root="$(pin_surface_copy)"
+sed -i 's|^# UV_VERSION=.*|# UV_VERSION=0.0.1|' "$root/config.example.env"
+pin_reject "a stale config.example.env" "mismatch: config.example.env" "$root"
+
+root="$(pin_surface_copy)"
+sed -i 's|^CLAUDE_CODE_VERSION=.*|CLAUDE_CODE_VERSION=0.0.1|' "$root/docs/CONFIGURATION.md"
+pin_reject "a stale docs/CONFIGURATION.md" "mismatch: docs/CONFIGURATION.md" "$root"
+
+root="$(pin_surface_copy)"
+sed -i 's|Claude Code [0-9][0-9.]*|Claude Code 0.0.1|' "$root/README.md"
+pin_reject "a stale README.md" "mismatch: README.md" "$root"
+
+# The example plans: a plan is sourced before the bootstrap runs, so a pin here
+# beats the bundle default. Both shipped plans carried a uv override that spent
+# two releases stale, which meant the documented quick start installed uv
+# 0.12.12 against a bundle pinned to 0.12.13.
+root="$(pin_surface_copy)"
+printf 'export UV_VERSION=0.12.12\n' >> "$root/examples/provision-plan.example.sh"
+pin_reject "a re-added example-plan pin override" \
+    "unlabelled pin override: examples/provision-plan.example.sh sets UV_VERSION" "$root"
+
+# Extra, missing, duplicate and malformed recordings.
+root="$(pin_surface_copy)"
+printf 'riscv64-unknown-linux-gnu %s\n' "$ZERO64" >> "$root/checksums/UV_SHA256.txt"
+pin_reject "an unclaimed extra hash in a manifest" \
+    "unclaimed hash in checksums/UV_SHA256.txt" "$root"
+
+root="$(pin_surface_copy)"
+sed -i '/^# UV_VERSION=/d' "$root/config.example.env"
+pin_reject "a recording deleted from config.example.env" \
+    "missing or malformed: UV_VERSION in config.example.env" "$root"
+
+root="$(pin_surface_copy)"
+sed -n 's|^\(# PI_VERSION=.*\)$|\1|p' "$root/config.example.env" >> "$root/config.example.env"
+pin_reject "a duplicated recording" "duplicate: PI_VERSION" "$root"
+
+root="$(pin_surface_copy)"
+sed -i 's|OH_MY_ZSH_REF:-\([0-9a-f]\{39\}\)[0-9a-f]|OH_MY_ZSH_REF:-\1|' "$root/lib/bootstrap/config.sh"
+pin_reject "a ref truncated to 39 hex characters" \
+    "missing or malformed: OH_MY_ZSH_REF in lib/bootstrap/config.sh" "$root"
+
+root="$(pin_surface_copy)"
+sed -i 's|^\( *\)GH_VERSION=|\1RUSTUP_VERSION="${RUSTUP_VERSION:-1.2.3}"\n\1GH_VERSION=|' "$root/lib/bootstrap/config.sh"
+pin_reject "a new pin with no map entry" "unmapped pin: RUSTUP_VERSION" "$root"
+
+# And the case the whole design exists for: a full coordinated bump, applied by
+# the same writer refresh-pins.sh --write uses, must pass with no hand edit to
+# any test file.
+root="$(pin_surface_copy)"
+if SB_PIN_ROOT="$root" \
+    NODE_VERSION=25.1.0 NODE_SHA256_X64="${ZERO64/00/a1}" NODE_SHA256_ARM64="${ZERO64/00/a2}" \
+    GH_VERSION=2.101.0 GH_SHA256_X64="${ZERO64/00/b1}" GH_SHA256_ARM64="${ZERO64/00/b2}" \
+    UV_VERSION=0.13.0 UV_SHA256_X64="${ZERO64/00/c1}" UV_SHA256_ARM64="${ZERO64/00/c2}" \
+    CLAUDE_CODE_VERSION=2.2.0 CODEX_VERSION=0.155.0 PI_VERSION=0.86.0 \
+    OH_MY_ZSH_REF=1111111111111111111111111111111111111111 OMZ_DATE=2026-01-01 \
+    python3 tools/write-pins.py >/dev/null 2>&1; then
+    bash tools/check-pins.sh "$root" >/dev/null 2>&1 \
+        && ok "a coordinated bump passes with no hand-edited test literal" \
+        || bad "a coordinated bump written by tools/write-pins.py fails check-pins"
+else
+    bad "tools/write-pins.py could not apply a coordinated bump"
+fi
+
+# The reverse regression: no pin literal may creep back into this file. The
+# only 40/64-hex strings allowed are the synthetic fixture that drives
+# sb_sha256_from_manifest_body parsing, which is parser input and would keep
+# parsing correctly if it went stale, and the all-zero probe above.
+pin_literal_drift=0
+while IFS= read -r hit; do
+    [[ -n "$hit" ]] || continue
+    bad "pin literal back in tests/run-tests.sh: $hit"
+    pin_literal_drift=1
+done < <(grep -noE '\b[0-9a-f]{40}\b|\b[0-9a-f]{64}\b' tests/run-tests.sh \
+    | grep -vE ':(0{40}|0{64}|1{40})$' \
+    | grep -vE ':(fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6|6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2|ab9b309d4586403f024e100abaceb396616e178a553e2500c36087d180f09509)$' \
+    || true)
+(( pin_literal_drift == 0 )) && ok "no pin literal in tests/run-tests.sh outside the parser fixture"
 
 section "Fitness: example plans are safe to copy and paste"
 # A plan carries a shebang and the executable bit, so it looks runnable. It is
@@ -1081,48 +1254,6 @@ done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
     | grep -vF "server-bootstrap $declared" \
     | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"
-
-section "Fitness: README tool versions match the pinned defaults"
-# README.md's "What the run installs" table names five tool versions that
-# lib/bootstrap/config.sh also pins. tools/refresh-pins.sh --write rewrites the
-# config and the checksum files; before this test existed the README was left to
-# a log line, so a pin bump made the README quietly wrong. Same failure mode as
-# the VERSION drift above: a second copy of a value with nothing asserting the
-# two agree. The default is read out of config.sh by pattern, not by sourcing
-# it, so an ambiguous variable in the maintainer's environment cannot be
-# mistaken for what the repository pins -- the same reason refresh-pins.sh
-# reads it that way.
-readme_pin_drift=0
-while IFS='|' read -r label var; do
-    [[ -n "$label" ]] || continue
-    declared="$(sed -n "s|^[[:space:]]*$var=\"\\\${$var:-\(.*\)}\"[[:space:]]*\$|\1|p" \
-        lib/bootstrap/config.sh | head -n1)"
-    if [[ -z "$declared" ]]; then
-        bad "no default for $var in lib/bootstrap/config.sh"; readme_pin_drift=1; continue
-    fi
-    # Dots are escaped and the right-hand side is bounded, so a README claiming
-    # "pi 0.85.10" cannot satisfy a pinned "pi 0.85.1". \b on the left keeps
-    # "pi" from matching inside "api".
-    label_re="${label//./\\.}"
-    version_re="${declared//./\\.}"
-    grep -qE "\b$label_re $version_re([^0-9.]|\$)" README.md \
-        || { bad "README does not name the pinned $label ($declared)"; readme_pin_drift=1; }
-    # The forward check alone passes a README that names the pinned version and
-    # a stale one elsewhere, so every version this label carries must agree.
-    while IFS= read -r hit; do
-        [[ -n "$hit" ]] || continue
-        bad "README says '$hit' but config.sh pins $label $declared"
-        readme_pin_drift=1
-    done < <(grep -oE "\b$label_re [0-9]+\.[0-9]+\.[0-9]+" README.md \
-        | grep -vFx "$label $declared" || true)
-done <<'PINS'
-GitHub CLI|GH_VERSION
-Node.js|NODE_VERSION
-Claude Code|CLAUDE_CODE_VERSION
-OpenAI Codex|CODEX_VERSION
-pi|PI_VERSION
-PINS
-(( readme_pin_drift == 0 )) && ok "README tool versions match the pinned defaults"
 
 section "Results"
 printf 'PASS: %d   FAIL: %d\n' "$PASS" "$FAIL"
