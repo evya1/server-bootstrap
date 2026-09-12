@@ -31,6 +31,9 @@ lib/bootstrap/runtime.sh      persistent command and manifest installation
 lib/bootstrap/secrets.sh      API key file and its generated Zsh loader
 lib/bootstrap/report.sh       acceptance policy and system report
 tools/refresh-pins.sh         upstream pin drift report and rewrite
+tools/write-pins.py           applies a resolved pin set to every file recording it
+tools/check-pins.sh           offline check that those recordings still agree
+release/release-files.sh      the canonical release file set and its checksum manifest
 ```
 
 ## Execution order

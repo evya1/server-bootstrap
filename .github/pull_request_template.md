@@ -17,6 +17,8 @@
 - [ ] `VERSION` and `CHANGELOG.md` updated, or: nothing user-facing shipped
 - [ ] Pins touched? `tools/check-pins.sh` is clean, and `tools/refresh-pins.sh --check` reports no actionable drift
 - [ ] New file? registered in `lib/bootstrap/runtime.sh` **and** the verify list in `release/build-release.sh`
+- [ ] Tracked files changed? `bash release/release-files.sh write` and commit
+      `checksums/SHA256SUMS` (the suite fails until you do)
 
 ## Security model
 

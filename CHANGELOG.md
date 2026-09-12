@@ -38,13 +38,37 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   removed. A standing assertion fails if a 40- or 64-hex literal reappears in
   the suite outside the synthetic manifest-parser fixture. ([#23])
 
+- **`release/release-files.sh`** — one canonical definition of which files are
+  part of a release, used by the checksum manifest, the tar, the source stage
+  and the tests. It resolves the set from `git ls-files` in a checkout, and from
+  the shipped `checksums/SHA256SUMS` in an unpacked source bundle with no
+  `.git`, announcing which. `verify` compares the committed manifest exactly and
+  distinguishes extra, missing, duplicate, stale, malformed and misordered
+  entries, capped at 20 findings. ([#24])
+
 ### Fixed
 
+- **`release/build-release.sh` packaged untracked working-tree files.** It
+  walked the tree with `find`, so a scratch file or a personal note sitting in a
+  contributor's checkout was hashed into `checksums/SHA256SUMS` and packed into
+  the tar, the zip *and* the source zip, with every gate green. Release content
+  now comes from the canonical set, so an untracked file is excluded by
+  construction. For a clean checkout the archives are byte-identical to before.
+  ([#24])
+- **Nothing verified the committed `checksums/SHA256SUMS`.** Replacing all 64
+  lines with one meaningless line passed the suite, the privacy guard and the
+  release build. `release/release-files.sh verify` runs in the suite and fails
+  on any divergence. ([#24])
+- **The source zip gave every file mode 0755**, because the staging copy used
+  `install -D` with no mode. Modes are copied from the tree, which also makes a
+  rebuild from an unpacked source bundle byte-identical to a rebuild from a
+  checkout. ([#24])
 - **`docs/CONFIGURATION.md` named two superseded pins**: Claude Code `2.1.267`
   and Oh My Zsh `cd320b55`, both superseded by #21. Nothing rewrote or checked
   that file. ([#23])
 
 [#23]: https://github.com/evya1/server-bootstrap/issues/23
+[#24]: https://github.com/evya1/server-bootstrap/issues/24
 
 ## 2.2.2
 

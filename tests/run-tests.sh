@@ -246,6 +246,175 @@ else
     rm -rf "$scan_root"
 fi
 
+section "Fitness: the release file set and checksums/SHA256SUMS"
+# release/build-release.sh used to walk the working tree with three separate
+# `find .` passes, so an untracked scratch file in a contributor's checkout was
+# hashed into checksums/SHA256SUMS and packed into the tar, the zip and the
+# source zip -- and every gate stayed green, because a check that only asks
+# whether every tracked file is present cannot see an extra entry. The set is
+# now resolved once by release/release-files.sh and consumed by all of them.
+# See #24.
+release_files_out="$(bash release/release-files.sh verify 2>&1)" \
+    && ok "checksums/SHA256SUMS matches the release file set" \
+    || bad "release-files verify: $release_files_out"
+[[ "$(bash release/release-files.sh source 2>/dev/null)" == git ]] \
+    && ok "a git checkout resolves the release set from the tracked files" \
+    || bad "a git checkout did not resolve the release set from git"
+# The generation must stay where the tests think it is: this cannot start
+# passing because the manifest quietly moved to being written somewhere else.
+grep -q 'release-files.sh" write' release/build-release.sh \
+    && grep -q 'release-files.sh" list' release/build-release.sh \
+    && ok "the release build generates the manifest and the archives from one set" \
+    || bad "release/build-release.sh no longer uses the canonical release set"
+grep -qE "find \. -type f -not -path './release/dist/\*'" release/build-release.sh \
+    && bad "release/build-release.sh still walks the working tree for release content" \
+    || ok "no working-tree walk is left in the release content path"
+
+# Synthetic repositories, built with git init + git add: the index is what
+# git ls-files reads, so no commit and no user identity is needed, and nothing
+# here touches the network or the real tree. One tracked path deliberately
+# contains a space, because the manifest format splits on a fixed 64-hex + two
+# space prefix and a whitespace split would corrupt it.
+release_fixture() {
+    local dir i
+    dir="$(mktemp -d "$TMP/relset.XXXXXX")"
+    mkdir -p "$dir/lib" "$dir/docs"
+    printf 'alpha\n' > "$dir/alpha.txt"
+    printf 'beta\n' > "$dir/lib/beta.sh"
+    printf 'spaced\n' > "$dir/a file with spaces.txt"
+    for i in $(seq -w 1 25); do printf 'doc %s\n' "$i" > "$dir/docs/page-$i.md"; done
+    git -c init.defaultBranch=main init -q "$dir"
+    git -C "$dir" add -A
+    bash release/release-files.sh --root "$dir" write >/dev/null
+    git -C "$dir" add -A
+    printf '%s\n' "$dir"
+}
+release_reject() {  # label, expected finding fragment, root
+    local label="$1" fragment="$2" root="$3" out
+    if out="$(bash release/release-files.sh --root "$root" verify 2>&1)"; then
+        bad "release-files accepted $label"
+        return
+    fi
+    grep -qF -- "$fragment" <<< "$out" \
+        && ok "release-files rejects $label" \
+        || bad "release-files rejected $label, but not for '$fragment': $out"
+}
+
+root="$(release_fixture)"
+bash release/release-files.sh --root "$root" verify >/dev/null 2>&1 \
+    && ok "a clean synthetic tree verifies" || bad "a clean synthetic tree does not verify"
+grep -q '  a file with spaces\.txt$' "$root/checksums/SHA256SUMS" \
+    && ok "a path containing spaces round-trips through the manifest" \
+    || bad "a path containing spaces did not round-trip"
+
+# The case this issue exists for. The file must be absent from the set, and the
+# manifest must still verify -- an untracked scratch file in a contributor's
+# checkout is not a release problem and must not be reported as one.
+root="$(release_fixture)"
+printf 'local scratch\n' > "$root/scratch-probe.tmp"
+mkdir -p "$root/notes"; printf 'private\n' > "$root/notes/private-note.txt"
+if bash release/release-files.sh --root "$root" list 2>/dev/null \
+    | tr '\0' '\n' | grep -qE 'scratch-probe|private-note'; then
+    bad "an untracked file is in the release set"
+else
+    ok "an untracked file is not in the release set"
+fi
+bash release/release-files.sh --root "$root" verify >/dev/null 2>&1 \
+    && ok "an untracked file does not fail the manifest check" \
+    || bad "an untracked file falsely failed the manifest check"
+
+root="$(release_fixture)"; printf 'changed\n' >> "$root/alpha.txt"
+release_reject "a modified tracked file" "stale hash: alpha.txt" "$root"
+
+root="$(release_fixture)"; rm -- "$root/lib/beta.sh"
+release_reject "a tracked file deleted from disk" "recorded but not on disk: lib/beta.sh" "$root"
+
+root="$(release_fixture)"; sed -i '/  alpha\.txt$/d' "$root/checksums/SHA256SUMS"
+release_reject "a missing manifest entry" "missing from the manifest: alpha.txt" "$root"
+
+# Only reachable because the comparison is exact in both directions. A check
+# that asks only "is every tracked file recorded" passes this.
+root="$(release_fixture)"
+printf '%064d  zzz-not-in-the-release.txt\n' 0 >> "$root/checksums/SHA256SUMS"
+release_reject "an extra manifest entry" "not part of the release: zzz-not-in-the-release.txt" "$root"
+
+root="$(release_fixture)"
+duplicate_line="$(grep '  alpha\.txt$' "$root/checksums/SHA256SUMS")"
+printf '%s\n' "$duplicate_line" >> "$root/checksums/SHA256SUMS"
+release_reject "a duplicated manifest entry" "duplicate entry: alpha.txt" "$root"
+
+root="$(release_fixture)"
+sed -i "s|^[0-9a-f]\{64\}\(  alpha\.txt\)$|$(printf '%064d' 0)\1|" "$root/checksums/SHA256SUMS"
+release_reject "an incorrect hash" "stale hash: alpha.txt" "$root"
+
+root="$(release_fixture)"
+python3 - "$root/checksums/SHA256SUMS" <<'SWAP'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+lines[0], lines[1] = lines[1], lines[0]
+open(path, 'w').write("".join(l + "\n" for l in lines))
+SWAP
+release_reject "a misordered manifest" "manifest is not sorted" "$root"
+
+# A single bogus line must not bury the rest of the suite: 28 files means 29
+# findings, and the report is capped.
+root="$(release_fixture)"
+printf 'deadbeef  alpha.txt\n' > "$root/checksums/SHA256SUMS"
+bogus_out="$(bash release/release-files.sh --root "$root" verify 2>&1 || true)"
+grep -qF 'malformed line 1' <<< "$bogus_out" \
+    && grep -qF '... and ' <<< "$bogus_out" \
+    && (( $(wc -l <<< "$bogus_out") <= 25 )) \
+    && ok "a one-line bogus manifest fails with capped output" \
+    || bad "a one-line bogus manifest was not reported as expected: $bogus_out"
+
+# A path that GNU sha256sum would have to escape is refused rather than encoded,
+# because the escaping makes the format ambiguous to every naive parser.
+root="$(release_fixture)"
+printf 'odd\n' > "$root/back\\slash.txt"
+git -C "$root" add -A
+backslash_out="$(bash release/release-files.sh --root "$root" list 2>&1 || true)"
+grep -qF 'needs escaping in a checksum manifest' <<< "$backslash_out" \
+    && ok "a path needing checksum escaping is refused" \
+    || bad "a path with a backslash was not refused: $backslash_out"
+
+# In source-bundle mode the manifest is an input, so it decides what gets hashed
+# and packed: a path climbing out of the tree, or an empty manifest, must be
+# refused rather than acted on.
+root="$(release_fixture)"; rm -rf "$root/.git"
+printf '%064d  ../outside-the-tree.txt\n' 0 >> "$root/checksums/SHA256SUMS"
+escape_out="$(bash release/release-files.sh --root "$root" list 2>&1 || true)"
+grep -qF 'release path escapes the tree' <<< "$escape_out" \
+    && ok "a manifest path climbing out of the tree is refused" \
+    || bad "a manifest path with .. was not refused: $escape_out"
+
+root="$(release_fixture)"; rm -rf "$root/.git"; : > "$root/checksums/SHA256SUMS"
+if bash release/release-files.sh --root "$root" list >/dev/null 2>&1; then
+    bad "an empty manifest still produced a release set"
+else
+    ok "an empty manifest is refused"
+fi
+
+# The unpacked-source-bundle shape: no .git, so the set comes from the manifest
+# the bundle already ships. It is a weaker input and says so.
+root="$(release_fixture)"; rm -rf "$root/.git"
+[[ "$(bash release/release-files.sh --root "$root" source 2>/dev/null)" == manifest ]] \
+    && ok "a source bundle resolves the release set from the shipped manifest" \
+    || bad "a source bundle did not fall back to the manifest"
+bundle_out="$(bash release/release-files.sh --root "$root" verify 2>&1)"
+grep -qF 'tracked-set comparison is unavailable' <<< "$bundle_out" \
+    && ok "the manifest fallback is announced, not silent" \
+    || bad "the manifest fallback was silent: $bundle_out"
+
+# And with neither, it must refuse rather than fall back to walking the tree,
+# which is the behaviour this whole section exists to remove.
+root="$(release_fixture)"; rm -rf "$root/.git" "$root/checksums/SHA256SUMS"
+if bash release/release-files.sh --root "$root" list >/dev/null 2>&1; then
+    bad "a tree with no .git and no manifest still produced a release set"
+else
+    ok "a tree with no .git and no manifest is refused"
+fi
+
 section "Release rehearsal in CI"
 # release.yml only runs on a tag push, so its checkout is detached, one commit
 # deep, and carries a single tag. ci.yml is triggered by every push including
