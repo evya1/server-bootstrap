@@ -76,15 +76,20 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
 | **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.100.0 (`gh`) |
 | **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
-| **Agents** | Claude Code 2.1.268, OpenAI Codex 0.154.0 and pi 0.85.1, isolated in `/opt/ai-cli` |
+| **Agents** | Claude Code 2.1.269, OpenAI Codex 0.154.0 and pi 0.85.1, isolated in `/opt/ai-cli` |
 | **API keys** | One root-only `secrets.env` (mode 0600) loaded into every login shell, managed with `server-secrets` |
 | **Python** | uv, plus an isolated base environment |
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
 | **Hardware** | A `server-accept` report: CPU, RAM, disk speed, and — when a GPU is present — PCIe link width, thermals, ECC |
 
-Every version above is pinned by the release and checksum-verified before use.
-Set any version variable to `latest` to track upstream instead, or run
-`tools/refresh-pins.sh --check` to see how far behind the pins have fallen.
+Every version above is pinned by the release. The two guarantees behind that
+word are different and worth separating: **downloaded binary artifacts** —
+Node.js, uv and `gh` — are verified against SHA-256 values pinned in this
+repository before they are extracted, while the **AI CLIs** are exact-version
+npm installs whose integrity comes from npm and the registry, not from a
+checksum stored here; the bootstrap then verifies that npm installed the version
+it asked for. Set any version variable to `latest` to track upstream instead, or
+run `tools/refresh-pins.sh --check` to see how far behind the pins have fallen.
 
 ## How it works
 
@@ -165,7 +170,7 @@ Each subsystem can also be switched off individually — `INSTALL_GITHUB_CLI=0`,
 `INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and so on. See
 [CONFIGURATION](docs/CONFIGURATION.md) for the full list.
 
-Tools pinned to a checksummed upstream release — Node.js, uv, `gh`, and the AI
+Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, and the AI
 CLIs — are deliberately absent from the manifest. Adding one of them to it would
 install a second, unpinned copy.
 
@@ -198,6 +203,11 @@ label, so a half-applied bump or a swapped x64/arm64 pair fails in CI.
 
 Tag discovery uses `git ls-remote`, not the GitHub API, so it needs no token and
 works from restricted networks.
+
+A weekly workflow (`.github/workflows/pin-drift.yml`) runs the check and keeps
+**one** issue open while a release pin is behind, editing it rather than filing a
+new one each week. A moved branch head never opens it. A week where an upstream
+could not be resolved fails the run instead of reporting a clean result.
 
 ---
 

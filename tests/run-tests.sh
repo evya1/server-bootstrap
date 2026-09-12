@@ -771,6 +771,168 @@ DEPENDABOT
 fi
 (( dependabot_drift == 0 )) && ok "Dependabot proposes action updates against the pins"
 
+section "Weekly pin-drift workflow"
+# Pin drift is only found when somebody runs the check, and between releases
+# nobody does. The weekly job could not be built on the old --check: it exited 1
+# permanently because of the branch-head row, and 0 when every resolver failed.
+# With the exit codes #25 established it can tell three cases apart, and the
+# branch on each is a pure function driven here without a network or a token.
+# See #28.
+drift_opts_before="$-"
+# shellcheck source=tools/pin-drift-report.sh
+source tools/pin-drift-report.sh
+[[ "$-" == "$drift_opts_before" ]] \
+    && ok "sourcing pin-drift-report.sh does not change shell options" \
+    || bad "sourcing pin-drift-report.sh changed shell options"
+grep -qF '[[ "${BASH_SOURCE[0]}" != "$0" ]] || pin_drift_main "$@"' tools/pin-drift-report.sh \
+    && ok "pin-drift-report.sh has a main guard, so sourcing it calls no API" \
+    || bad "pin-drift-report.sh has no main guard"
+
+# Every combination of (refresh-pins exit, is an issue already open). The two
+# that matter: exit 0 with no issue files nothing at all, and exit 3 files the
+# issue *and* fails the run -- a check that could not check must not show a
+# green tick.
+drift_drift=0
+while IFS='|' read -r code has_issue expect_action expect_run; do
+    [[ -n "$code" ]] || continue
+    actual_run=green
+    actual_action="$(pin_drift_action "$code" "$has_issue")" || actual_run=red
+    [[ "$actual_action" == "$expect_action" && "$actual_run" == "$expect_run" ]] \
+        || { bad "pin-drift(exit $code, issue $has_issue) = $actual_action/$actual_run, expected $expect_action/$expect_run"; drift_drift=1; }
+done <<'DRIFT'
+0|no|nothing|green
+0|yes|close|green
+1|no|create|green
+1|yes|update|green
+3|no|create|red
+3|yes|update|red
+2|no|fail|red
+2|yes|fail|red
+99|no|fail|red
+DRIFT
+(( drift_drift == 0 )) && ok "the drift workflow files one issue only for actionable release drift"
+
+# The UNKNOWN banner is the visible half of "never a false green".
+printf 'nodejs 24.21.0 unknown UNKNOWN\n' > "$TMP/drift-report.txt"
+unknown_body="$(pin_drift_body 3 "$TMP/drift-report.txt")"
+stale_body="$(pin_drift_body 1 "$TMP/drift-report.txt")"
+grep -qF 'This report is incomplete' <<< "$unknown_body" \
+    && ok "an UNKNOWN result says so at the top of the issue" \
+    || bad "an UNKNOWN result is reported as an ordinary drift issue"
+grep -qF 'This report is incomplete' <<< "$stale_body" \
+    && bad "an ordinary drift issue carries the UNKNOWN banner" \
+    || ok "an ordinary drift issue carries no UNKNOWN banner"
+grep -qF 'nodejs 24.21.0 unknown UNKNOWN' <<< "$stale_body" \
+    && ok "the issue body quotes the report verbatim" || bad "the issue body drops the report"
+
+# The workflow itself. It is scheduled, it can be dispatched by hand, it holds
+# only the permission it needs, and it must never rewrite a pin: a bump needs a
+# CHANGELOG entry and a human reading the upstream diff.
+drift_workflow=.github/workflows/pin-drift.yml
+workflow_drift=0
+if [[ ! -f "$drift_workflow" ]]; then
+    bad "no weekly pin-drift workflow"
+    workflow_drift=1
+else
+    drift_body="$(grep -vE '^[[:space:]]*#' "$drift_workflow")"
+    while IFS='|' read -r label needle; do
+        [[ -n "$label" ]] || continue
+        grep -qE -- "$needle" <<< "$drift_body" \
+            || { bad "the pin-drift workflow does not $label"; workflow_drift=1; }
+    done <<'DRIFTWF'
+run on a schedule|^[[:space:]]+- cron:
+allow a manual run|^[[:space:]]*workflow_dispatch:
+grant issues: write|^[[:space:]]+issues:[[:space:]]*write$
+bound its runtime|^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+$
+run the check|refresh-pins\.sh --check
+hand the result to the reporter|pin-drift-report\.sh
+DRIFTWF
+    grep -qE 'refresh-pins\.sh[^|]*--write' <<< "$drift_body" \
+        && { bad "the pin-drift workflow can rewrite pins"; workflow_drift=1; }
+    grep -qE '^[[:space:]]+contents:[[:space:]]*write$' <<< "$drift_body" \
+        && { bad "the pin-drift workflow takes contents: write"; workflow_drift=1; }
+    # The report is upstream-controlled text. It reaches the issue through a
+    # file, never through a command line.
+    grep -qF -- '--body-file' tools/pin-drift-report.sh \
+        || { bad "the drift report is interpolated into a command instead of a file"; workflow_drift=1; }
+fi
+(( workflow_drift == 0 )) && ok "the pin-drift workflow reports weekly and cannot write"
+
+section "Fitness: documentation says what the code does"
+# Three claims in this repository were true when written and stopped being true
+# without anything noticing: the --write file list, the CHANGELOG's explanation
+# of why a bug was undetectable, and what "checksum-verified" covers. See #29.
+
+# 1. The --write file list. tools/write-pins.py is the writer, so the files it
+# names are the answer; three prose lists have to agree with it. checksums/*.txt
+# collapses to the directory, which is how all three write it.
+doc_list_drift=0
+while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    [[ "$target" == checksums/* ]] && target=checksums/
+    while IFS='|' read -r where file; do
+        [[ -n "$where" ]] || continue
+        grep -qF -- "$target" "$file" \
+            || { bad "$where does not name $target, which tools/write-pins.py rewrites"; doc_list_drift=1; }
+    done <<'LISTS'
+README.md's --write paragraph|README.md
+docs/CONFIGURATION.md|docs/CONFIGURATION.md
+the refresh-pins.sh banner|tools/refresh-pins.sh
+LISTS
+done < <(grep -oE '"[A-Za-z0-9_./-]+\.(sh|md|env|txt|py)"' tools/write-pins.py \
+    | tr -d '"' | LC_ALL=C sort -u)
+(( doc_list_drift == 0 )) && ok "every file --write rewrites is named everywhere --write is documented"
+# And nothing may claim the rewrite is atomic across files: it validates every
+# substitution before the first write, but the writes are per file.
+grep -qiF 'atomic across' tools/write-pins.py \
+    && grep -qiF 'atomic across' docs/CONFIGURATION.md \
+    && ok "the rewrite's guarantee is stated as validation, not atomicity" \
+    || bad "the multi-file rewrite is described as atomic somewhere"
+
+# 2. CHANGELOG. An Unreleased heading is what stops the next merged change going
+# unrecorded, which is how #20, #21 and #22 came to be recorded nowhere.
+changelog_drift=0
+first_heading="$(grep -m1 '^## ' CHANGELOG.md)"
+[[ "$first_heading" == "## Unreleased" ]] \
+    || { bad "CHANGELOG.md's first section is '$first_heading', not Unreleased"; changelog_drift=1; }
+declared="$(tr -d '[:space:]' < VERSION)"
+grep -qF "## $declared" CHANGELOG.md \
+    || { bad "CHANGELOG.md has no section for the released version $declared"; changelog_drift=1; }
+# The 2.2.2 notes explain the bug by saying every CI job checks out a branch.
+# #22 made that false. The sentence stays as history; the correction has to be
+# next to it, or the release notes read as current fact.
+if grep -qF 'Every CI job checks out a branch' CHANGELOG.md; then
+    grep -qF 'Corrected 2026-09-12' CHANGELOG.md \
+        || { bad "CHANGELOG.md still claims every CI job checks out a branch, uncorrected"; changelog_drift=1; }
+fi
+(( changelog_drift == 0 )) && ok "CHANGELOG.md has an Unreleased section and no uncorrected claim"
+
+# 3. "Checksum-verified" covers Node.js, uv and gh, whose downloaded artifacts
+# are checked against SHA-256 values pinned here. It does not cover the AI CLIs:
+# lib/bootstrap/ai_cli.sh runs one npm install at exact versions and then reads
+# the installed package.json back. That is a real guarantee, from npm and the
+# registry, but a different one.
+grep -qiE 'sha256|checksum' lib/bootstrap/ai_cli.sh \
+    && bad "lib/bootstrap/ai_cli.sh now has a checksum path; the documentation split needs revisiting" \
+    || ok "the AI CLI installer still has no checksum path, as the docs now say"
+# A literal check, so it is brittle to rewording on purpose: each of these
+# sentences claimed a repository checksum covers the npm CLIs.
+claim_drift=0
+while IFS='|' read -r file phrase; do
+    [[ -n "$file" ]] || continue
+    grep -qF -- "$phrase" "$file" \
+        && { bad "$file still claims: $phrase"; claim_drift=1; }
+done <<'CLAIMS'
+README.md|checksum-verified before use
+README.md|Tools pinned to a checksummed upstream release
+docs/CONFIGURATION.md|Tools that are pinned to a checksummed upstream release
+CLAIMS
+grep -qF 'integrity comes from npm and the registry' README.md \
+    || { bad "README.md does not say where the AI CLIs' integrity comes from"; claim_drift=1; }
+grep -qF 'no SHA-256' docs/CONFIGURATION.md \
+    || { bad "docs/CONFIGURATION.md does not distinguish the two guarantees"; claim_drift=1; }
+(( claim_drift == 0 )) && ok "no document claims a repository checksum covers the npm CLIs"
+
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
 # document exists, names the operations it forbids, and is linked from the
