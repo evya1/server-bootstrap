@@ -204,10 +204,30 @@ token, and it works from restricted networks.
 To refresh the pins themselves rather than resolve at run time:
 
 ```bash
-tools/refresh-pins.sh            # report drift, exit 1 when stale
+tools/refresh-pins.sh            # report drift
+tools/refresh-pins.sh --check --all   # also fail on branch-head movement
 tools/refresh-pins.sh --write    # rewrite every file that records a pin
 tools/check-pins.sh              # assert those files still agree, offline
 ```
+
+`--check` exit codes, which automation can rely on:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | nothing actionable. Every release pin is `CURRENT`; a branch head that has `MOVED` is reported and tolerated. |
+| `1` | a pinned release is `STALE`. With `--all`, a `MOVED` branch head produces this too. |
+| `2` | usage error. |
+| `3` | nothing actionable was found, but at least one row is `UNKNOWN`, so the answer is not trustworthy. |
+
+`1` outranks `exit 3`: a definitely stale pin is work whether or not another row
+failed to resolve. An upstream that cannot be resolved is never reported as
+`CURRENT`, and `--write` refuses to write a value it could not resolve.
+
+Node.js, `gh`, uv, Claude Code, Codex and pi resolve to a published release — a
+git tag or an npm `dist-tag` — and stay put until upstream cuts a new one. Oh My
+Zsh publishes no releases, so its pin tracks `refs/heads/master`, which moves
+several times a day. Moving it is a deliberate act: `--write` leaves it alone
+unless `--all` is given.
 
 ## VS Code Remote-SSH extensions
 

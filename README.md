@@ -172,9 +172,20 @@ install a second, unpinned copy.
 ### Keeping the pinned versions fresh
 
 ```bash
-tools/refresh-pins.sh            # report drift against upstream, exit 1 when stale
+tools/refresh-pins.sh            # report drift against upstream
+tools/refresh-pins.sh --check --all   # also fail when a branch head has moved
 tools/refresh-pins.sh --write    # apply it everywhere the value is recorded
 tools/check-pins.sh              # assert those recordings still agree, offline
+```
+
+`--check` exits `0` when nothing is actionable, `1` when a pinned **release** is
+behind, `2` on a usage error, and `3` when an upstream could not be resolved at
+all — which is deliberately not `0`, so a run whose network was broken cannot
+read as a clean week. Six pins track published releases; the Oh My Zsh pin
+tracks a branch head that moves several times a day, so its movement is reported
+as `MOVED` and does not fail the check unless you ask with `--all`.
+
+```bash
 ```
 
 `--write` rewrites every file that records a pinned value:
