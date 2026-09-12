@@ -311,6 +311,28 @@ The short version of what is now true that was not before:
   regression assertions cover the three defects and were each confirmed failing
   against the previous builder. ([#47])
 
+- **Two assertions narrowed to what they actually enforce.** Both were found by
+  probing the repository's own guards with fixtures rather than by CI:
+
+  - `release.yml runs exactly one repository script, the preflight, and nothing
+    else` was not true of the "nothing else". The guard counts `run:` *steps*
+    and scans for `.sh` paths, so a second step and an extra script were both
+    caught — but extra commands **inside** the one legitimate `run:` step were
+    not, and neither `curl … | bash` nor `make extra` names a script or adds a
+    step. The shared-preflight design is unchanged and no command extractor
+    came back; instead the single permitted step is matched as an exact
+    literal, which is a comparison rather than a parser, and the assertion now
+    says what it checks.
+  - `tools/check-pins.sh` guarded `checksums/` files against an unmapped *hash*
+    but not against an unmapped *keyed version row*, so
+    `@evil-corp/backdoor-agent 9.9.9` appended to `AI_CLI_VERSIONS.txt` passed
+    clean. The two directions of #23's exact-mapping contract are now
+    symmetric. Only a line that is exactly `<token> <semver>` counts, so prose
+    such as `Node.js 24.21.0 official release checksums:` is not mistaken for a
+    recording. Severity was low — that file is written by `tools/write-pins.py`
+    and read by no runtime code, so an extra row could not change what is
+    installed. ([#47])
+
 - **Three documentation claims that had stopped being true.** `README.md`,
   `docs/CONFIGURATION.md` and the `refresh-pins.sh` banner all listed the
   `--write` targets as "config.sh, config.example.env, checksums/" — wrong since
