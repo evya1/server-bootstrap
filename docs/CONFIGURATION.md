@@ -49,7 +49,7 @@ EXTRA_PACKAGES="postgresql-client redis-tools"
 SKIP_PACKAGES="nmap tcpdump"
 ```
 
-Tools that are pinned to a checksummed upstream release — Node.js, uv, `gh`,
+Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`,
 and the AI CLIs — are deliberately absent from the manifest. Adding one of them
 to it would install a second, unpinned copy.
 
@@ -100,6 +100,11 @@ CLAUDE_CODE_DISABLE_AUTOUPDATER=1
 CODEX_VERSION=0.154.0
 PI_VERSION=0.85.1
 ```
+
+These are exact-version npm installs. Unlike Node.js, uv and `gh`, no SHA-256
+in this repository covers them: their integrity comes from npm and the registry.
+What the bootstrap adds is a check that npm installed the version it was asked
+for, read back from the installed `package.json`.
 
 The bootstrap invokes npm directly while already running as root; it does not
 run `sudo npm`. Package versions are verified from their installed
@@ -209,6 +214,14 @@ tools/refresh-pins.sh --check --all   # also fail on branch-head movement
 tools/refresh-pins.sh --write    # rewrite every file that records a pin
 tools/check-pins.sh              # assert those files still agree, offline
 ```
+
+`--write` rewrites every file that records a pinned value: `lib/bootstrap/config.sh`,
+`config.example.env`, `checksums/*.txt`, `README.md` and `docs/CONFIGURATION.md`.
+`CHANGELOG.md` stays a hand edit, because it records what a bump means. Every
+substitution is resolved before any file is written, so a file whose patterns no
+longer fit aborts the run before the first write — but the writes themselves are
+per file and are not atomic across files: an I/O failure between two of them
+leaves the tree partly updated, and the remedy is to rerun.
 
 `--check` exit codes, which automation can rely on:
 

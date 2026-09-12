@@ -4,6 +4,22 @@
 
 Nothing here has shipped. `VERSION` is still `2.2.2`.
 
+### Merged after the 2.2.2 release, previously unrecorded
+
+- **[#20][]** — `README.md`'s five tool versions are asserted against the pinned
+  defaults in `lib/bootstrap/config.sh`, and `tools/refresh-pins.sh --write`
+  rewrites them. Before it, a pin bump left the README quietly wrong.
+- **[#21][]** — three stale pins refreshed: uv `0.12.12` → `0.12.13`, Claude
+  Code `2.1.267` → `2.1.268`, and the Oh My Zsh ref `cd320b55` → `c6e66ede`.
+- **[#22][]** — `ci.yml`'s `tag-checkout` job. `release.yml` runs only on a tag
+  push, so its checkout is detached, one commit deep, and carries one tag; CI
+  saw that shape only on the tag push itself, which is after the version number
+  has been spent. The job manufactures it on every push and pull request. It
+  rehearses the Git *metadata* a tag build sees, not the tag event.
+
+[#20]: https://github.com/evya1/server-bootstrap/pull/20
+[#21]: https://github.com/evya1/server-bootstrap/pull/21
+
 ### Added
 
 - **`tools/check-pins.sh`** — one exact, keyed map of every pinned value against
@@ -124,6 +140,23 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 
 ### Fixed
 
+- **Three documentation claims that had stopped being true.** `README.md`,
+  `docs/CONFIGURATION.md` and the `refresh-pins.sh` banner all listed the
+  `--write` targets as "config.sh, config.example.env, checksums/" — wrong since
+  #20 added `README.md`, and wrong again once `docs/CONFIGURATION.md` joined
+  them. The 2.2.2 notes explained a bug by saying every CI job checks out a
+  branch, which #22 made false; the sentence stays as history with a dated
+  correction beside it. And `README.md` claimed every pinned version is
+  "checksum-verified before use": true for Node.js, uv and `gh`, whose
+  downloaded artifacts are checked against SHA-256 values pinned here, but not
+  for the AI CLIs, which are exact-version npm installs whose integrity comes
+  from npm and the registry. A fitness section now derives the `--write` list
+  from `tools/write-pins.py` itself and fails if any of the three prose lists
+  disagrees. ([#29])
+- **`tools/refresh-pins.sh` printed `tr: write error: Broken pipe`** on every
+  run: `grep -m1` exits on the first match and SIGPIPEs the `tr` feeding it.
+  Harmless on a terminal, but the weekly workflow captures stderr into the issue
+  body, so it reached a reader as an apparent error. ([#29])
 - **`tools/refresh-pins.sh` reported an unreachable upstream as `CURRENT` and
   exited 0.** An empty resolution fell back to the pinned value, which then
   compared equal to itself. With failing `curl` and `git` on `PATH`, all seven
@@ -159,6 +192,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#26]: https://github.com/evya1/server-bootstrap/issues/26
 [#27]: https://github.com/evya1/server-bootstrap/issues/27
 [#28]: https://github.com/evya1/server-bootstrap/issues/28
+[#29]: https://github.com/evya1/server-bootstrap/issues/29
 
 ## 2.2.2
 
@@ -186,6 +220,14 @@ exactly the situation that policy is written for.
 
   Every CI job checks out a branch, so no CI job could reproduce this; only the
   tag-triggered release workflow could.
+
+  > **Corrected 2026-09-12.** That was true when 2.2.2 shipped and is why the bug
+  > escaped, so it is left standing rather than rewritten. It is no longer true:
+  > [#22][] added `ci.yml`'s `tag-checkout` job, which manufactures a detached,
+  > depth-1, single-tag checkout on every push and pull request. See the
+  > `Unreleased` section above.
+
+[#22]: https://github.com/evya1/server-bootstrap/pull/22
 
 ## 2.2.1
 

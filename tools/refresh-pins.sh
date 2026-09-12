@@ -117,8 +117,11 @@ refresh_pins_npm_latest() {
 }
 
 refresh_pins_node_latest_lts() {
+    # grep -m1 exits on the first match and SIGPIPEs tr, which prints "tr: write
+    # error: Broken pipe" to stderr. Harmless, but the weekly workflow captures
+    # stderr into the issue body, so it reached a reader as an apparent error.
     sb_retry 3 curl -fsSL --proto '=https' --tlsv1.2 https://nodejs.org/dist/index.json 2>/dev/null \
-        | tr '{' '\n' | grep -m1 '"lts":"' \
+        | { tr '{' '\n' 2>/dev/null; } | grep -m1 '"lts":"' \
         | sed -n 's/.*"version":"v\([0-9][0-9.]*\)".*/\1/p'
 }
 

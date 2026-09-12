@@ -82,9 +82,14 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
 | **Hardware** | A `server-accept` report: CPU, RAM, disk speed, and — when a GPU is present — PCIe link width, thermals, ECC |
 
-Every version above is pinned by the release and checksum-verified before use.
-Set any version variable to `latest` to track upstream instead, or run
-`tools/refresh-pins.sh --check` to see how far behind the pins have fallen.
+Every version above is pinned by the release. The two guarantees behind that
+word are different and worth separating: **downloaded binary artifacts** —
+Node.js, uv and `gh` — are verified against SHA-256 values pinned in this
+repository before they are extracted, while the **AI CLIs** are exact-version
+npm installs whose integrity comes from npm and the registry, not from a
+checksum stored here; the bootstrap then verifies that npm installed the version
+it asked for. Set any version variable to `latest` to track upstream instead, or
+run `tools/refresh-pins.sh --check` to see how far behind the pins have fallen.
 
 ## How it works
 
@@ -165,7 +170,7 @@ Each subsystem can also be switched off individually — `INSTALL_GITHUB_CLI=0`,
 `INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and so on. See
 [CONFIGURATION](docs/CONFIGURATION.md) for the full list.
 
-Tools pinned to a checksummed upstream release — Node.js, uv, `gh`, and the AI
+Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, and the AI
 CLIs — are deliberately absent from the manifest. Adding one of them to it would
 install a second, unpinned copy.
 

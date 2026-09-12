@@ -858,6 +858,81 @@ DRIFTWF
 fi
 (( workflow_drift == 0 )) && ok "the pin-drift workflow reports weekly and cannot write"
 
+section "Fitness: documentation says what the code does"
+# Three claims in this repository were true when written and stopped being true
+# without anything noticing: the --write file list, the CHANGELOG's explanation
+# of why a bug was undetectable, and what "checksum-verified" covers. See #29.
+
+# 1. The --write file list. tools/write-pins.py is the writer, so the files it
+# names are the answer; three prose lists have to agree with it. checksums/*.txt
+# collapses to the directory, which is how all three write it.
+doc_list_drift=0
+while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    [[ "$target" == checksums/* ]] && target=checksums/
+    while IFS='|' read -r where file; do
+        [[ -n "$where" ]] || continue
+        grep -qF -- "$target" "$file" \
+            || { bad "$where does not name $target, which tools/write-pins.py rewrites"; doc_list_drift=1; }
+    done <<'LISTS'
+README.md's --write paragraph|README.md
+docs/CONFIGURATION.md|docs/CONFIGURATION.md
+the refresh-pins.sh banner|tools/refresh-pins.sh
+LISTS
+done < <(grep -oE '"[A-Za-z0-9_./-]+\.(sh|md|env|txt|py)"' tools/write-pins.py \
+    | tr -d '"' | LC_ALL=C sort -u)
+(( doc_list_drift == 0 )) && ok "every file --write rewrites is named everywhere --write is documented"
+# And nothing may claim the rewrite is atomic across files: it validates every
+# substitution before the first write, but the writes are per file.
+grep -qiF 'atomic across' tools/write-pins.py \
+    && grep -qiF 'atomic across' docs/CONFIGURATION.md \
+    && ok "the rewrite's guarantee is stated as validation, not atomicity" \
+    || bad "the multi-file rewrite is described as atomic somewhere"
+
+# 2. CHANGELOG. An Unreleased heading is what stops the next merged change going
+# unrecorded, which is how #20, #21 and #22 came to be recorded nowhere.
+changelog_drift=0
+first_heading="$(grep -m1 '^## ' CHANGELOG.md)"
+[[ "$first_heading" == "## Unreleased" ]] \
+    || { bad "CHANGELOG.md's first section is '$first_heading', not Unreleased"; changelog_drift=1; }
+declared="$(tr -d '[:space:]' < VERSION)"
+grep -qF "## $declared" CHANGELOG.md \
+    || { bad "CHANGELOG.md has no section for the released version $declared"; changelog_drift=1; }
+# The 2.2.2 notes explain the bug by saying every CI job checks out a branch.
+# #22 made that false. The sentence stays as history; the correction has to be
+# next to it, or the release notes read as current fact.
+if grep -qF 'Every CI job checks out a branch' CHANGELOG.md; then
+    grep -qF 'Corrected 2026-09-12' CHANGELOG.md \
+        || { bad "CHANGELOG.md still claims every CI job checks out a branch, uncorrected"; changelog_drift=1; }
+fi
+(( changelog_drift == 0 )) && ok "CHANGELOG.md has an Unreleased section and no uncorrected claim"
+
+# 3. "Checksum-verified" covers Node.js, uv and gh, whose downloaded artifacts
+# are checked against SHA-256 values pinned here. It does not cover the AI CLIs:
+# lib/bootstrap/ai_cli.sh runs one npm install at exact versions and then reads
+# the installed package.json back. That is a real guarantee, from npm and the
+# registry, but a different one.
+grep -qiE 'sha256|checksum' lib/bootstrap/ai_cli.sh \
+    && bad "lib/bootstrap/ai_cli.sh now has a checksum path; the documentation split needs revisiting" \
+    || ok "the AI CLI installer still has no checksum path, as the docs now say"
+# A literal check, so it is brittle to rewording on purpose: each of these
+# sentences claimed a repository checksum covers the npm CLIs.
+claim_drift=0
+while IFS='|' read -r file phrase; do
+    [[ -n "$file" ]] || continue
+    grep -qF -- "$phrase" "$file" \
+        && { bad "$file still claims: $phrase"; claim_drift=1; }
+done <<'CLAIMS'
+README.md|checksum-verified before use
+README.md|Tools pinned to a checksummed upstream release
+docs/CONFIGURATION.md|Tools that are pinned to a checksummed upstream release
+CLAIMS
+grep -qF 'integrity comes from npm and the registry' README.md \
+    || { bad "README.md does not say where the AI CLIs' integrity comes from"; claim_drift=1; }
+grep -qF 'no SHA-256' docs/CONFIGURATION.md \
+    || { bad "docs/CONFIGURATION.md does not distinguish the two guarantees"; claim_drift=1; }
+(( claim_drift == 0 )) && ok "no document claims a repository checksum covers the npm CLIs"
+
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
 # document exists, names the operations it forbids, and is linked from the
