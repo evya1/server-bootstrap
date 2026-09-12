@@ -283,8 +283,8 @@ The short version of what is now true that was not before:
 
 ### Fixed
 
-- **Release artifacts no longer depend on the builder's timezone, and every
-  published artifact is now inside the reproducibility gate.** Three defects,
+- **Release archives no longer depend on the builder's timezone, and all four
+  of them are now inside the reproducibility gate.** Three defects,
   found while re-verifying the release evidence rather than by CI, because each
   one lived in a gate that reported success without covering what its output
   claimed:
@@ -306,10 +306,13 @@ The short version of what is now true that was not before:
     the suite never ran. It now reports `skipped`, the way `SB_RELEASE_SCAN=0`
     already reported `release_scan`.
 
-  The artifact list is named once and drives the gate, the report and the final
-  check together, so a future artifact cannot be published outside them. Ten
-  regression assertions cover the three defects and were each confirmed failing
-  against the previous builder. ([#47])
+  The archive list is named once and drives the gate, the report and the final
+  check together, so a future archive cannot be published outside them. Scope,
+  stated exactly: that list is the four archives, not the nine assets
+  `release.yml` uploads -- the two sidecars, the manifest and the two standalone
+  first-run files are derived from or describe those archives and are
+  deliberately not double-built. Ten regression assertions cover the three
+  defects and were each confirmed failing against the previous builder. ([#47])
 
 - **Two assertions narrowed to what they actually enforce.** Both were found by
   probing the repository's own guards with fixtures rather than by CI:
@@ -331,7 +334,25 @@ The short version of what is now true that was not before:
     such as `Node.js 24.21.0 official release checksums:` is not mistaken for a
     recording. Severity was low — that file is written by `tools/write-pins.py`
     and read by no runtime code, so an extra row could not change what is
-    installed. ([#47])
+    installed.
+
+  A follow-up audit found both of those first attempts still incomplete, and
+  both are now closed:
+
+  - Checking that each row's *value* was a recognised pin said nothing about the
+    key it was paired with, so `@evil-corp/backdoor-agent 2.1.269` passed —
+    `2.1.269` genuinely is claude-code's pinned version. The manifest must now
+    **equal** its canonical key-to-version mapping in both directions, which
+    rejects an unknown key on a valid version, a known key on another tool's
+    version, a missing key, a duplicate key, an extra key, a malformed row and a
+    stale value. The expectation is derived from the existing pin table rather
+    than a second list, so a coordinated bump still needs no test edits.
+  - The workflow guard compared a **de-duplicated** action list, so a second
+    identical `Publish assets` step — correctly pinned, right version comment,
+    and accepted by `actionlint` — passed, and would have uploaded the release
+    twice. The same held for a duplicated checkout. Multiplicity is now part of
+    the comparison: exactly one checkout and exactly one release-upload action.
+    ([#47])
 
 - **Three documentation claims that had stopped being true.** `README.md`,
   `docs/CONFIGURATION.md` and the `refresh-pins.sh` banner all listed the

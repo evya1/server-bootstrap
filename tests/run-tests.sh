@@ -195,13 +195,13 @@ grep -qF 'rm -rf "$DIST"' release/build-release.sh \
     && grep -qF 'discarding' release/build-release.sh \
     && ok "a failed scan discards the staged release" \
     || bad "a failed scan leaves release/dist in place"
-# Re-hashing after the scans now covers every published artifact, not the three
+# Re-hashing after the scans now covers all four release archives, not the three
 # it used to name: the source zip was outside it, so bytes appended to that
 # asset after creation survived to upload. See #47.
-grep -qF 'release artifacts changed after the reproducibility gate' release/build-release.sh \
+grep -qF 'release archives changed after the reproducibility gate' release/build-release.sh \
     && grep -qF 'hash_artifacts "$DIST"' release/build-release.sh \
-    && ok "every published artifact is re-verified after scanning" \
-    || bad "nothing re-verifies every published artifact after the scans"
+    && ok "all four release archives are re-verified after scanning" \
+    || bad "nothing re-verifies all four release archives after the scans"
 grep -qF '"release_scan": "$SCAN_STATUS"' release/build-release.sh \
     && ok "the release manifest records the scan result" \
     || bad "the release manifest does not record the scan result"
@@ -530,7 +530,7 @@ grep -q 'MANIFEST_STALE=1' tests/run-tests.sh \
     && ok "a stale manifest is flagged for the Results section" \
     || bad "the stale-manifest flag is no longer wired to the Results section"
 
-# --- every published artifact is inside the reproducibility gate (#47) -----
+# --- all four release archives are inside the reproducibility gate (#47) ---
 # The source zip is uploaded by release.yml, but it used to be built once,
 # after the two-pass comparison, and appeared in neither the comparison, the
 # manifest, the human summary nor the final re-verification. Bytes could be
@@ -550,7 +550,7 @@ release_build_fixture() {  # -> a disposable copy of the tracked tree
 release_build() {  # dir, TZ -> build output on stdout+stderr, exit code preserved
     ( cd "$1" && SB_RELEASE_SCAN=0 TZ="${2:-UTC}" bash release/build-release.sh --skip-tests 2>&1 )
 }
-artifact_hashes() {  # dir -> "<name> <sha>" for every published artifact
+artifact_hashes() {  # dir -> "<name> <sha>" for each of the four archives
     local d="$1/release/dist" v; v="$(tr -d '[:space:]' < VERSION)"
     ( cd "$d" 2>/dev/null && sha256sum "server-bootstrap-$v.tar" "server-bootstrap-$v.tar.gz" \
         "server-bootstrap-$v.zip" "server-bootstrap-$v-source.zip" 2>/dev/null \
@@ -562,9 +562,9 @@ tz_a="$(release_build_fixture)"; tz_b="$(release_build_fixture)"
 release_build "$tz_a" UTC          >/dev/null 2>&1
 release_build "$tz_b" Europe/Paris >/dev/null 2>&1
 if [[ -n "$(artifact_hashes "$tz_a")" && "$(artifact_hashes "$tz_a")" == "$(artifact_hashes "$tz_b")" ]]; then
-    ok "every release artifact is byte-identical under TZ=UTC and TZ=Europe/Paris"
+    ok "all four release archives are byte-identical under TZ=UTC and TZ=Europe/Paris"
 else
-    bad "release artifacts depend on the builder's timezone: $(diff <(artifact_hashes "$tz_a") <(artifact_hashes "$tz_b") | tr '\n' ' ')"
+    bad "release archives depend on the builder's timezone: $(diff <(artifact_hashes "$tz_a") <(artifact_hashes "$tz_b") | tr '\n' ' ')"
 fi
 # And the mechanism that guarantees it, so a future edit cannot drop it silently.
 [[ "$(grep -c 'TZ=UTC zip -X -q' release/build-release.sh)" == 2 ]] \
@@ -608,7 +608,7 @@ fx="$(release_build_fixture)"
 python3 - "$fx/release/build-release.sh" <<'PY'
 import sys
 p=sys.argv[1]; t=open(p).read()
-a='# Publication is only safe if the scans left the artifacts alone.'
+a='if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then'
 assert t.count(a)==1
 t=t.replace(a, 'printf TAMPER >> "$DIST/$NAME-$VERSION-source.zip"\n'+a,1)
 open(p,'w').write(t)
@@ -640,25 +640,82 @@ grep -qF 'source sha256' release/build-release.sh \
     && ok "the human summary prints the source zip's sha256" \
     || bad "the human summary no longer prints the source zip's sha256"
 
-# An unmapped keyed version row in checksums/ must be reported, the way an
-# unmapped hash already is. Before #47 the two directions were asymmetric: an
-# extra architecture line was caught, an extra "@scope/package 1.2.3" row was
-# not. Driven against a scratch tree via --root, never the real checksums.
-pin_row_fixture="$(mktemp -d "$TMP/pinrow.XXXXXX")"
-git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$pin_row_fixture"
-if bash tools/check-pins.sh "$pin_row_fixture" >/dev/null 2>&1; then
-    printf '@evil-corp/backdoor-agent 9.9.9\n' >> "$pin_row_fixture/checksums/AI_CLI_VERSIONS.txt"
-    pin_row_out="$(bash tools/check-pins.sh "$pin_row_fixture" 2>&1)" && pin_row_rc=0 || pin_row_rc=$?
-    (( pin_row_rc != 0 )) && grep -qF 'unclaimed version row' <<< "$pin_row_out" \
-        && ok "an unmapped keyed version row in checksums/ is reported" \
-        || bad "an unmapped keyed version row passed check-pins (rc=$pin_row_rc)"
-    # And the prose lines in NODE_SHA256.txt must not be mistaken for rows.
-    grep -qF 'NODE_SHA256.txt' <<< "$pin_row_out" \
-        && bad "check-pins mistook prose in NODE_SHA256.txt for a version row" \
-        || ok "prose in a checksums file is not mistaken for a version row"
-else
-    bad "the check-pins fixture tree is not clean before the adversarial row"
-fi
+# The keyed version manifest must EQUAL its canonical mapping. Checking only
+# that a row's value is a recognised pin let an unknown key ride on a valid
+# version -- "@evil-corp/backdoor-agent <claude-code's pin>" passed, because
+# that version really is pinned. Every rejection class is driven here against a
+# scratch tree, never the real checksums, and both the expected mapping and
+# these fixtures read the pins from the repository, so a coordinated bump
+# changes nothing in this file. See #47.
+pin_map_fixture() {  # -> a scratch copy of the tracked tree
+    local dir; dir="$(mktemp -d "$TMP/pinmap.XXXXXX")"
+    git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$dir"
+    printf '%s\n' "$dir"
+}
+pin_map_case() {  # label, mutation (+add | -remove | old=>new), expected fragment
+    local label="$1" mutation="$2" fragment="$3" root out rc=0
+    root="$(pin_map_fixture)"
+    python3 - "$root/checksums/AI_CLI_VERSIONS.txt" "$mutation" <<'PY'
+import sys
+path, mutation = sys.argv[1], sys.argv[2]
+text = open(path).read()
+if mutation.startswith("+"):
+    text += mutation[1:] + "\n"
+elif mutation.startswith("-"):
+    text = text.replace(mutation[1:] + "\n", "", 1)
+else:
+    old, new = mutation.split("=>", 1)
+    assert text.count(old) == 1, f"fixture anchor not unique: {old!r}"
+    text = text.replace(old, new, 1)
+open(path, "w").write(text)
+PY
+    out="$(bash tools/check-pins.sh "$root" 2>&1)" || rc=$?
+    (( rc != 0 )) && grep -qF -- "$fragment" <<< "$out" \
+        && ok "check-pins rejects $label" \
+        || bad "check-pins accepted $label (rc=$rc): $(head -2 <<< "$out" | tr '\n' ' ')"
+    rm -rf "$root"
+}
+
+pin_map_root="$(pin_map_fixture)"
+bash tools/check-pins.sh "$pin_map_root" >/dev/null 2>&1 \
+    && ok "the check-pins fixture tree is clean before the adversarial rows" \
+    || bad "the check-pins fixture tree is not clean before the adversarial rows"
+# Prose in NODE_SHA256.txt is not a keyed row and must not be treated as one.
+bash tools/check-pins.sh "$pin_map_root" 2>&1 | grep -qF 'NODE_SHA256.txt' \
+    && bad "check-pins mistook prose in NODE_SHA256.txt for a version row" \
+    || ok "prose in a checksums file is not mistaken for a version row"
+rm -rf "$pin_map_root"
+
+claude_pin="$(sed -n 's|^@anthropic-ai/claude-code \(.*\)$|\1|p' checksums/AI_CLI_VERSIONS.txt)"
+codex_pin="$(sed -n 's|^@openai/codex \(.*\)$|\1|p' checksums/AI_CLI_VERSIONS.txt)"
+# The exact bypass: an unknown key paired with a version that really is pinned.
+pin_map_case "an unknown key paired with an existing canonical version" \
+    "+@evil-corp/backdoor-agent $claude_pin" "unmapped key"
+pin_map_case "a known key paired with another tool's canonical version" \
+    "@openai/codex $codex_pin=>@openai/codex $claude_pin" "wrong value"
+pin_map_case "a missing key" "-@openai/codex $codex_pin" "missing key"
+pin_map_case "a duplicate key" "+@openai/codex $codex_pin" "duplicate key"
+pin_map_case "an extra key carrying a novel version" "+@acme/tool 9.9.9" "unmapped key"
+pin_map_case "a malformed row" "+@openai/codex $codex_pin extra-field" "malformed row"
+pin_map_case "a stale value" "@openai/codex $codex_pin=>@openai/codex 0.0.1" "wrong value"
+
+# A coordinated bump of every recording surface must still pass, with no literal
+# here to update -- that is what makes deriving the expectation worth doing.
+bump_root="$(pin_map_fixture)"
+python3 - "$bump_root" "$claude_pin" <<'PY'
+import pathlib, sys
+root, old = pathlib.Path(sys.argv[1]), sys.argv[2]
+head, _, patch = old.rpartition(".")
+new = f"{head}.{int(patch) + 1}"
+for rel in ("lib/bootstrap/config.sh", "config.example.env",
+            "checksums/AI_CLI_VERSIONS.txt", "README.md", "docs/CONFIGURATION.md"):
+    path = root / rel
+    path.write_text(path.read_text().replace(old, new))
+PY
+bash tools/check-pins.sh "$bump_root" >/dev/null 2>&1 \
+    && ok "a coordinated pin bump still passes with no test literal to update" \
+    || bad "a coordinated pin bump was rejected: $(bash tools/check-pins.sh "$bump_root" 2>&1 | head -2 | tr '\n' ' ')"
+rm -rf "$bump_root"
 
 section "Release rehearsal in CI"
 # release.yml only runs on a tag push, so its checkout is detached, one commit
@@ -748,10 +805,18 @@ release_workflow_violations() {
     # release.yml is a checkout, one run:, and one upload.
     runs="$(grep -cE '^[[:space:]]*-?[[:space:]]*run:' <<< "$body" || true)"
     [[ "$runs" == 1 ]] || printf 'has %s run: steps; a release-only one cannot be ruled out\n' "$runs"
+    # sort, NOT sort -u: multiplicity is part of the claim. A second Publish
+    # assets step -- correctly pinned, with the right version comment, and
+    # accepted by actionlint -- would upload the release twice, and collapsing
+    # the list with -u made that indistinguishable from one step. The same held
+    # for a duplicated checkout. The release job uses actions/checkout exactly
+    # once and softprops/action-gh-release exactly once; this compares the whole
+    # sorted list against that, so both an extra action and a repeated one fail.
+    # See #47.
     uses="$(grep -oE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*\S+' <<< "$body" \
-        | sed -E 's|.*uses:[[:space:]]*||; s|@.*||' | LC_ALL=C sort -u | tr '\n' ' ')"
+        | sed -E 's|.*uses:[[:space:]]*||; s|@.*||' | LC_ALL=C sort | tr '\n' ' ')"
     [[ "$uses" == "actions/checkout softprops/action-gh-release " ]] \
-        || printf 'uses [%s]; a new action is a release-only code path\n' "${uses% }"
+        || printf 'uses [%s]; the release job must use actions/checkout exactly once and softprops/action-gh-release exactly once\n' "${uses% }"
     # Counting run: steps bounds how many there are, not what the one contains.
     # A block scalar is what lets extra commands ride along inside the single
     # permitted step: `curl ... | bash` and `make extra` each add no step and
@@ -838,6 +903,36 @@ guard_inline_fixture 'curl -sSL https://example.invalid/extra | bash'
 release_guard "an extra inline command in the one run: step" reject "$guard_fixture"
 guard_inline_fixture 'make release-only-extra'
 release_guard "a make target inside the one run: step" reject "$guard_fixture"
+restore_guard_fixture
+# Multiplicity, not just membership. Each of these duplicates a step that is
+# legitimately there, with the correct pinned SHA and version comment, so the
+# action-pin guard and actionlint both accept them -- and a duplicated upload
+# step would publish the release assets twice.
+restore_guard_fixture
+python3 - "$guard_fixture" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+marker = '      - name: Publish assets'
+assert text.count(marker) == 1
+open(path, 'w').write(text + "\n" + text[text.index(marker):].rstrip("\n") + "\n")
+PY
+release_guard "a second, identical release-upload step" reject "$guard_fixture"
+restore_guard_fixture
+python3 - "$guard_fixture" <<'PY'
+import re
+import sys
+path = sys.argv[1]
+text = open(path).read()
+# Read the checkout step out of the file rather than restating its SHA: a pin
+# literal in this suite is itself a standing failure, and duplicating whatever
+# is actually pinned is the stronger fixture anyway.
+found = re.search(r'^ *- uses: actions/checkout@[^\n]*\n(?: +[^\n]*\n)*', text, re.M)
+assert found, "no checkout step found in the fixture"
+block = found.group(0)
+open(path, 'w').write(text.replace(block, block + "\n" + block, 1))
+PY
+release_guard "a second, identical checkout step" reject "$guard_fixture"
 restore_guard_fixture
 
 # The tag check itself, offline, against a scratch VERSION file.

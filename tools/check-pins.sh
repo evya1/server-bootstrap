@@ -236,22 +236,66 @@ for rel in seen_files:
         if value and value in text and (pin, rel) not in claimed:
             report(f"unclaimed: {rel} records the {pin} value but no row checks it")
 
-# A keyed version row in checksums/ must belong to a pin mapped to that file.
-# The hash rule below has always covered an extra architecture line; this covers
-# the other shape a pinned recording takes, so an unmapped
-# "@scope/package 1.2.3" row cannot sit in AI_CLI_VERSIONS.txt unchecked. Only a
-# line that is exactly "<token> <semver>" qualifies, so prose such as
-# "Node.js 24.21.0 official release checksums:" is not mistaken for a recording.
-# See #47.
+# A keyed version manifest must EQUAL its canonical key -> version mapping.
+# ---------------------------------------------------------------------------
+# checksums/AI_CLI_VERSIONS.txt records "<package> <version>" rows. Checking
+# only that each row's *value* is a recognised pin is not enough, because a
+# recognised value says nothing about the key it is paired with:
+#
+#     @evil-corp/backdoor-agent 2.1.269
+#
+# passed that check, since 2.1.269 genuinely is claude-code's pinned version.
+# The file therefore has to match the mapping exactly and in both directions:
+# every mapped key present exactly once with its canonical value, and no key
+# that is not mapped.
+#
+# The expectation is derived from MAP itself -- the key is the literal prefix of
+# the row pattern, the value is the canonical pin -- so a coordinated version
+# bump updates nothing here and no second list of versions exists to drift.
+# A file whose mapped patterns are not of this shape (the hash manifests) yields
+# no expectations and is left to the hash rule below. See #47.
+VERSION_ROW_TAIL = r' (\d+\.\d+\.\d+)$'
+
+
+def keyed_expectations(rel: str) -> dict[str, str]:
+    """Canonical key -> version for a file whose rows are '<key> <semver>'."""
+    expected = {}
+    for pin, mapped_rel, pattern in MAP:
+        if mapped_rel != rel or pin not in canonical:
+            continue
+        if pattern.startswith("^") and pattern.endswith(VERSION_ROW_TAIL):
+            expected[pattern[1:-len(VERSION_ROW_TAIL)]] = canonical[pin]
+    return expected
+
+
 for rel in seen_files:
     if not rel.startswith("checksums/") or rel in missing_files:
         continue
-    known = {canonical[p] for p, r, _ in MAP if r == rel and p in canonical}
-    for line in (read(rel) or "").splitlines():
-        row = re.fullmatch(r'(\S+) (\d+\.\d+\.\d+)', line.strip())
-        if row and row.group(2) not in known:
-            report(f"unclaimed version row in {rel}: {row.group(1)} "
-                   f"{row.group(2)} matches no pin mapped to that file")
+    expected_rows = keyed_expectations(rel)
+    if not expected_rows:
+        continue
+    recorded_rows: dict[str, str] = {}
+    for number, line in enumerate((read(rel) or "").splitlines(), 1):
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        parsed = re.fullmatch(r"(\S+) (\S+)", entry)
+        if not parsed:
+            report(f"malformed row {number} in {rel}: expected '<key> <version>'")
+            continue
+        key, value = parsed.group(1), parsed.group(2)
+        if key in recorded_rows:
+            report(f"duplicate key in {rel}: {key} appears more than once")
+            continue
+        recorded_rows[key] = value
+    for key in sorted(set(recorded_rows) - set(expected_rows)):
+        report(f"unmapped key in {rel}: {key} is not a pin recorded in {CONFIG}")
+    for key in sorted(set(expected_rows) - set(recorded_rows)):
+        report(f"missing key in {rel}: {key}")
+    for key in sorted(set(recorded_rows) & set(expected_rows)):
+        if recorded_rows[key] != expected_rows[key]:
+            report(f"wrong value in {rel}: {key} records {recorded_rows[key]}, "
+                   f"{CONFIG} pins {expected_rows[key]}")
 
 # Every hash in checksums/ must belong to a pin mapped to that file, so an extra
 # architecture line cannot be added without being checked.
