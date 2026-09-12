@@ -133,3 +133,38 @@ The bootstrap waits for existing package operations and attempts interrupted
 ```bash
 fuser /var/lib/dpkg/lock-frontend
 ```
+
+## CI fails with `release-files: stale hash`
+
+The tracked files are the canonical release set, and `checksums/SHA256SUMS`
+records a hash for each one. Change a tracked file without regenerating the
+manifest and `release-files verify` fails — correctly. Three of the four CI jobs
+go red, because two of them run the same suite through
+`tools/release-preflight.sh`.
+
+This is the normal state of a fresh Dependabot pull request: it bumps a pinned
+action SHA inside `.github/workflows/*.yml`, which are tracked and therefore
+covered by the manifest, and it has no way to run a repository command.
+
+**It is not an incompatibility in the change under review.** One command fixes
+it, from the pull request's branch:
+
+```bash
+bash release/release-files.sh write
+```
+
+Then commit `checksums/SHA256SUMS` alone. Nothing else needs to change.
+
+To see the exact patch before committing, run:
+
+```bash
+bash tools/manifest-fix-hint.sh
+```
+
+It prints the failing entries, the command above, and the diff that command
+produces, then restores the file — it never commits, pushes, or leaves the
+working tree modified. CI runs the same script automatically when a job fails,
+so the patch is already in the run log.
+
+Applying it stays a deliberate maintainer action: no workflow here has write
+access to repository contents outside the tag-triggered release job.
