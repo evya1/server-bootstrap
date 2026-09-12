@@ -57,6 +57,15 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 - **`tools/actionlint.sh`** — a pinned, checksum-verified workflow linter, in
   the shape of `tools/gitleaks.sh`, run as a blocking CI step. ([#26])
 
+- **`.github/workflows/pin-drift.yml`** — a weekly, manually dispatchable check
+  that keeps **one** issue open while a pinned release is behind, editing it
+  rather than filing a new one each week, and closing it when the pins are
+  current again. A moved Oh My Zsh branch head never opens it. A week where an
+  upstream could not be resolved files the issue with an explicit "this report
+  is incomplete" banner **and fails the run**, because a check that could not
+  check must not show a green tick. The branch decision lives in
+  `tools/pin-drift-report.sh` as a pure function the offline suite drives
+  through all ten (exit code, issue open) combinations. ([#28])
 - **`.github/dependabot.yml`** — weekly `github-actions` updates, so a SHA pin
   has an update channel instead of quietly rotting. ([#27])
 
@@ -149,6 +158,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#25]: https://github.com/evya1/server-bootstrap/issues/25
 [#26]: https://github.com/evya1/server-bootstrap/issues/26
 [#27]: https://github.com/evya1/server-bootstrap/issues/27
+[#28]: https://github.com/evya1/server-bootstrap/issues/28
 
 ## 2.2.2
 

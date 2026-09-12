@@ -771,6 +771,93 @@ DEPENDABOT
 fi
 (( dependabot_drift == 0 )) && ok "Dependabot proposes action updates against the pins"
 
+section "Weekly pin-drift workflow"
+# Pin drift is only found when somebody runs the check, and between releases
+# nobody does. The weekly job could not be built on the old --check: it exited 1
+# permanently because of the branch-head row, and 0 when every resolver failed.
+# With the exit codes #25 established it can tell three cases apart, and the
+# branch on each is a pure function driven here without a network or a token.
+# See #28.
+drift_opts_before="$-"
+# shellcheck source=tools/pin-drift-report.sh
+source tools/pin-drift-report.sh
+[[ "$-" == "$drift_opts_before" ]] \
+    && ok "sourcing pin-drift-report.sh does not change shell options" \
+    || bad "sourcing pin-drift-report.sh changed shell options"
+grep -qF '[[ "${BASH_SOURCE[0]}" != "$0" ]] || pin_drift_main "$@"' tools/pin-drift-report.sh \
+    && ok "pin-drift-report.sh has a main guard, so sourcing it calls no API" \
+    || bad "pin-drift-report.sh has no main guard"
+
+# Every combination of (refresh-pins exit, is an issue already open). The two
+# that matter: exit 0 with no issue files nothing at all, and exit 3 files the
+# issue *and* fails the run -- a check that could not check must not show a
+# green tick.
+drift_drift=0
+while IFS='|' read -r code has_issue expect_action expect_run; do
+    [[ -n "$code" ]] || continue
+    actual_run=green
+    actual_action="$(pin_drift_action "$code" "$has_issue")" || actual_run=red
+    [[ "$actual_action" == "$expect_action" && "$actual_run" == "$expect_run" ]] \
+        || { bad "pin-drift(exit $code, issue $has_issue) = $actual_action/$actual_run, expected $expect_action/$expect_run"; drift_drift=1; }
+done <<'DRIFT'
+0|no|nothing|green
+0|yes|close|green
+1|no|create|green
+1|yes|update|green
+3|no|create|red
+3|yes|update|red
+2|no|fail|red
+2|yes|fail|red
+99|no|fail|red
+DRIFT
+(( drift_drift == 0 )) && ok "the drift workflow files one issue only for actionable release drift"
+
+# The UNKNOWN banner is the visible half of "never a false green".
+printf 'nodejs 24.21.0 unknown UNKNOWN\n' > "$TMP/drift-report.txt"
+unknown_body="$(pin_drift_body 3 "$TMP/drift-report.txt")"
+stale_body="$(pin_drift_body 1 "$TMP/drift-report.txt")"
+grep -qF 'This report is incomplete' <<< "$unknown_body" \
+    && ok "an UNKNOWN result says so at the top of the issue" \
+    || bad "an UNKNOWN result is reported as an ordinary drift issue"
+grep -qF 'This report is incomplete' <<< "$stale_body" \
+    && bad "an ordinary drift issue carries the UNKNOWN banner" \
+    || ok "an ordinary drift issue carries no UNKNOWN banner"
+grep -qF 'nodejs 24.21.0 unknown UNKNOWN' <<< "$stale_body" \
+    && ok "the issue body quotes the report verbatim" || bad "the issue body drops the report"
+
+# The workflow itself. It is scheduled, it can be dispatched by hand, it holds
+# only the permission it needs, and it must never rewrite a pin: a bump needs a
+# CHANGELOG entry and a human reading the upstream diff.
+drift_workflow=.github/workflows/pin-drift.yml
+workflow_drift=0
+if [[ ! -f "$drift_workflow" ]]; then
+    bad "no weekly pin-drift workflow"
+    workflow_drift=1
+else
+    drift_body="$(grep -vE '^[[:space:]]*#' "$drift_workflow")"
+    while IFS='|' read -r label needle; do
+        [[ -n "$label" ]] || continue
+        grep -qE -- "$needle" <<< "$drift_body" \
+            || { bad "the pin-drift workflow does not $label"; workflow_drift=1; }
+    done <<'DRIFTWF'
+run on a schedule|^[[:space:]]+- cron:
+allow a manual run|^[[:space:]]*workflow_dispatch:
+grant issues: write|^[[:space:]]+issues:[[:space:]]*write$
+bound its runtime|^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+$
+run the check|refresh-pins\.sh --check
+hand the result to the reporter|pin-drift-report\.sh
+DRIFTWF
+    grep -qE 'refresh-pins\.sh[^|]*--write' <<< "$drift_body" \
+        && { bad "the pin-drift workflow can rewrite pins"; workflow_drift=1; }
+    grep -qE '^[[:space:]]+contents:[[:space:]]*write$' <<< "$drift_body" \
+        && { bad "the pin-drift workflow takes contents: write"; workflow_drift=1; }
+    # The report is upstream-controlled text. It reaches the issue through a
+    # file, never through a command line.
+    grep -qF -- '--body-file' tools/pin-drift-report.sh \
+        || { bad "the drift report is interpolated into a command instead of a file"; workflow_drift=1; }
+fi
+(( workflow_drift == 0 )) && ok "the pin-drift workflow reports weekly and cannot write"
+
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
 # document exists, names the operations it forbids, and is linked from the

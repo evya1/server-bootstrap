@@ -199,6 +199,11 @@ label, so a half-applied bump or a swapped x64/arm64 pair fails in CI.
 Tag discovery uses `git ls-remote`, not the GitHub API, so it needs no token and
 works from restricted networks.
 
+A weekly workflow (`.github/workflows/pin-drift.yml`) runs the check and keeps
+**one** issue open while a release pin is behind, editing it rather than filing a
+new one each week. A moved branch head never opens it. A week where an upstream
+could not be resolved fails the run instead of reporting a clean result.
+
 ---
 
 ## Security model
