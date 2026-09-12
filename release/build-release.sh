@@ -62,23 +62,26 @@ if (( SKIP_TESTS == 0 )); then
     bash tests/run-tests.sh
 fi
 
-echo "==> Refreshing in-bundle checksums"
+# One canonical set of release files, resolved once and used for the checksum
+# manifest, the tar, the source stage and the tests. This used to be three
+# separate `find .` walks of the working tree, which is how an untracked scratch
+# file in a contributor's checkout got hashed into checksums/SHA256SUMS and
+# packed into all three archives while every gate stayed green. See #24.
 mkdir -p checksums "$DIST"
-(
-    find . -type f \
-        -not -path './checksums/SHA256SUMS' \
-        -not -path './release/dist/*' \
-        -not -path './.git/*' \
-        | LC_ALL=C sort | sed 's|^\./||' | xargs sha256sum > checksums/SHA256SUMS
-)
+RELEASE_SET_ORIGIN="$(bash "$ROOT/release/release-files.sh" source)"
+mapfile -d '' RELEASE_FILES < <(bash "$ROOT/release/release-files.sh" list)
+(( ${#RELEASE_FILES[@]} > 0 )) || { echo "ERROR: empty release file set" >&2; exit 1; }
+echo "==> Release file set: ${#RELEASE_FILES[@]} files (source: $RELEASE_SET_ORIGIN)"
+
+echo "==> Refreshing in-bundle checksums"
+bash "$ROOT/release/release-files.sh" write
 
 build_archives() {
     local output="$1" outdir stage
     outdir="$(mkdir -p "$output" && cd "$output" && pwd -P)"
-    mapfile -d '' files < <(find . -type f -not -path './release/dist/*' -not -path './.git/*' -print0 | LC_ALL=C sort -z)
     tar --sort=name --mtime="@$SOURCE_DATE" --owner=0 --group=0 --numeric-owner \
-        --transform "s,^\./,$NAME-$VERSION/," -cf "$outdir/$NAME-$VERSION.tar" \
-        --null -T <(printf '%s\0' "${files[@]}")
+        --transform "s,^,$NAME-$VERSION/," -cf "$outdir/$NAME-$VERSION.tar" \
+        --null -T <(printf '%s\0' "${RELEASE_FILES[@]}")
     gzip -n -9 -c "$outdir/$NAME-$VERSION.tar" > "$outdir/$NAME-$VERSION.tar.gz"
     stage="$(scratch_dir)"
     tar -xf "$outdir/$NAME-$VERSION.tar" -C "$stage"
@@ -108,10 +111,14 @@ rm -rf "$second"
     && sha256sum "$NAME-$VERSION.zip" > "$NAME-$VERSION.zip.sha256" )
 
 # Source zip uses a stable top-level directory and excludes built releases.
+# The mode is copied from the working tree rather than left to install's 0755
+# default: the tar stores each file's real mode, so anything else makes a
+# rebuild from an unpacked source bundle differ from a rebuild from a checkout
+# in every file's permission bits and nothing else.
 source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
-while IFS= read -r -d '' file; do
-    install -D "$file" "$source_stage/$NAME/${file#./}"
-done < <(find . -type f -not -path './release/dist/*' -not -path './.git/*' -print0 | LC_ALL=C sort -z)
+for file in "${RELEASE_FILES[@]}"; do
+    install -D -m "$(stat -c '%a' -- "$file")" "$file" "$source_stage/$NAME/$file"
+done
 find "$source_stage" -exec touch -d "@$SOURCE_DATE" {} +
 # Scanned before the zip is written: a finding must stop the build rather than
 # produce an artifact that is then quarantined.
