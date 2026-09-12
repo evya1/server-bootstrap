@@ -1,0 +1,56 @@
+name: pin-drift
+# Pin drift is only found when somebody remembers to run the check, and between
+# releases nobody does: #19 found three stale pins at once. This runs it weekly
+# and files exactly one issue when -- and only when -- a pinned *release* is
+# behind.
+#
+# It could not be built on the old --check: that exited 1 permanently, because
+# the Oh My Zsh pin tracks a branch head that moves several times a day, and
+# exited 0 when every resolver failed. This job reads the exit codes #25
+# established, and the branch on each is a pure function the offline suite
+# drives directly.
+on:
+  schedule:
+    # Monday 07:00 UTC.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    # issues: write is the whole point of the job; contents: read is everything
+    # else it needs. Nothing here pushes.
+    permissions:
+      contents: read
+      issues: write
+    # The worst case measured is about 95 seconds: every resolver failing, with
+    # sb_retry backing off three times per tool. Ten minutes is headroom that
+    # still fails rather than hanging for the default six hours.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+
+      # --check only. A scheduled job must never rewrite a pin: a bump needs a
+      # CHANGELOG entry and a human reading the upstream diff.
+      - name: Check pins against upstream
+        id: check
+        run: |
+          set -Eeuo pipefail
+          code=0
+          bash tools/refresh-pins.sh --check > "$RUNNER_TEMP/drift.txt" 2>&1 || code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/drift.txt"
+
+      # gh is preinstalled on the runner image, so this needs no third-party
+      # action to pin, review or trust. The report reaches the issue through
+      # --body-file, never through a command line: it is upstream-controlled
+      # text.
+      - name: File, update or close the drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DRIFT_EXIT: ${{ steps.check.outputs.code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash tools/pin-drift-report.sh "$DRIFT_EXIT" "$RUNNER_TEMP/drift.txt"

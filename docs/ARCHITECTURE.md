@@ -37,6 +37,7 @@ release/release-files.sh      the canonical release file set and its checksum ma
 tools/release-preflight.sh    every pre-publication gate, run by CI and by the release
 tools/check-release-tag.sh    tag-versus-VERSION verification, testable offline
 tools/actionlint.sh           pinned, checksum-verified workflow linter
+tools/pin-drift-report.sh     turns a weekly --check result into one GitHub issue
 ```
 
 ## Execution order
