@@ -190,9 +190,6 @@ read as a clean week. Six pins track published releases; the Oh My Zsh pin
 tracks a branch head that moves several times a day, so its movement is reported
 as `MOVED` and does not fail the check unless you ask with `--all`.
 
-```bash
-```
-
 `--write` rewrites every file that records a pinned value:
 `lib/bootstrap/config.sh`, `config.example.env`, `checksums/*.txt`, `README.md`
 and `docs/CONFIGURATION.md`. `CHANGELOG.md` stays a hand edit, because it
