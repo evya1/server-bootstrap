@@ -4,6 +4,22 @@
 
 Nothing here has shipped. `VERSION` is still `2.2.2`.
 
+### Merged after the 2.2.2 release, previously unrecorded
+
+- **[#20][]** — `README.md`'s five tool versions are asserted against the pinned
+  defaults in `lib/bootstrap/config.sh`, and `tools/refresh-pins.sh --write`
+  rewrites them. Before it, a pin bump left the README quietly wrong.
+- **[#21][]** — three stale pins refreshed: uv `0.12.12` → `0.12.13`, Claude
+  Code `2.1.267` → `2.1.268`, and the Oh My Zsh ref `cd320b55` → `c6e66ede`.
+- **[#22][]** — `ci.yml`'s `tag-checkout` job. `release.yml` runs only on a tag
+  push, so its checkout is detached, one commit deep, and carries one tag; CI
+  saw that shape only on the tag push itself, which is after the version number
+  has been spent. The job manufactures it on every push and pull request. It
+  rehearses the Git *metadata* a tag build sees, not the tag event.
+
+[#20]: https://github.com/evya1/server-bootstrap/pull/20
+[#21]: https://github.com/evya1/server-bootstrap/pull/21
+
 ### Added
 
 - **`tools/check-pins.sh`** — one exact, keyed map of every pinned value against
@@ -18,6 +34,38 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 
 ### Changed
 
+- **`actions/checkout` upgraded to `v7.0.1`**
+  (`3d3c42e5aac5ba805825da76410c181273ba90b1`), from `v4.4.0`, in all three
+  workflows. The three intervening majors are a runtime move and two hardening
+  changes, none of which touches how this repository uses the action: `v5.0.0`
+  moved the runtime from Node 20 to Node 24; `v6.0.0` persists credentials to a
+  separate file, a path every job here opts out of with
+  `persist-credentials: false`; `v7.0.0` blocks checking out fork PRs for
+  `pull_request_target` and `workflow_run`, neither of which appears in any
+  workflow here. Every input, default and output is byte-identical between the
+  two versions — the only `action.yml` change is `using: node20` →
+  `using: node24`. GitHub already forces the old pin onto Node 24 and warns that
+  Node 20 is deprecated, so this aligns the declared runtime with what has been
+  executing. ([#36])
+- **Claude Code pinned to `2.1.269`**, from `2.1.268`. Applied with
+  `tools/refresh-pins.sh --write`, which rewrote all five surfaces that record
+  it: `lib/bootstrap/config.sh`, `config.example.env`,
+  `checksums/AI_CLI_VERSIONS.txt`, `README.md` and `docs/CONFIGURATION.md`.
+  Nothing else moved — Node.js `24.21.0`, `gh` `2.100.0`, uv `0.12.13`, Codex
+  `0.154.0` and pi `0.85.1` were each confirmed current against their own
+  upstream, and the Oh My Zsh branch head was deliberately left at `c6e66ede`
+  even though it has moved to `be8da5c7`: it is a `branch-head` pin, so
+  movement is reported and not actioned, and `--write` was run without `--all`.
+
+  What that pin buys, stated precisely: Claude Code is an **exact-version npm
+  install**, so its integrity comes from the npm registry — `npm` resolves
+  `@anthropic-ai/claude-code@2.1.269` and checks the downloaded tarball against
+  the SHA-512 `dist.integrity` the registry publishes for that exact version.
+  **No SHA-256 in this repository covers it**, unlike the Node.js, uv and `gh`
+  archives. What the bootstrap adds on top is a post-install check:
+  `bootstrap_verify_npm_package_version()` reads the installed `package.json`
+  back and fails the run if npm did not install the exact version requested.
+  ([#38])
 - **The example plans no longer restate the uv pin.** A plan is sourced by
   `server-provision.sh` before the bootstrap runs, so an exported `UV_VERSION`
   in a plan beats the bundle default. Both shipped plans pinned uv `0.12.12`
@@ -57,6 +105,15 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 - **`tools/actionlint.sh`** — a pinned, checksum-verified workflow linter, in
   the shape of `tools/gitleaks.sh`, run as a blocking CI step. ([#26])
 
+- **`.github/workflows/pin-drift.yml`** — a weekly, manually dispatchable check
+  that keeps **one** issue open while a pinned release is behind, editing it
+  rather than filing a new one each week, and closing it when the pins are
+  current again. A moved Oh My Zsh branch head never opens it. A week where an
+  upstream could not be resolved files the issue with an explicit "this report
+  is incomplete" banner **and fails the run**, because a check that could not
+  check must not show a green tick. The branch decision lives in
+  `tools/pin-drift-report.sh` as a pure function the offline suite drives
+  through all ten (exit code, issue open) combinations. ([#28])
 - **`.github/dependabot.yml`** — weekly `github-actions` updates, so a SHA pin
   has an update channel instead of quietly rotting. ([#27])
 
@@ -115,6 +172,23 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 
 ### Fixed
 
+- **Three documentation claims that had stopped being true.** `README.md`,
+  `docs/CONFIGURATION.md` and the `refresh-pins.sh` banner all listed the
+  `--write` targets as "config.sh, config.example.env, checksums/" — wrong since
+  #20 added `README.md`, and wrong again once `docs/CONFIGURATION.md` joined
+  them. The 2.2.2 notes explained a bug by saying every CI job checks out a
+  branch, which #22 made false; the sentence stays as history with a dated
+  correction beside it. And `README.md` claimed every pinned version is
+  "checksum-verified before use": true for Node.js, uv and `gh`, whose
+  downloaded artifacts are checked against SHA-256 values pinned here, but not
+  for the AI CLIs, which are exact-version npm installs whose integrity comes
+  from npm and the registry. A fitness section now derives the `--write` list
+  from `tools/write-pins.py` itself and fails if any of the three prose lists
+  disagrees. ([#29])
+- **`tools/refresh-pins.sh` printed `tr: write error: Broken pipe`** on every
+  run: `grep -m1` exits on the first match and SIGPIPEs the `tr` feeding it.
+  Harmless on a terminal, but the weekly workflow captures stderr into the issue
+  body, so it reached a reader as an apparent error. ([#29])
 - **`tools/refresh-pins.sh` reported an unreachable upstream as `CURRENT` and
   exited 0.** An empty resolution fell back to the pinned value, which then
   compared equal to itself. With failing `curl` and `git` on `PATH`, all seven
@@ -149,6 +223,10 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#25]: https://github.com/evya1/server-bootstrap/issues/25
 [#26]: https://github.com/evya1/server-bootstrap/issues/26
 [#27]: https://github.com/evya1/server-bootstrap/issues/27
+[#28]: https://github.com/evya1/server-bootstrap/issues/28
+[#29]: https://github.com/evya1/server-bootstrap/issues/29
+[#38]: https://github.com/evya1/server-bootstrap/issues/38
+[#36]: https://github.com/evya1/server-bootstrap/pull/36
 
 ## 2.2.2
 
@@ -176,6 +254,14 @@ exactly the situation that policy is written for.
 
   Every CI job checks out a branch, so no CI job could reproduce this; only the
   tag-triggered release workflow could.
+
+  > **Corrected 2026-09-12.** That was true when 2.2.2 shipped and is why the bug
+  > escaped, so it is left standing rather than rewritten. It is no longer true:
+  > [#22][] added `ci.yml`'s `tag-checkout` job, which manufactures a detached,
+  > depth-1, single-tag checkout on every push and pull request. See the
+  > `Unreleased` section above.
+
+[#22]: https://github.com/evya1/server-bootstrap/pull/22
 
 ## 2.2.1
 
