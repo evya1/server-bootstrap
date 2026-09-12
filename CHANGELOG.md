@@ -166,6 +166,19 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   commit being mysterious was not. Manifest verification itself is untouched and
   still rejects extra, missing, duplicate, stale, malformed and misordered
   entries. ([#41])
+- **`README.md` no longer renders an empty code box.** An opening ```` ```bash ````
+  immediately followed by its closing fence sat between the `--check`
+  exit-code paragraph and the `--write` paragraph, left behind by `845389f` when
+  the prose absorbed what the block was going to show. It rendered as an empty
+  box that reads as a command somebody forgot to write down. The two lines are
+  gone and nothing else in the README moved.
+
+  A full sweep of the README's tag, badge, release-reference and Markdown/HTML
+  correctness found only that one defect; the clean results are recorded in #43
+  so the audit is not repeated. `tests/run-tests.sh` now asserts that no tracked
+  Markdown file has an empty or unclosed code fence — a few lines of Bash over
+  the eleven tracked files, rather than a Markdown linter added for one fence.
+  ([#43])
 
 ### Changed
 
@@ -279,6 +292,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#36]: https://github.com/evya1/server-bootstrap/pull/36
 [#35]: https://github.com/evya1/server-bootstrap/pull/35
 [#41]: https://github.com/evya1/server-bootstrap/issues/41
+[#43]: https://github.com/evya1/server-bootstrap/issues/43
 
 ## 2.2.2
 

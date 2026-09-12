@@ -40,6 +40,36 @@ for file in server-bootstrap.sh server-bundle-install lib/*.sh lib/bootstrap/*.s
 done
 (( term_hit == 0 )) && ok "neutral runtime code"
 
+# A fenced block that outlives the content it was going to hold renders as an
+# empty box, which reads as a command somebody forgot to write down. README.md
+# carried one between the --check exit-code paragraph and the --write paragraph
+# from 845389f until #43: the prose absorbed what the block was for, the fence
+# stayed. Cheap and deterministic to assert, so it is asserted over every
+# tracked Markdown file rather than only the one that broke.
+fence_drift=0
+while IFS= read -r file; do
+    python3 - "$file" <<'PY' || fence_drift=1
+import sys
+path = sys.argv[1]
+lines = open(path, encoding="utf-8").read().split("\n")
+opened = None
+for number, line in enumerate(lines, 1):
+    if not line.startswith("```"):
+        continue
+    if opened is None:
+        opened = number
+        continue
+    if not any(x.strip() for x in lines[opened:number - 1]):
+        print(f"  FAIL: empty fenced code block: {path}:{opened}-{number}")
+        raise SystemExit(1)
+    opened = None
+if opened is not None:
+    print(f"  FAIL: unclosed fenced code block: {path}:{opened}")
+    raise SystemExit(1)
+PY
+done < <(git ls-files '*.md' 2>/dev/null | LC_ALL=C sort)
+(( fence_drift == 0 )) && ok "no tracked Markdown file has an empty or unclosed code fence"
+
 section "Security and privacy guards"
 # Private-use wording, credential-shaped filenames, private-key material,
 # high-signal markers and tracked build output are all enforced by
