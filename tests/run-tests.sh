@@ -195,9 +195,13 @@ grep -qF 'rm -rf "$DIST"' release/build-release.sh \
     && grep -qF 'discarding' release/build-release.sh \
     && ok "a failed scan discards the staged release" \
     || bad "a failed scan leaves release/dist in place"
-grep -qF 'release archives changed during scanning' release/build-release.sh \
-    && ok "archive hashes are re-verified after scanning" \
-    || bad "nothing re-verifies archive bytes after the scans"
+# Re-hashing after the scans now covers every published artifact, not the three
+# it used to name: the source zip was outside it, so bytes appended to that
+# asset after creation survived to upload. See #47.
+grep -qF 'release artifacts changed after the reproducibility gate' release/build-release.sh \
+    && grep -qF 'hash_artifacts "$DIST"' release/build-release.sh \
+    && ok "every published artifact is re-verified after scanning" \
+    || bad "nothing re-verifies every published artifact after the scans"
 grep -qF '"release_scan": "$SCAN_STATUS"' release/build-release.sh \
     && ok "the release manifest records the scan result" \
     || bad "the release manifest does not record the scan result"
@@ -525,6 +529,116 @@ grep -q 'MANIFEST_STALE=1' tests/run-tests.sh \
     && grep -q 'if (( MANIFEST_STALE )); then' tests/run-tests.sh \
     && ok "a stale manifest is flagged for the Results section" \
     || bad "the stale-manifest flag is no longer wired to the Results section"
+
+# --- every published artifact is inside the reproducibility gate (#47) -----
+# The source zip is uploaded by release.yml, but it used to be built once,
+# after the two-pass comparison, and appeared in neither the comparison, the
+# manifest, the human summary nor the final re-verification. Bytes could be
+# appended to it after creation and the build still exited 0 reporting
+# "reproducible: true". Separately, both zips carried MS-DOS local-time fields,
+# so their bytes depended on the builder's timezone while the same "true" was
+# printed. These drive the real script, because the defect was that the gate
+# did not cover what its output claimed.
+#
+# Scans are off and the suite is skipped in these fixtures: a scan-free build is
+# about a second, and running the suite would recurse into this file.
+release_build_fixture() {  # -> a disposable copy of the tracked tree
+    local dir; dir="$(mktemp -d "$TMP/relbuild.XXXXXX")"
+    git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$dir"
+    printf '%s\n' "$dir"
+}
+release_build() {  # dir, TZ -> build output on stdout+stderr, exit code preserved
+    ( cd "$1" && SB_RELEASE_SCAN=0 TZ="${2:-UTC}" bash release/build-release.sh --skip-tests 2>&1 )
+}
+artifact_hashes() {  # dir -> "<name> <sha>" for every published artifact
+    local d="$1/release/dist" v; v="$(tr -d '[:space:]' < VERSION)"
+    ( cd "$d" 2>/dev/null && sha256sum "server-bootstrap-$v.tar" "server-bootstrap-$v.tar.gz" \
+        "server-bootstrap-$v.zip" "server-bootstrap-$v-source.zip" 2>/dev/null \
+        | awk '{print $2" "$1}' | LC_ALL=C sort )
+}
+
+# 1. The timezone property, end to end through the real builder.
+tz_a="$(release_build_fixture)"; tz_b="$(release_build_fixture)"
+release_build "$tz_a" UTC          >/dev/null 2>&1
+release_build "$tz_b" Europe/Paris >/dev/null 2>&1
+if [[ -n "$(artifact_hashes "$tz_a")" && "$(artifact_hashes "$tz_a")" == "$(artifact_hashes "$tz_b")" ]]; then
+    ok "every release artifact is byte-identical under TZ=UTC and TZ=Europe/Paris"
+else
+    bad "release artifacts depend on the builder's timezone: $(diff <(artifact_hashes "$tz_a") <(artifact_hashes "$tz_b") | tr '\n' ' ')"
+fi
+# And the mechanism that guarantees it, so a future edit cannot drop it silently.
+[[ "$(grep -c 'TZ=UTC zip -X -q' release/build-release.sh)" == 2 ]] \
+    && ok "both zip steps pin TZ=UTC" \
+    || bad "a zip step in release/build-release.sh no longer pins TZ=UTC"
+
+# 2. A source zip that differs between passes must fail the gate. Appending the
+#    output directory is deterministic and differs by construction: pass 1
+#    writes to release/dist, pass 2 to a scratch directory.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='    rm -rf "$source_stage"\n'
+assert t.count(a)==1
+t=t.replace(a, a+'    printf %s "$outdir" >> "$outdir/$NAME-$VERSION-source.zip"\n',1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'not reproducible' <<< "$out" \
+    && ok "a source zip that differs between passes fails the reproducibility gate" \
+    || bad "a differing source zip did not fail the gate (rc=$rc)"
+
+# 3. A missing source zip must fail rather than be skipped over.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='    rm -rf "$source_stage"\n'
+t=t.replace(a, a+'    rm -f "$outdir/$NAME-$VERSION-source.zip"\n',1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'build produced no' <<< "$out" \
+    && ok "a missing source zip fails the build" \
+    || bad "a missing source zip did not fail the build (rc=$rc)"
+
+# 4. Tampering after the gate must be caught by the final re-verification --
+#    the case that previously shipped a corrupt asset with exit 0.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='# Publication is only safe if the scans left the artifacts alone.'
+assert t.count(a)==1
+t=t.replace(a, 'printf TAMPER >> "$DIST/$NAME-$VERSION-source.zip"\n'+a,1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'changed after the reproducibility gate' <<< "$out" \
+    && ok "source-zip tampering after the gate fails final verification" \
+    || bad "source-zip tampering after the gate was not detected (rc=$rc)"
+
+# 5. --skip-tests must never be reported as a suite that passed.
+fx="$(release_build_fixture)"
+release_build "$fx" >/dev/null 2>&1
+manifest="$fx/release/dist/server-bootstrap-$(tr -d '[:space:]' < VERSION)-release-manifest.json"
+if [[ -f "$manifest" ]]; then
+    grep -qF '"tests": "skipped"' "$manifest" \
+        && ok "--skip-tests records tests as skipped, not passed" \
+        || bad "--skip-tests reported: $(grep -o '"tests": "[a-z]*"' "$manifest")"
+    grep -qF '"source_zip_sha256"' "$manifest" \
+        && ok "the release report carries the source zip's sha256" \
+        || bad "the release report omits source_zip_sha256"
+else
+    bad "no release manifest produced by the --skip-tests build"
+fi
+# The literal cannot come back, the same way release_scan is guarded.
+grep -qF '"tests": "$TESTS_STATUS"' release/build-release.sh \
+    && ok "the manifest interpolates the tests status instead of hardcoding it" \
+    || bad "release/build-release.sh hardcodes the manifest tests status again"
+grep -qF 'source sha256' release/build-release.sh \
+    && ok "the human summary prints the source zip's sha256" \
+    || bad "the human summary no longer prints the source zip's sha256"
 
 section "Release rehearsal in CI"
 # release.yml only runs on a tag push, so its checkout is detached, one commit

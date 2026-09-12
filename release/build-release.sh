@@ -9,6 +9,12 @@ DIST=release/dist
 SOURCE_DATE="${SOURCE_DATE_EPOCH:-1700000000}"
 SKIP_TESTS=0
 [[ "${1:-}" == --skip-tests ]] && SKIP_TESTS=1
+# Reported rather than assumed. The manifest used to carry "tests": "passed"
+# unconditionally, so a --skip-tests build published a report claiming a suite
+# run that never happened -- while SB_RELEASE_SCAN=0 was handled honestly three
+# lines below. See #47.
+TESTS_STATUS=passed
+(( SKIP_TESTS == 0 )) || TESTS_STATUS=skipped
 
 # Secret scanning runs on by default. SB_RELEASE_SCAN=0 exists for offline
 # development only: it is recorded in the release manifest, and the release
@@ -76,8 +82,22 @@ echo "==> Release file set: ${#RELEASE_FILES[@]} files (source: $RELEASE_SET_ORI
 echo "==> Refreshing in-bundle checksums"
 bash "$ROOT/release/release-files.sh" write
 
+# Every artifact a release publishes, built by one function so that each
+# reproducibility pass produces all of them. The source zip used to be built
+# once, after the comparison, which left a published asset outside the
+# reproducibility gate, the manifest, the human summary and the final
+# re-verification -- bytes could be appended to it after creation and the build
+# still exited 0 reporting "reproducible: true". See #47.
+#
+# TZ=UTC on the zip steps is load-bearing, not tidiness. tar --mtime=@epoch
+# stores UTC seconds and gzip -n stores no timestamp, but a zip entry carries an
+# MS-DOS *local time* field, so the same tree zipped under Europe/Paris and
+# under UTC differs by an hour of stored metadata and hashes differently. Both
+# passes run in one process and share TZ, so the comparison could never see it:
+# the build reported reproducible: true while the published bytes depended on
+# the timezone of whoever ran it.
 build_archives() {
-    local output="$1" outdir stage
+    local output="$1" outdir stage source_stage file
     outdir="$(mkdir -p "$output" && cd "$output" && pwd -P)"
     tar --sort=name --mtime="@$SOURCE_DATE" --owner=0 --group=0 --numeric-owner \
         --transform "s,^,$NAME-$VERSION/," -cf "$outdir/$NAME-$VERSION.tar" \
@@ -86,45 +106,68 @@ build_archives() {
     stage="$(scratch_dir)"
     tar -xf "$outdir/$NAME-$VERSION.tar" -C "$stage"
     find "$stage" -exec touch -d "@$SOURCE_DATE" {} +
-    ( cd "$stage" && find . -type f | LC_ALL=C sort | zip -X -q -@ "$outdir/$NAME-$VERSION.zip" )
+    ( cd "$stage" && find . -type f | LC_ALL=C sort | TZ=UTC zip -X -q -@ "$outdir/$NAME-$VERSION.zip" )
     rm -rf "$stage"
+
+    # Source zip: a stable top-level directory, excluding built releases. The
+    # mode is copied from the working tree rather than left to install's 0755
+    # default: the tar stores each file's real mode, so anything else makes a
+    # rebuild from an unpacked source bundle differ from a rebuild from a
+    # checkout in every file's permission bits and nothing else.
+    source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
+    for file in "${RELEASE_FILES[@]}"; do
+        install -D -m "$(stat -c '%a' -- "$file")" "$file" "$source_stage/$NAME/$file"
+    done
+    find "$source_stage" -exec touch -d "@$SOURCE_DATE" {} +
+    # Scanned before the zip is written: a finding must stop the build rather
+    # than produce an artifact that is then quarantined.
+    scan_release_tree "$source_stage" "source staging tree"
+    ( cd "$source_stage" && find . -type f | LC_ALL=C sort | TZ=UTC zip -X -q -@ "$outdir/$NAME-$VERSION-source.zip" )
+    rm -rf "$source_stage"
 }
 
 rm -rf "$DIST"; mkdir -p "$DIST"
+# Every published artifact is hashed in both passes and compared. Naming them
+# in one list is what stops a new artifact being added to the release without
+# being added to the gate -- which is how the source zip ended up outside it.
+ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" "$NAME-$VERSION-source.zip")
+
+hash_artifacts() {  # directory -> "<name> <sha256>" per line, sorted by name
+    local dir="$1" artifact
+    for artifact in "${ARTIFACTS[@]}"; do
+        [[ -f "$dir/$artifact" ]] \
+            || { echo "ERROR: build produced no $artifact" >&2; exit 1; }
+        printf '%s %s\n' "$artifact" "$(sha256sum "$dir/$artifact" | awk '{print $1}')"
+    done
+}
+
+sha_of() {  # artifact name, "<name> <sha>" lines -> the sha
+    awk -v want="$1" '$1 == want { print $2 }' <<< "$2"
+}
+
 echo "==> Reproducible archives, pass 1"
 build_archives "$DIST"
-sha_tar_1="$(sha256sum "$DIST/$NAME-$VERSION.tar" | awk '{print $1}')"
-sha_tgz_1="$(sha256sum "$DIST/$NAME-$VERSION.tar.gz" | awk '{print $1}')"
-sha_zip_1="$(sha256sum "$DIST/$NAME-$VERSION.zip" | awk '{print $1}')"
+hashes_1="$(hash_artifacts "$DIST")"
 
 echo "==> Reproducible archives, pass 2"
 second="$(scratch_dir)"; build_archives "$second"
-sha_tar_2="$(sha256sum "$second/$NAME-$VERSION.tar" | awk '{print $1}')"
-sha_tgz_2="$(sha256sum "$second/$NAME-$VERSION.tar.gz" | awk '{print $1}')"
-sha_zip_2="$(sha256sum "$second/$NAME-$VERSION.zip" | awk '{print $1}')"
-[[ "$sha_tar_1" == "$sha_tar_2" && "$sha_tgz_1" == "$sha_tgz_2" && "$sha_zip_1" == "$sha_zip_2" ]] \
-    || { echo "ERROR: release archives are not reproducible" >&2; exit 1; }
+hashes_2="$(hash_artifacts "$second")"
+
+if [[ "$hashes_1" != "$hashes_2" ]]; then
+    echo "ERROR: release archives are not reproducible" >&2
+    diff <(printf '%s\n' "$hashes_1") <(printf '%s\n' "$hashes_2") >&2 || true
+    exit 1
+fi
 rm -rf "$second"
+
+sha_tar_1="$(sha_of "$NAME-$VERSION.tar" "$hashes_1")"
+sha_tgz_1="$(sha_of "$NAME-$VERSION.tar.gz" "$hashes_1")"
+sha_zip_1="$(sha_of "$NAME-$VERSION.zip" "$hashes_1")"
+sha_src_1="$(sha_of "$NAME-$VERSION-source.zip" "$hashes_1")"
 
 ( cd "$DIST" && sha256sum "$NAME-$VERSION.tar" > "$NAME-$VERSION.tar.sha256" \
     && sha256sum "$NAME-$VERSION.tar.gz" > "$NAME-$VERSION.tar.gz.sha256" \
     && sha256sum "$NAME-$VERSION.zip" > "$NAME-$VERSION.zip.sha256" )
-
-# Source zip uses a stable top-level directory and excludes built releases.
-# The mode is copied from the working tree rather than left to install's 0755
-# default: the tar stores each file's real mode, so anything else makes a
-# rebuild from an unpacked source bundle differ from a rebuild from a checkout
-# in every file's permission bits and nothing else.
-source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
-for file in "${RELEASE_FILES[@]}"; do
-    install -D -m "$(stat -c '%a' -- "$file")" "$file" "$source_stage/$NAME/$file"
-done
-find "$source_stage" -exec touch -d "@$SOURCE_DATE" {} +
-# Scanned before the zip is written: a finding must stop the build rather than
-# produce an artifact that is then quarantined.
-scan_release_tree "$source_stage" "source staging tree"
-( cd "$source_stage" && find . -type f | LC_ALL=C sort | zip -X -q -@ "$ROOT/$DIST/$NAME-$VERSION-source.zip" )
-rm -rf "$source_stage"
 
 # First-run files are also copied beside the archives for direct upload.
 install -m 0755 server-provision.sh "$DIST/server-provision.sh"
@@ -138,7 +181,8 @@ cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
   "tar_sha256": "$sha_tar_1",
   "tar_gz_sha256": "$sha_tgz_1",
   "zip_sha256": "$sha_zip_1",
-  "tests": "passed",
+  "source_zip_sha256": "$sha_src_1",
+  "tests": "$TESTS_STATUS",
   "release_scan": "$SCAN_STATUS",
   "reproducible": true,
   "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets"]
@@ -169,15 +213,20 @@ scan_release_tree "$unpack_src" "extracted $NAME-$VERSION-source.zip"
 # almost everything in it is an archive, so this pass descends into them.
 scan_release_tree "$DIST" "release/dist staging" scan-artifacts
 
-# Publication is only safe if the scans left the artifacts alone.
-[[ "$(sha256sum "$DIST/$NAME-$VERSION.tar" | awk '{print $1}')" == "$sha_tar_1" \
-    && "$(sha256sum "$DIST/$NAME-$VERSION.tar.gz" | awk '{print $1}')" == "$sha_tgz_1" \
-    && "$(sha256sum "$DIST/$NAME-$VERSION.zip" | awk '{print $1}')" == "$sha_zip_1" ]] \
-    || { echo "ERROR: release archives changed during scanning" >&2; exit 1; }
+# Publication is only safe if the scans left the artifacts alone. Re-hashing
+# the same list the gate used means a new artifact cannot be published without
+# this check covering it either.
+if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then
+    echo "ERROR: release artifacts changed after the reproducibility gate" >&2
+    diff <(printf '%s\n' "$hashes_1") <(hash_artifacts "$DIST") >&2 || true
+    exit 1
+fi
 
 printf '\nRelease complete: %s %s\n' "$NAME" "$VERSION"
 printf '  tar sha256:    %s\n' "$sha_tar_1"
 printf '  tar.gz sha256: %s\n' "$sha_tgz_1"
 printf '  zip sha256:    %s\n' "$sha_zip_1"
+printf '  source sha256: %s\n' "$sha_src_1"
 printf '  reproducible:  true\n'
+printf '  tests:         %s\n' "$TESTS_STATUS"
 printf '  secret scan:   %s\n' "$SCAN_STATUS"

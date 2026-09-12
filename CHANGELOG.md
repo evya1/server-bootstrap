@@ -283,6 +283,34 @@ The short version of what is now true that was not before:
 
 ### Fixed
 
+- **Release artifacts no longer depend on the builder's timezone, and every
+  published artifact is now inside the reproducibility gate.** Three defects,
+  found while re-verifying the release evidence rather than by CI, because each
+  one lived in a gate that reported success without covering what its output
+  claimed:
+
+  - Both ZIP artifacts carried MS-DOS **local-time** fields, so the same commit
+    built under `TZ=Europe/Paris` produced different bytes from one built under
+    `TZ=UTC` — while the build printed `reproducible: true`. The two passes run
+    in one process and share `TZ`, so the comparison could never see it. Both
+    `zip` steps now pin `TZ=UTC`. The tarballs were never affected:
+    `tar --mtime=@epoch` stores UTC seconds and `gzip -n` stores no timestamp.
+  - `server-bootstrap-<v>-source.zip` is a published asset, but it was built
+    **once, after** the comparison, and appeared in neither the comparison, the
+    release report, the human summary nor the final re-verification. Bytes could
+    be appended to it after creation and the build still exited `0`. It is now
+    built in every pass, compared byte-for-byte, carried in the report as
+    `source_zip_sha256`, printed in the summary, and re-hashed at the end. The
+    published asset set is unchanged — no sidecar was added for symmetry.
+  - `--skip-tests` recorded `"tests": "passed"` in the release report although
+    the suite never ran. It now reports `skipped`, the way `SB_RELEASE_SCAN=0`
+    already reported `release_scan`.
+
+  The artifact list is named once and drives the gate, the report and the final
+  check together, so a future artifact cannot be published outside them. Ten
+  regression assertions cover the three defects and were each confirmed failing
+  against the previous builder. ([#47])
+
 - **Three documentation claims that had stopped being true.** `README.md`,
   `docs/CONFIGURATION.md` and the `refresh-pins.sh` banner all listed the
   `--write` targets as "config.sh, config.example.env, checksums/" — wrong since
@@ -341,6 +369,7 @@ The short version of what is now true that was not before:
 [#35]: https://github.com/evya1/server-bootstrap/pull/35
 [#41]: https://github.com/evya1/server-bootstrap/issues/41
 [#43]: https://github.com/evya1/server-bootstrap/issues/43
+[#47]: https://github.com/evya1/server-bootstrap/issues/47
 
 ## 2.2.2
 
