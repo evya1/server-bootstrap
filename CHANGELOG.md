@@ -47,6 +47,31 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   `using: node24`. GitHub already forces the old pin onto Node 24 and warns that
   Node 20 is deprecated, so this aligns the declared runtime with what has been
   executing. ([#36])
+- **`softprops/action-gh-release` upgraded to `v3.0.3`**
+  (`efb35369e0ad2afab669f228072c1b0d510eae64`), from `v2.6.2`, in the release
+  workflow's one `Publish assets` step. The SHA is the peeled commit of the
+  annotated `v3.0.3` tag (`refs/tags/v3.0.3^{}`), confirmed against upstream
+  rather than against the pull request body. As with `actions/checkout`, the
+  only `action.yml` difference across the three majors is `using: node20` →
+  `using: node24`: every input, default, `required:` flag and output is
+  byte-identical, and `contents: write` remains the only permission either
+  version documents. The glob resolver `paths()` in `src/util.ts` is unchanged,
+  so the eight `files:` patterns match exactly what they matched before, and
+  `token` still takes the explicit input this workflow passes.
+
+  The substantial change is in `src/github.ts`, where release creation, draft
+  reuse and asset replacement were refactored, plus a new `finalizeRelease()`.
+  That function returns immediately when `release.draft === false`, which is
+  this workflow's case — it sets no `draft` input — so the new draft-reuse and
+  tag-creation-blocked paths are unreachable here. `v2.6.2` was upstream's last
+  Node 20 release and is no longer maintained; `v3.0.2` also carries *"upload
+  small checksum assets reliably"*, which is the shape of the four `.sha256`
+  sidecars this workflow uploads. No security advisory is published against
+  either version.
+
+  This cannot be exercised without publishing a real release, and this
+  repository must not create a throwaway tag to try, so the first production
+  execution is the release cut immediately after this merge. ([#35])
 - **Claude Code pinned to `2.1.269`**, from `2.1.268`. Applied with
   `tools/refresh-pins.sh --write`, which rewrote all five surfaces that record
   it: `lib/bootstrap/config.sh`, `config.example.env`,
@@ -227,6 +252,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#29]: https://github.com/evya1/server-bootstrap/issues/29
 [#38]: https://github.com/evya1/server-bootstrap/issues/38
 [#36]: https://github.com/evya1/server-bootstrap/pull/36
+[#35]: https://github.com/evya1/server-bootstrap/pull/35
 
 ## 2.2.2
 
