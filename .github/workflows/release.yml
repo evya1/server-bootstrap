@@ -3,14 +3,23 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
-
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # The grant sits on the job that needs it rather than on the file, so a
+    # second job added here starts with no write access rather than inheriting
+    # it. This is the only place in the repository with contents: write.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      # persist-credentials: false even here: nothing in this job performs an
+      # authenticated Git operation, and leaving a token that can push to this
+      # repository in .git/config for the duration of a release build is the
+      # larger of the two exposures this change removes. The upload step below
+      # authenticates through its own token input, not through the checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
 
       # Every pre-publication gate lives in tools/release-preflight.sh: the tag
       # check, the pinned Gitleaks, the reproducible build (which runs the suite
@@ -32,8 +41,11 @@ jobs:
         run: bash tools/release-preflight.sh --tag "$CANDIDATE_TAG"
 
       - name: Publish assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         with:
+          # Stated rather than implicit, so the authentication path is visible
+          # in the file and is demonstrably not the checkout's credentials.
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             release/dist/server-bootstrap-*.tar.gz
             release/dist/server-bootstrap-*.tar.gz.sha256

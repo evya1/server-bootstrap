@@ -647,6 +647,130 @@ scans the artifacts before upload|scan-artifacts release/dist
 PREFLIGHT
 (( preflight_drift == 0 )) && ok "the release preflight still runs every pre-publication gate"
 
+section "Workflow supply chain: immutable action pins and least privilege"
+# Every uses: in this repository pointed at a mutable major tag, including the
+# two steps in the job that holds contents: write. A tag is a pointer: the owner
+# -- or anyone who compromises the owner's account -- can move it to different
+# code, and the next run picks that code up with no diff here and no review.
+# Pinning to a commit SHA is what makes "what ran" a reviewable fact. See #27.
+#
+# The version comment is not decoration: it is what a reader and Dependabot both
+# use to tell which release a SHA is, so a pin without one is only half a pin.
+workflow_uses_violations() {
+    local file="$1" line ref
+    while IFS= read -r line; do
+        ref="${line#*uses:}"; ref="${ref#"${ref%%[![:space:]]*}"}"; ref="${ref%%[[:space:]]*}"
+        # A local action (./…) has no upstream to pin; nothing here uses one,
+        # and the release-workflow guard rejects adding one.
+        [[ "$ref" == ./* ]] && { printf '%s: local action %s\n' "$file" "$ref"; continue; }
+        if [[ ! "$ref" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+@[0-9a-f]{40}$ ]]; then
+            printf '%s: %s is not pinned to a full commit SHA\n' "$file" "$ref"
+            continue
+        fi
+        grep -qE "uses:[[:space:]]*${ref//\//\\/}[[:space:]]+# v[0-9]" <<< "$line" \
+            || printf '%s: %s has no version comment\n' "$file" "$ref"
+    done < <(grep -vE '^[[:space:]]*#' "$file" | grep -E '^[[:space:]]*-?[[:space:]]*uses:' \
+        | sed -E 's/^[[:space:]]*-?[[:space:]]*/  /')
+}
+uses_drift=0
+for workflow in .github/workflows/*.yml; do
+    while IFS= read -r violation; do
+        [[ -n "$violation" ]] || continue
+        bad "action pin: $violation"; uses_drift=1
+    done < <(workflow_uses_violations "$workflow")
+done
+(( uses_drift == 0 )) && ok "every action is pinned to a full commit SHA with a version comment"
+
+# The shape check against fixtures, because the assertion above passes trivially
+# on a file with no uses: at all.
+uses_fixture="$TMP/uses-fixture.yml"
+uses_guard() {  # label, expect (accept|reject), line
+    printf 'jobs:\n  j:\n    steps:\n      - uses: %s\n' "$3" > "$uses_fixture"
+    if [[ -z "$(workflow_uses_violations "$uses_fixture")" ]]; then
+        [[ "$2" == accept ]] && ok "the action-pin guard accepts $1" \
+            || bad "the action-pin guard accepted $1"
+    else
+        [[ "$2" == reject ]] && ok "the action-pin guard rejects $1" \
+            || bad "the action-pin guard rejected $1"
+    fi
+}
+uses_guard "a full SHA with a version comment" accept \
+    'actions/checkout@1111111111111111111111111111111111111111  # v4.4.0'
+uses_guard "a mutable major tag" reject 'actions/checkout@v4'
+uses_guard "a branch" reject 'actions/checkout@main'
+uses_guard "a short SHA" reject 'actions/checkout@1111111  # v4.4.0'
+uses_guard "a full SHA with no version comment" reject \
+    'actions/checkout@1111111111111111111111111111111111111111'
+uses_guard "a local composite action" reject './.github/actions/thing'
+
+# Least privilege, per job rather than per file: a second job added to
+# release.yml must start with no write access rather than inheriting it.
+perm_drift=0
+for workflow in .github/workflows/*.yml; do
+    grep -qE '^permissions:' "$workflow" \
+        && { bad "$workflow grants permissions at the workflow level"; perm_drift=1; }
+    while IFS= read -r job; do
+        [[ -n "$job" ]] || continue
+        block="$(grep -vE '^[[:space:]]*#' "$workflow" \
+            | awk -v want="  $job:" '$0 == want {f=1; next} /^  [A-Za-z]/{f=0} f')"
+        grep -qE '^    permissions:' <<< "$block" \
+            || { bad "$workflow job '$job' declares no permissions"; perm_drift=1; }
+        if grep -qE '^      contents:[[:space:]]*write' <<< "$block"; then
+            [[ "$workflow:$job" == ".github/workflows/release.yml:publish" ]] \
+                || { bad "$workflow job '$job' takes contents: write"; perm_drift=1; }
+        fi
+    done < <(grep -vE '^[[:space:]]*#' "$workflow" \
+        | awk '/^jobs:$/{f=1; next} /^[A-Za-z]/{f=0} f' \
+        | sed -nE 's/^  ([A-Za-z][A-Za-z0-9_-]*):$/\1/p')
+done
+grep -qE '^      contents:[[:space:]]*write' .github/workflows/release.yml \
+    || { bad "the publish job cannot upload without contents: write"; perm_drift=1; }
+(( perm_drift == 0 )) && ok "every job declares its permissions and only publish can write"
+
+# No job here performs an authenticated Git operation after checkout, so none
+# needs the token left in .git/config. The tag-checkout job clones
+# file://$GITHUB_WORKSPACE, which needs no credentials at all.
+cred_drift=0
+for workflow in .github/workflows/*.yml; do
+    while IFS= read -r finding; do
+        [[ -n "$finding" ]] || continue
+        bad "$workflow: $finding"; cred_drift=1
+    done < <(grep -vE '^[[:space:]]*#' "$workflow" | awk '
+        /uses:[[:space:]]*actions\/checkout@/ { pending = 1; seen = 0; next }
+        pending && /^[[:space:]]*-[[:space:]]/ {
+            if (!seen) print "a checkout does not set persist-credentials: false"
+            pending = 0
+        }
+        pending && /persist-credentials:[[:space:]]*false/ { seen = 1 }
+        END { if (pending && !seen) print "a checkout does not set persist-credentials: false" }
+    ')
+done
+(( cred_drift == 0 )) && ok "no checkout leaves a token in .git/config"
+
+# The upload authenticates through its own input, which is what makes the line
+# above safe to assert rather than hope about.
+grep -qF 'token: ${{ secrets.GITHUB_TOKEN }}' .github/workflows/release.yml \
+    && ok "the release upload names its token explicitly" \
+    || bad "the release upload relies on an implicit token"
+
+# A pin with no update channel is a pin that rots.
+dependabot_drift=0
+if [[ ! -f .github/dependabot.yml ]]; then
+    bad "no .github/dependabot.yml, so nothing proposes action updates"
+    dependabot_drift=1
+else
+    while IFS='|' read -r label needle; do
+        [[ -n "$label" ]] || continue
+        grep -qE -- "$needle" .github/dependabot.yml \
+            || { bad "dependabot.yml does not $label"; dependabot_drift=1; }
+    done <<'DEPENDABOT'
+declare the v2 schema|^version: 2$
+watch the github-actions ecosystem|package-ecosystem:[[:space:]]*["'\'']?github-actions
+check on a schedule|interval:[[:space:]]*(daily|weekly|monthly)
+DEPENDABOT
+fi
+(( dependabot_drift == 0 )) && ok "Dependabot proposes action updates against the pins"
+
 section "History-preservation policy"
 # The policy is only useful if it is discoverable and specific. These assert the
 # document exists, names the operations it forbids, and is linked from the

@@ -9,7 +9,7 @@ jobs:
       # Full history is intentional: SECURITY-PREVENTION-01.9 forbids rewriting
       # history, so a credential in an older commit stays reachable and has to be
       # caught here rather than deleted.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -35,12 +35,15 @@ jobs:
 
   shell:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       # Tags are needed so the suite's history-preservation check verifies the
       # published release tags still resolve instead of skipping.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: shellcheck (advisory)
         run: shellcheck -S warning $(find . -name '*.sh' -not -path './release/dist/*') server-bundle-install server-vscode-extensions server-secrets || true
@@ -59,8 +62,12 @@ jobs:
 
   release-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       # The same script release.yml runs, minus the tag: the pinned Gitleaks,
       # the reproducible double build, and the pre-upload artifact scan. Running
       # it here is what makes "release.yml has no code path CI does not run" a
@@ -71,6 +78,8 @@ jobs:
 
   tag-checkout:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       # release.yml is triggered by a tag push, so actions/checkout hands it a
       # detached, depth-1 checkout carrying exactly one tag. ci.yml gets that
@@ -89,7 +98,7 @@ jobs:
       # github.ref_name from, the origin URL, the fetch refspec, or the
       # checkout's authentication state. Anything depending on those is still
       # first exercised by a real tag push.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false

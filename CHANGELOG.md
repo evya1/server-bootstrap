@@ -57,8 +57,27 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 - **`tools/actionlint.sh`** — a pinned, checksum-verified workflow linter, in
   the shape of `tools/gitleaks.sh`, run as a blocking CI step. ([#26])
 
+- **`.github/dependabot.yml`** — weekly `github-actions` updates, so a SHA pin
+  has an update channel instead of quietly rotting. ([#27])
+
 ### Changed
 
+- **Every GitHub Action is pinned to a full commit SHA** with a version comment,
+  replacing the mutable `actions/checkout@v4` and
+  `softprops/action-gh-release@v2`. A tag is a pointer: its owner can move it to
+  different code and the next run picks that up with no diff here and no review.
+  The two most exposed were the two steps in the job that holds
+  `contents: write`. This pins what already runs — `v4` was `v4.4.0` and `v2`
+  was `v2.6.2` — and deliberately does not upgrade; Dependabot proposes that
+  separately, as a reviewable diff. ([#27])
+- **`contents: write` moved from the release workflow onto its `publish` job**,
+  and every `ci.yml` job now declares `contents: read`. A second job added to
+  `release.yml` starts with no write access rather than inheriting it. ([#27])
+- **Every checkout sets `persist-credentials: false`.** No job performs an
+  authenticated Git operation after checkout, and the `tag-checkout` job clones
+  `file://$GITHUB_WORKSPACE`, which needs no credentials. The release upload
+  authenticates through an explicit `token:` input, which is now written in the
+  file rather than left implicit. ([#27])
 - **`tools/refresh-pins.sh` distinguishes two kinds of pin.** Node.js, `gh`, uv,
   Claude Code, Codex and pi resolve to a published release and are `CURRENT` or
   `STALE`. Oh My Zsh publishes no releases, so its pin tracks a branch head that
@@ -129,6 +148,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#24]: https://github.com/evya1/server-bootstrap/issues/24
 [#25]: https://github.com/evya1/server-bootstrap/issues/25
 [#26]: https://github.com/evya1/server-bootstrap/issues/26
+[#27]: https://github.com/evya1/server-bootstrap/issues/27
 
 ## 2.2.2
 
