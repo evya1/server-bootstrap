@@ -95,7 +95,7 @@ system prefix, in one npm transaction:
 ```bash
 AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
-CLAUDE_CODE_VERSION=2.1.268
+CLAUDE_CODE_VERSION=2.1.269
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
 CODEX_VERSION=0.154.0
 PI_VERSION=0.85.1

@@ -34,6 +34,25 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 
 ### Changed
 
+- **Claude Code pinned to `2.1.269`**, from `2.1.268`. Applied with
+  `tools/refresh-pins.sh --write`, which rewrote all five surfaces that record
+  it: `lib/bootstrap/config.sh`, `config.example.env`,
+  `checksums/AI_CLI_VERSIONS.txt`, `README.md` and `docs/CONFIGURATION.md`.
+  Nothing else moved — Node.js `24.21.0`, `gh` `2.100.0`, uv `0.12.13`, Codex
+  `0.154.0` and pi `0.85.1` were each confirmed current against their own
+  upstream, and the Oh My Zsh branch head was deliberately left at `c6e66ede`
+  even though it has moved to `be8da5c7`: it is a `branch-head` pin, so
+  movement is reported and not actioned, and `--write` was run without `--all`.
+
+  What that pin buys, stated precisely: Claude Code is an **exact-version npm
+  install**, so its integrity comes from the npm registry — `npm` resolves
+  `@anthropic-ai/claude-code@2.1.269` and checks the downloaded tarball against
+  the SHA-512 `dist.integrity` the registry publishes for that exact version.
+  **No SHA-256 in this repository covers it**, unlike the Node.js, uv and `gh`
+  archives. What the bootstrap adds on top is a post-install check:
+  `bootstrap_verify_npm_package_version()` reads the installed `package.json`
+  back and fails the run if npm did not install the exact version requested.
+  ([#38])
 - **The example plans no longer restate the uv pin.** A plan is sourced by
   `server-provision.sh` before the bootstrap runs, so an exported `UV_VERSION`
   in a plan beats the bundle default. Both shipped plans pinned uv `0.12.12`
@@ -193,6 +212,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#27]: https://github.com/evya1/server-bootstrap/issues/27
 [#28]: https://github.com/evya1/server-bootstrap/issues/28
 [#29]: https://github.com/evya1/server-bootstrap/issues/29
+[#38]: https://github.com/evya1/server-bootstrap/issues/38
 
 ## 2.2.2
 

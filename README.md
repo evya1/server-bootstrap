@@ -76,7 +76,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
 | **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.100.0 (`gh`) |
 | **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
-| **Agents** | Claude Code 2.1.268, OpenAI Codex 0.154.0 and pi 0.85.1, isolated in `/opt/ai-cli` |
+| **Agents** | Claude Code 2.1.269, OpenAI Codex 0.154.0 and pi 0.85.1, isolated in `/opt/ai-cli` |
 | **API keys** | One root-only `secrets.env` (mode 0600) loaded into every login shell, managed with `server-secrets` |
 | **Python** | uv, plus an isolated base environment |
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
