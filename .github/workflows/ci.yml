@@ -59,6 +59,17 @@ jobs:
           # assert the published ones still resolve. Other checkouts skip it.
           SB_CHECK_PUBLISHED_TAGS: 1
         run: bash tests/run-tests.sh
+      # Runs only after something above has already failed, and always exits 0,
+      # so it cannot turn a red run green or become a gate of its own. When the
+      # failure is a stale checksums/SHA256SUMS -- the shape every Dependabot
+      # pull request arrives in, because it edits a tracked workflow file and
+      # cannot run this repository's regeneration command -- it prints the one
+      # fixing command and the exact patch that command produces. Read-only: it
+      # restores the manifest before returning and never commits or pushes. The
+      # job keeps contents: read. See #41.
+      - name: Explain a stale manifest, if that is what failed
+        if: failure()
+        run: bash tools/manifest-fix-hint.sh
 
   release-build:
     runs-on: ubuntu-latest

@@ -4,6 +4,8 @@ set -Euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
 PASS=0; FAIL=0
+# Set by the checksums/SHA256SUMS assertion, read by the Results section. See #41.
+MANIFEST_STALE=0
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 ok(){ printf '  ok:   %s\n' "$1"; PASS=$((PASS+1)); }
 bad(){ printf '  FAIL: %s\n' "$1"; FAIL=$((FAIL+1)); }
@@ -274,7 +276,7 @@ section "Fitness: the release file set and checksums/SHA256SUMS"
 # See #24.
 release_files_out="$(bash release/release-files.sh verify 2>&1)" \
     && ok "checksums/SHA256SUMS matches the release file set" \
-    || bad "release-files verify: $release_files_out"
+    || { bad "release-files verify: $release_files_out"; MANIFEST_STALE=1; }
 [[ "$(bash release/release-files.sh source 2>/dev/null)" == git ]] \
     && ok "a git checkout resolves the release set from the tracked files" \
     || bad "a git checkout did not resolve the release set from git"
@@ -432,6 +434,67 @@ if bash release/release-files.sh --root "$root" list >/dev/null 2>&1; then
 else
     ok "a tree with no .git and no manifest is refused"
 fi
+
+# --- the stale-manifest remedy (#41) ---------------------------------------
+# Dependabot edits a tracked workflow file and cannot run the regeneration
+# command, so every one of its pull requests opens with a stale manifest and
+# three red jobs. The verification is correct and is deliberately untouched
+# above; what is tested here is that the failure explains itself. The hint
+# script is exercised against a synthetic tree, never the real checkout, so a
+# failing assertion cannot leave this repository's manifest rewritten.
+hint_fixture() {  # -> a synthetic root carrying both scripts
+    local dir; dir="$(release_fixture)"
+    mkdir -p "$dir/tools" "$dir/release"
+    cp tools/manifest-fix-hint.sh "$dir/tools/"
+    cp release/release-files.sh "$dir/release/"
+    git -C "$dir" add -A
+    bash release/release-files.sh --root "$dir" write >/dev/null
+    git -C "$dir" add -A
+    printf '%s\n' "$dir"
+}
+
+root="$(hint_fixture)"
+hint_out="$(bash "$root/tools/manifest-fix-hint.sh" 2>&1)"; hint_code=$?
+(( hint_code == 0 )) \
+    && ok "the manifest hint exits 0 on a current manifest" \
+    || bad "the manifest hint exited $hint_code on a current manifest"
+grep -qF 'is current' <<< "$hint_out" \
+    && ok "the manifest hint says nothing is stale when nothing is stale" \
+    || bad "the manifest hint did not report a current manifest: $hint_out"
+
+# The Dependabot shape: a tracked file changes, the manifest does not.
+root="$(hint_fixture)"
+before="$(sha256sum "$root/checksums/SHA256SUMS" | awk '{print $1}')"
+printf 'bumped\n' >> "$root/lib/beta.sh"
+hint_out="$(bash "$root/tools/manifest-fix-hint.sh" 2>&1)"; hint_code=$?
+(( hint_code == 0 )) \
+    && ok "the manifest hint exits 0 on a stale manifest, so it is never a gate" \
+    || bad "the manifest hint exited $hint_code on a stale manifest"
+grep -qF 'bash release/release-files.sh write' <<< "$hint_out" \
+    && ok "the manifest hint names the exact regeneration command" \
+    || bad "the manifest hint did not name the command: $hint_out"
+grep -qF 'stale hash: lib/beta.sh' <<< "$hint_out" \
+    && ok "the manifest hint names the file that went stale" \
+    || bad "the manifest hint did not name the stale file: $hint_out"
+grep -qE '^\+[0-9a-f]{64}  lib/beta\.sh$' <<< "$hint_out" \
+    && ok "the manifest hint prints the patch that fixes it" \
+    || bad "the manifest hint printed no fixing patch: $hint_out"
+# The property that makes it safe to run from CI: it regenerates to show the
+# diff, then puts the file back exactly as it found it.
+[[ "$(sha256sum "$root/checksums/SHA256SUMS" | awk '{print $1}')" == "$before" ]] \
+    && ok "the manifest hint restores the manifest byte-for-byte" \
+    || bad "the manifest hint left the manifest rewritten"
+# It is a diagnostic, not a fix: the tree it ran on is still correctly rejected.
+bash release/release-files.sh --root "$root" verify >/dev/null 2>&1 \
+    && bad "running the hint made a stale manifest verify" \
+    || ok "running the hint does not make a stale manifest verify"
+
+# The suite's own last word. A remedy printed 300 assertions up the log is not
+# where anyone looks; this asserts it is also emitted after the PASS/FAIL line.
+grep -q 'MANIFEST_STALE=1' tests/run-tests.sh \
+    && grep -q 'if (( MANIFEST_STALE )); then' tests/run-tests.sh \
+    && ok "a stale manifest is flagged for the Results section" \
+    || bad "the stale-manifest flag is no longer wired to the Results section"
 
 section "Release rehearsal in CI"
 # release.yml only runs on a tag push, so its checkout is detached, one commit
@@ -726,6 +789,29 @@ done
 grep -qE '^      contents:[[:space:]]*write' .github/workflows/release.yml \
     || { bad "the publish job cannot upload without contents: write"; perm_drift=1; }
 (( perm_drift == 0 )) && ok "every job declares its permissions and only publish can write"
+
+# pull_request_target runs with the base repository's secrets and a writable
+# token; combining it with a checkout of pull-request head content is the
+# standard way a repository gets compromised, and actions/checkout v7 blocks
+# that combination for exactly this reason. #41 considered a bot-facing
+# automation that would have needed it and rejected the option. Nothing here
+# uses the trigger, and this asserts nothing quietly starts.
+if grep -lq 'pull_request_target' .github/workflows/*.yml 2>/dev/null; then
+    bad "a workflow uses pull_request_target"
+else
+    ok "no workflow uses pull_request_target"
+fi
+
+# The #41 remedy step is a diagnostic, not a gate. It must stay conditional on
+# failure -- promoted to an unconditional step it would run on green builds, and
+# made part of the suite it could start deciding whether a run passes.
+if grep -q 'bash tools/manifest-fix-hint.sh' .github/workflows/ci.yml; then
+    grep -B2 'bash tools/manifest-fix-hint.sh' .github/workflows/ci.yml | grep -q 'if: failure()' \
+        && ok "the stale-manifest hint runs only after a failure" \
+        || bad "the stale-manifest hint is no longer conditional on failure"
+else
+    bad "ci.yml no longer runs the stale-manifest hint"
+fi
 
 # No job here performs an authenticated Git operation after checkout, so none
 # needs the token left in .git/config. The tag-checkout job clones
@@ -1974,4 +2060,18 @@ done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
 
 section "Results"
 printf 'PASS: %d   FAIL: %d\n' "$PASS" "$FAIL"
+# A stale manifest is the one failure here that is routine, mechanical, and not
+# a defect in the change under test: a bot edits a tracked workflow file and
+# cannot run the regeneration command. See #41. The message exists further up in
+# release-files' own output, but the last line of a 300-assertion run is what
+# anyone actually reads, so the remedy is repeated where it will be seen.
+if (( MANIFEST_STALE )); then
+    printf '\n%s\n' "----------------------------------------------------------------"
+    printf 'checksums/SHA256SUMS is stale. Regenerate and commit it:\n\n'
+    printf '    bash release/release-files.sh write\n\n'
+    printf 'The workflow files are tracked, so they are part of the canonical\n'
+    printf 'release set and the manifest covers them. This is not an\n'
+    printf 'incompatibility in the change under test.\n'
+    printf '%s\n' "----------------------------------------------------------------"
+fi
 (( FAIL == 0 ))

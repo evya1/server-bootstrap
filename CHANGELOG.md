@@ -141,6 +141,31 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
   through all ten (exit code, issue open) combinations. ([#28])
 - **`.github/dependabot.yml`** — weekly `github-actions` updates, so a SHA pin
   has an update channel instead of quietly rotting. ([#27])
+- **`tools/manifest-fix-hint.sh`** — when a run fails because
+  `checksums/SHA256SUMS` is stale, this prints the single command that repairs
+  it and the exact patch that command produces. Every Dependabot pull request
+  opens in that state: it edits a tracked `.github/workflows/*.yml`, which is
+  part of the canonical release set, and it has no way to run a repository
+  command. The verification is correct, but three red jobs and a bare
+  `PASS: n FAIL: 1` are indistinguishable at a glance from a real
+  incompatibility.
+
+  Deliberately the smallest thing that removes the ambiguity. It is read-only:
+  it restores the manifest byte-for-byte before returning, never commits or
+  pushes, and always exits `0`, so it cannot become a gate. `ci.yml` runs it as
+  an `if: failure()` step in the existing `shell` job — no new action pin, no
+  new secret, and every job keeps `contents: read`. `tests/run-tests.sh` also
+  repeats the remedy after its `PASS/FAIL` line, which is where a reader
+  actually looks.
+
+  What was considered and rejected: uploading the patch as a build artifact
+  (needs a new third-party action pin — more Dependabot churn, which is the
+  problem this addresses), and a privileged bot-facing job that pushes the
+  regenerated manifest itself (needs `contents: write` on a branch an author can
+  edit). Zero-touch was never the goal; the extra commit is fine, the extra
+  commit being mysterious was not. Manifest verification itself is untouched and
+  still rejects extra, missing, duplicate, stale, malformed and misordered
+  entries. ([#41])
 
 ### Changed
 
@@ -253,6 +278,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#38]: https://github.com/evya1/server-bootstrap/issues/38
 [#36]: https://github.com/evya1/server-bootstrap/pull/36
 [#35]: https://github.com/evya1/server-bootstrap/pull/35
+[#41]: https://github.com/evya1/server-bootstrap/issues/41
 
 ## 2.2.2
 
