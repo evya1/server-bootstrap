@@ -25,8 +25,8 @@ export DELETE_ARCHIVES_AFTER_SUCCESS=1
 export INSTALL_UV=1
 
 register_bootstrap \
-  "./server-bootstrap-2.2.2.tar.gz" \
-  "./server-bootstrap-2.2.2.tar.gz.sha256"
+  "./server-bootstrap-2.2.3.tar.gz" \
+  "./server-bootstrap-2.2.3.tar.gz.sha256"
 
 # As shipped this plan installs the server foundation only, so it runs green on
 # a fresh box with nothing else downloaded. Uncomment and edit the block below

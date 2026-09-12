@@ -22,8 +22,8 @@ export DELETE_ARCHIVES_AFTER_SUCCESS=1
 export INSTALL_UV=1
 
 register_bootstrap \
-  "./server-bootstrap-2.2.2.tar.gz" \
-  "./server-bootstrap-2.2.2.tar.gz.sha256"
+  "./server-bootstrap-2.2.3.tar.gz" \
+  "./server-bootstrap-2.2.3.tar.gz.sha256"
 
 register_bundle \
   "whisper-toolkit" \
