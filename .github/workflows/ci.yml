@@ -9,7 +9,7 @@ jobs:
       # Full history is intentional: SECURITY-PREVENTION-01.9 forbids rewriting
       # history, so a credential in an older commit stays reachable and has to be
       # caught here rather than deleted.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -40,7 +40,7 @@ jobs:
     steps:
       # Tags are needed so the suite's history-preservation check verifies the
       # published release tags still resolve instead of skipping.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -65,7 +65,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       # The same script release.yml runs, minus the tag: the pinned Gitleaks,
@@ -98,7 +98,7 @@ jobs:
       # github.ref_name from, the origin URL, the fetch refspec, or the
       # checkout's authentication state. Anything depending on those is still
       # first exercised by a real tag push.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
