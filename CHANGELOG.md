@@ -34,6 +34,19 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 
 ### Changed
 
+- **`actions/checkout` upgraded to `v7.0.1`**
+  (`3d3c42e5aac5ba805825da76410c181273ba90b1`), from `v4.4.0`, in all three
+  workflows. The three intervening majors are a runtime move and two hardening
+  changes, none of which touches how this repository uses the action: `v5.0.0`
+  moved the runtime from Node 20 to Node 24; `v6.0.0` persists credentials to a
+  separate file, a path every job here opts out of with
+  `persist-credentials: false`; `v7.0.0` blocks checking out fork PRs for
+  `pull_request_target` and `workflow_run`, neither of which appears in any
+  workflow here. Every input, default and output is byte-identical between the
+  two versions — the only `action.yml` change is `using: node20` →
+  `using: node24`. GitHub already forces the old pin onto Node 24 and warns that
+  Node 20 is deprecated, so this aligns the declared runtime with what has been
+  executing. ([#36])
 - **Claude Code pinned to `2.1.269`**, from `2.1.268`. Applied with
   `tools/refresh-pins.sh --write`, which rewrote all five surfaces that record
   it: `lib/bootstrap/config.sh`, `config.example.env`,
@@ -213,6 +226,7 @@ Nothing here has shipped. `VERSION` is still `2.2.2`.
 [#28]: https://github.com/evya1/server-bootstrap/issues/28
 [#29]: https://github.com/evya1/server-bootstrap/issues/29
 [#38]: https://github.com/evya1/server-bootstrap/issues/38
+[#36]: https://github.com/evya1/server-bootstrap/pull/36
 
 ## 2.2.2
 
