@@ -236,6 +236,23 @@ for rel in seen_files:
         if value and value in text and (pin, rel) not in claimed:
             report(f"unclaimed: {rel} records the {pin} value but no row checks it")
 
+# A keyed version row in checksums/ must belong to a pin mapped to that file.
+# The hash rule below has always covered an extra architecture line; this covers
+# the other shape a pinned recording takes, so an unmapped
+# "@scope/package 1.2.3" row cannot sit in AI_CLI_VERSIONS.txt unchecked. Only a
+# line that is exactly "<token> <semver>" qualifies, so prose such as
+# "Node.js 24.21.0 official release checksums:" is not mistaken for a recording.
+# See #47.
+for rel in seen_files:
+    if not rel.startswith("checksums/") or rel in missing_files:
+        continue
+    known = {canonical[p] for p, r, _ in MAP if r == rel and p in canonical}
+    for line in (read(rel) or "").splitlines():
+        row = re.fullmatch(r'(\S+) (\d+\.\d+\.\d+)', line.strip())
+        if row and row.group(2) not in known:
+            report(f"unclaimed version row in {rel}: {row.group(1)} "
+                   f"{row.group(2)} matches no pin mapped to that file")
+
 # Every hash in checksums/ must belong to a pin mapped to that file, so an extra
 # architecture line cannot be added without being checked.
 for rel in seen_files:

