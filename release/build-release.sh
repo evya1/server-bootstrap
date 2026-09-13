@@ -127,9 +127,14 @@ build_archives() {
 }
 
 rm -rf "$DIST"; mkdir -p "$DIST"
-# Every published artifact is hashed in both passes and compared. Naming them
-# in one list is what stops a new artifact being added to the release without
+# The four release archives are hashed in both passes and compared. Naming them
+# in one list is what stops a new archive being added to the release without
 # being added to the gate -- which is how the source zip ended up outside it.
+#
+# Scope, stated exactly: this list is the four archives, not the nine assets
+# release.yml uploads. The other five -- the two sidecars, the manifest and the
+# two standalone first-run files -- are derived from or describe these, and are
+# deliberately not double-built. See #47.
 ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" "$NAME-$VERSION-source.zip")
 
 hash_artifacts() {  # directory -> "<name> <sha256>" per line, sorted by name
@@ -213,11 +218,11 @@ scan_release_tree "$unpack_src" "extracted $NAME-$VERSION-source.zip"
 # almost everything in it is an archive, so this pass descends into them.
 scan_release_tree "$DIST" "release/dist staging" scan-artifacts
 
-# Publication is only safe if the scans left the artifacts alone. Re-hashing
-# the same list the gate used means a new artifact cannot be published without
-# this check covering it either.
+# Publication is only safe if the scans left the archives alone. Re-hashing the
+# same list the gate used means a new archive cannot be published without this
+# check covering it either.
 if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then
-    echo "ERROR: release artifacts changed after the reproducibility gate" >&2
+    echo "ERROR: release archives changed after the reproducibility gate" >&2
     diff <(printf '%s\n' "$hashes_1") <(hash_artifacts "$DIST") >&2 || true
     exit 1
 fi
