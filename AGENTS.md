@@ -7,8 +7,8 @@ rather than restating them.
 
 ## Purpose and scope
 
-`server-bootstrap` turns a freshly rented Ubuntu 24.04 server, run as root on
-x86-64 or ARM64, into a pinned and verified development machine. It checks the
+`server-bootstrap` turns a fresh Ubuntu 24.04 host, run as root on x86-64 or
+ARM64, into a pinned and verified development environment. It checks the
 hardware before any workload and starts nothing on its own: no workload, model
 download, or public port. Maintainer tooling needs Bash and Python 3; the
 pinned Gitleaks and actionlint binaries are Linux x86-64 only.
