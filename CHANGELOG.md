@@ -11,6 +11,19 @@
 
 [#52]: https://github.com/evya1/server-bootstrap/issues/52
 
+### Changed
+
+- **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`
+  `2.100.0` → `2.101.0`, uv `0.12.13` → `0.12.17`, Claude Code `2.1.269` →
+  `2.1.280`, Codex `0.154.0` → `0.156.0` and pi `0.85.1` → `0.87.1`. The new
+  `gh` and uv SHA-256 values come from each publisher's own checksum manifest;
+  the three agent CLIs remain exact-version npm installs with no repository
+  checksum. Node.js `24.21.0` was already current. The Oh My Zsh branch head
+  stays at `c6e66ede` although upstream has moved; `--all` was not used.
+  ([#51][])
+
+[#51]: https://github.com/evya1/server-bootstrap/issues/51
+
 ## 2.2.3
 
 *Released 2026-09-12.*
