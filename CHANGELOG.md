@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-Nothing merged since 2.2.3.
+### Added
+
+- **`AGENTS.md`** — repository rules for coding agents: supported scope, entry
+  points, security boundaries, release invariants, the validation commands, and
+  the actions that need owner approval. It links to the existing guides rather
+  than restating them. Nothing installed on a server changes. ([#52][])
+
+[#52]: https://github.com/evya1/server-bootstrap/issues/52
 
 ## 2.2.3
 
