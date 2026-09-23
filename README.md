@@ -2,9 +2,9 @@
 
 # server-bootstrap
 
-**One command turns a freshly rented Ubuntu server into a working dev machine.**
+**One command turns a fresh Ubuntu server, VM, or container into a working development environment.**
 
-Verifies the hardware you paid for, installs a pinned toolchain, and starts nothing on its own.
+Checks the host against its declared specification, installs a pinned toolchain, and starts nothing on its own.
 
 [![ci](https://github.com/evya1/server-bootstrap/actions/workflows/ci.yml/badge.svg)](https://github.com/evya1/server-bootstrap/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/evya1/server-bootstrap?color=2563eb&label=release)](https://github.com/evya1/server-bootstrap/releases/latest)
@@ -17,7 +17,7 @@ Verifies the hardware you paid for, installs a pinned toolchain, and starts noth
 
 ## Install
 
-Paste this whole block into a freshly rented Ubuntu server, as root:
+Paste this whole block into a fresh Ubuntu server, VM, or container, as root:
 
 ```bash
 V=2.2.3
@@ -35,7 +35,7 @@ chmod +x server-provision.sh
 That is the whole installation — roughly five minutes, most of it `apt`.
 
 > [!NOTE]
-> Rented hosts hand you a root shell and often ship without `sudo`.
+> Fresh hosts and containers often provide a root shell and ship without `sudo`.
 > Prefix the last command with `sudo` only if you are not root.
 
 Then start the new shell and paste your API keys once, into the one file every
@@ -75,6 +75,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear` and disk/mem/GPU aliases |
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
 | **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.101.0 (`gh`) |
+| **Tunnels** | Checksum-verified ngrok 3.39.11 agent CLI (`ngrok`), installed only: no auth token, tunnel or service is set up |
 | **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
 | **Agents** | Claude Code 2.1.280, OpenAI Codex 0.156.0 and pi 0.87.1, isolated in `/opt/ai-cli` |
 | **API keys** | One root-only `secrets.env` (mode 0600) loaded into every login shell, managed with `server-secrets` |
@@ -84,7 +85,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 
 Every version above is pinned by the release. The two guarantees behind that
 word are different and worth separating: **downloaded binary artifacts** —
-Node.js, uv and `gh` — are verified against SHA-256 values pinned in this
+Node.js, uv, `gh` and ngrok — are verified against SHA-256 values pinned in this
 repository before they are extracted, while the **AI CLIs** are exact-version
 npm installs whose integrity comes from npm and the registry, not from a
 checksum stored here; the bootstrap then verifies that npm installed the version
@@ -102,10 +103,10 @@ flowchart LR
   E --> F["workload bundles<br/>in plan order"]
 ```
 
-Acceptance runs **before** any workload. A rejected box stops provisioning, so
-you find out the disk is slow or the riser is x1 while destroying the instance
-is still cheap. A machine with no GPU is accepted normally — set
-`REQUIRE_ACCELERATOR=1` when a missing GPU means a failed delivery.
+Acceptance runs **before** any workload. A rejected host stops provisioning, so
+you find out the disk is slow or the riser is x1 before any workload depends on
+it. A machine with no GPU is accepted normally — set `REQUIRE_ACCELERATOR=1`
+when the declared specification requires a GPU.
 
 ---
 
@@ -114,9 +115,9 @@ is still cheap. A machine with no GPU is accepted normally — set
 | Goal | Command |
 | --- | --- |
 | Provision a fresh server end to end | `./server-provision.sh --plan ./provision-plan.example.sh` |
-| Re-run or repair the foundation on a box that already has it | `server-bootstrap` |
+| Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
-| Re-check that the rented box matches spec | `server-accept` |
+| Re-check the host against its declared specification | `server-accept` |
 | Install or repair the VS Code extension list | `server-vscode-extensions` |
 | Paste, inspect or edit your API keys | `server-secrets` |
 | Preview a plan without touching anything | `server-provision --plan … --dry-run` |
@@ -167,13 +168,13 @@ SKIP_PACKAGES="nmap tcpdump" \
   server-bootstrap
 ```
 
-Each subsystem can also be switched off individually — `INSTALL_GITHUB_CLI=0`,
-`INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and so on. See
-[CONFIGURATION](docs/CONFIGURATION.md) for the full list.
+Each subsystem except ngrok can also be switched off individually —
+`INSTALL_GITHUB_CLI=0`, `INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and
+so on. See [CONFIGURATION](docs/CONFIGURATION.md) for the full list.
 
-Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, and the AI
-CLIs — are deliberately absent from the manifest. Adding one of them to it would
-install a second, unpinned copy.
+Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, ngrok, and
+the AI CLIs — are deliberately absent from the manifest. Adding one of them to
+it would install a second, unpinned copy.
 
 ### Keeping the pinned versions fresh
 
@@ -187,7 +188,7 @@ tools/check-pins.sh              # assert those recordings still agree, offline
 `--check` exits `0` when nothing is actionable, `1` when a pinned **release** is
 behind, `2` on a usage error, and `3` when an upstream could not be resolved at
 all — which is deliberately not `0`, so a run whose network was broken cannot
-read as a clean week. Six pins track published releases; the Oh My Zsh pin
+read as a clean week. Seven pins track published releases; the Oh My Zsh pin
 tracks a branch head that moves several times a day, so its movement is reported
 as `MOVED` and does not fail the check unless you ask with `--all`.
 
@@ -246,7 +247,7 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 - SHA-256 is checked before any downloaded archive is extracted.
 - Archives with absolute paths, `..` traversal, or escaping symlinks are rejected.
 - Remote sources and the npm registry must use HTTPS.
-- Node.js, `gh`, Claude Code, Codex, pi, uv, and Oh My Zsh are version-pinned by the release.
+- Node.js, `gh`, ngrok, Claude Code, Codex, pi, uv, and Oh My Zsh are version-pinned by the release.
 - API keys live in one root-owned file at mode 0600, never in `/etc/profile.d`, which is world-readable.
 - That file is parsed, not sourced: a backtick or `$(...)` in a pasted value is data, not a command.
 - An empty key is not exported, so an untouched placeholder is never mistaken for a credential.
@@ -277,7 +278,7 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 | `server-bootstrap` | Prepare or refresh the general server foundation |
 | `server-provision` | Execute a local multi-bundle provisioning plan |
 | `server-bundle-install` | Install one verified bundle archive |
-| `server-accept` | Validate CPU, RAM, disk, and any GPU before you pay for the hour |
+| `server-accept` | Check CPU, RAM, disk, and any GPU against the required specification |
 | `server-vscode-extensions` | Install or repair the Remote-SSH extension manifest |
 | `server-secrets` | Store and inspect the API keys every login shell loads |
 

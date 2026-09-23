@@ -9,7 +9,7 @@ if ! declare -F register_bootstrap >/dev/null 2>&1; then
 fi
 
 # Optional server requirements checked before workload installation.
-# Set these to the specifications promised by the rental provider.
+# Set these to the host's declared or required specification.
 export MIN_VRAM_MIB=0
 export MIN_CORES=0
 export MIN_RAM_GB=0
@@ -29,7 +29,7 @@ register_bootstrap \
   "./server-bootstrap-2.2.3.tar.gz.sha256"
 
 # As shipped this plan installs the server foundation only, so it runs green on
-# a fresh box with nothing else downloaded. Uncomment and edit the block below
+# a fresh host with nothing else downloaded. Uncomment and edit the block below
 # once you actually have a workload archive and its .sha256 sitting beside this
 # file; a register_bundle line naming an archive that is not present aborts the
 # run after the bootstrap has already installed.

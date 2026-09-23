@@ -39,6 +39,7 @@ bootstrap_report() {
         echo "uv:         absent"
     fi
     echo "gh:         ${GITHUB_CLI_RESULT:-not-run}"
+    echo "ngrok:      ${NGROK_RESULT:-not-run}"
     echo "base numpy: $NUMPY_VERSION"
     if command -v nvidia-smi >/dev/null 2>&1; then
         ACCEL_PRESENT=1

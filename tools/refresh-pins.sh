@@ -20,11 +20,12 @@
 # 1 outranks 3. If something is definitely stale there is definitely work,
 # whether or not another row failed to resolve.
 #
-# Two kinds of pin, because they mean different things. Six tools resolve to a
-# published release -- a git tag or an npm dist-tag -- and stay put until
-# upstream cuts a new one. Oh My Zsh publishes no releases, so its pin tracks
-# refs/heads/master, which moves several times a day. Treating that movement as
-# staleness made exit 1 the steady state and the exit code meaningless.
+# Two kinds of pin, because they mean different things. Seven tools resolve to
+# a published release -- a git tag, an npm dist-tag, or an apt package index
+# entry -- and stay put until upstream cuts a new one. Oh My Zsh publishes no
+# releases, so its pin tracks refs/heads/master, which moves several times a
+# day. Treating that movement as staleness made exit 1 the steady state and the
+# exit code meaningless.
 #
 # An upstream that cannot be resolved is UNKNOWN and is never reported as
 # CURRENT. It used to fall back to the pinned value, so seven failed lookups
@@ -35,7 +36,8 @@
 # tools/check-pins.sh asserts, offline, that those files still agree.
 #
 # Tag discovery uses git ls-remote rather than api.github.com: no rate limit,
-# no token, and it works from restricted networks.
+# no token, and it works from restricted networks. ngrok publishes no tags; its
+# releases and their SHA-256 values come from its own apt Packages index.
 #
 # Sourcing this file defines the functions below and does nothing else: no
 # network, no filesystem writes, no directory change, no shell options. That is
@@ -44,6 +46,8 @@
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # shellcheck source=lib/core.sh
 source "$ROOT/lib/core.sh"
+# shellcheck source=lib/bootstrap/ngrok.sh
+source "$ROOT/lib/bootstrap/ngrok.sh"
 
 # ---------------------------------------------------------------------------
 # Pure decisions. No network, no clock, no filesystem -- driven directly by the
@@ -55,7 +59,7 @@ source "$ROOT/lib/core.sh"
 # the classification is a thing a test can assert.
 refresh_pins_kind() {
     case "${1:-}" in
-        nodejs|github-cli|uv|claude-code|codex|pi) printf 'release\n' ;;
+        nodejs|github-cli|uv|ngrok|claude-code|codex|pi) printf 'release\n' ;;
         oh-my-zsh) printf 'branch-head\n' ;;
         *) printf 'unknown\n'; return 2 ;;
     esac
@@ -149,16 +153,17 @@ refresh_pins_main() {
             --check) mode="check"; shift ;;
             --write) mode="write"; shift ;;
             --all) strict="all"; shift ;;
-            -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; return 0 ;;
+            -h|--help) sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; return 0 ;;
             *) echo "usage: $0 [--check|--write] [--all]" >&2; return 2 ;;
         esac
     done
 
-    local NODE_VERSION GH_VERSION UV_VERSION CLAUDE_CODE_VERSION CODEX_VERSION
+    local NODE_VERSION GH_VERSION UV_VERSION NGROK_VERSION CLAUDE_CODE_VERSION CODEX_VERSION
     local PI_VERSION OH_MY_ZSH_REF
     NODE_VERSION="$(refresh_pins_config_default NODE_VERSION)"
     GH_VERSION="$(refresh_pins_config_default GH_VERSION)"
     UV_VERSION="$(refresh_pins_config_default UV_VERSION)"
+    NGROK_VERSION="$(refresh_pins_config_default NGROK_VERSION)"
     CLAUDE_CODE_VERSION="$(refresh_pins_config_default CLAUDE_CODE_VERSION)"
     CODEX_VERSION="$(refresh_pins_config_default CODEX_VERSION)"
     PI_VERSION="$(refresh_pins_config_default PI_VERSION)"
@@ -166,10 +171,11 @@ refresh_pins_main() {
 
     sb_log "resolving upstream versions"
 
-    local NODE_LATEST GH_LATEST UV_LATEST CLAUDE_LATEST CODEX_LATEST PI_LATEST OMZ_LATEST
+    local NODE_LATEST GH_LATEST UV_LATEST NGROK_LATEST CLAUDE_LATEST CODEX_LATEST PI_LATEST OMZ_LATEST
     NODE_LATEST="$(refresh_pins_node_latest_lts || true)"
     GH_LATEST="$(sb_latest_git_tag https://github.com/cli/cli.git || true)"; GH_LATEST="${GH_LATEST#v}"
     UV_LATEST="$(sb_latest_git_tag https://github.com/astral-sh/uv.git '^[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+    NGROK_LATEST="$(bootstrap_ngrok_lookup latest amd64 2>/dev/null || true)"; NGROK_LATEST="${NGROK_LATEST%% *}"
     CLAUDE_LATEST="$(refresh_pins_npm_latest '@anthropic-ai/claude-code' || true)"
     CODEX_LATEST="$(refresh_pins_npm_latest '@openai/codex' || true)"
     PI_LATEST="$(refresh_pins_npm_latest '@earendil-works/pi-coding-agent' || true)"
@@ -188,6 +194,7 @@ refresh_pins_main() {
     record nodejs "$NODE_VERSION" "$NODE_LATEST"
     record github-cli "$GH_VERSION" "$GH_LATEST"
     record uv "$UV_VERSION" "$UV_LATEST"
+    record ngrok "$NGROK_VERSION" "$NGROK_LATEST"
     record claude-code "$CLAUDE_CODE_VERSION" "$CLAUDE_LATEST"
     record codex "$CODEX_VERSION" "$CODEX_LATEST"
     record pi "$PI_VERSION" "$PI_LATEST"
@@ -260,7 +267,7 @@ refresh_pins_main() {
     # Checksums come from each publisher's own manifest, alongside the artifact.
     sb_log "resolving checksums for the new versions"
     local NEW_NODE_X64 NEW_NODE_ARM64 GH_MANIFEST NEW_GH_X64 NEW_GH_ARM64
-    local UV_BASE NEW_UV_X64 NEW_UV_ARM64
+    local UV_BASE NEW_UV_X64 NEW_UV_ARM64 NEW_NGROK_X64 NEW_NGROK_ARM64
     NEW_NODE_X64="$(sb_checksum_from_manifest "https://nodejs.org/dist/v$NODE_LATEST/SHASUMS256.txt" "node-v$NODE_LATEST-linux-x64.tar.xz")"
     NEW_NODE_ARM64="$(sb_checksum_from_manifest "https://nodejs.org/dist/v$NODE_LATEST/SHASUMS256.txt" "node-v$NODE_LATEST-linux-arm64.tar.xz")"
     GH_MANIFEST="https://github.com/cli/cli/releases/download/v$GH_LATEST/gh_${GH_LATEST}_checksums.txt"
@@ -269,13 +276,16 @@ refresh_pins_main() {
     UV_BASE="https://github.com/astral-sh/uv/releases/download/$UV_LATEST"
     NEW_UV_X64="$(sb_checksum_from_manifest "$UV_BASE/uv-x86_64-unknown-linux-gnu.tar.gz.sha256" 'uv-x86_64-unknown-linux-gnu.tar.gz')"
     NEW_UV_ARM64="$(sb_checksum_from_manifest "$UV_BASE/uv-aarch64-unknown-linux-gnu.tar.gz.sha256" 'uv-aarch64-unknown-linux-gnu.tar.gz')"
+    NEW_NGROK_X64="$(bootstrap_ngrok_lookup "$NGROK_LATEST" amd64)"; NEW_NGROK_X64="${NEW_NGROK_X64#* }"
+    NEW_NGROK_ARM64="$(bootstrap_ngrok_lookup "$NGROK_LATEST" arm64)"; NEW_NGROK_ARM64="${NEW_NGROK_ARM64#* }"
 
-    NODE_VERSION="$NODE_LATEST" GH_VERSION="$GH_LATEST" UV_VERSION="$UV_LATEST" \
+    NODE_VERSION="$NODE_LATEST" GH_VERSION="$GH_LATEST" UV_VERSION="$UV_LATEST" NGROK_VERSION="$NGROK_LATEST" \
     CLAUDE_CODE_VERSION="$CLAUDE_LATEST" CODEX_VERSION="$CODEX_LATEST" PI_VERSION="$PI_LATEST" \
     OH_MY_ZSH_REF="$target_omz" OMZ_DATE="$(refresh_pins_omz_commit_date "$target_omz")" \
     NODE_SHA256_X64="$NEW_NODE_X64" NODE_SHA256_ARM64="$NEW_NODE_ARM64" \
     GH_SHA256_X64="$NEW_GH_X64" GH_SHA256_ARM64="$NEW_GH_ARM64" \
     UV_SHA256_X64="$NEW_UV_X64" UV_SHA256_ARM64="$NEW_UV_ARM64" \
+    NGROK_SHA256_X64="$NEW_NGROK_X64" NGROK_SHA256_ARM64="$NEW_NGROK_ARM64" \
     python3 "$ROOT/tools/write-pins.py"
 
     # CHANGELOG.md is still a hand edit: it records what a bump means, which no

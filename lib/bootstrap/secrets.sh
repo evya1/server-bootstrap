@@ -2,7 +2,7 @@
 
 # One root-only file holds every provider API key, and the generated Zsh
 # startup configuration loads it. Deliberately not /etc/profile.d: that
-# directory is world-readable and applies to every user on the box.
+# directory is world-readable and applies to every user on the host.
 
 bootstrap_write_secrets_zsh() {
     local zsh_dir loader

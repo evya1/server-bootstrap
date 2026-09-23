@@ -82,6 +82,15 @@ Do not bypass it. Confirm that `NODE_VERSION` and the architecture-specific
 checksum belong to the same official Node.js release. The defaults cover Linux
 x64 and ARM64. Unsupported architectures fail explicitly.
 
+## ngrok download or checksum failure
+
+ngrok is part of every bootstrap run, so a failed download stops the bootstrap.
+The host needs HTTPS access to `ngrok-agent.s3.amazonaws.com`. Do not bypass a
+checksum mismatch: confirm that `NGROK_VERSION` and the architecture-specific
+checksum name the same package in ngrok's `Packages` index. A failed attempt
+leaves any previously installed `/usr/local/bin/ngrok` untouched. Only x86-64
+and ARM64 are supported; other architectures fail explicitly.
+
 ## Provisioning stopped before workloads
 
 Read:
@@ -91,8 +100,8 @@ cat /workspace/startup-logs/latest-provision-summary.txt
 ```
 
 An acceptance rejection intentionally stops before workload bundles. Review the
-`server-accept` findings and destroy the rented instance when the advertised
-hardware is not present.
+`server-accept` findings. When the host does not meet its declared
+specification, correct or replace it before you rerun provisioning.
 
 ## Checksum mismatch for a workload bundle
 

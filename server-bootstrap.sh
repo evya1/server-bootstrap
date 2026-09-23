@@ -6,7 +6,7 @@ SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
 ROOT="$(cd -- "$(dirname -- "$SELF")" && pwd -P)"
 LIB="$ROOT/lib"
 for module in core archive bundle bootstrap/config bootstrap/workspace bootstrap/packages \
-    bootstrap/node bootstrap/ai_cli bootstrap/pi bootstrap/uv bootstrap/github_cli bootstrap/python \
+    bootstrap/node bootstrap/ai_cli bootstrap/pi bootstrap/uv bootstrap/github_cli bootstrap/ngrok bootstrap/python \
     bootstrap/secrets bootstrap/shell bootstrap/vscode bootstrap/runtime bootstrap/report; do
     # shellcheck source=/dev/null
     source "$LIB/$module.sh"
@@ -52,6 +52,7 @@ STEP=nodejs; bootstrap_nodejs
 STEP=ai-cli; bootstrap_ai_cli
 STEP=uv; bootstrap_uv
 STEP=github-cli; bootstrap_github_cli
+STEP=ngrok; bootstrap_ngrok
 STEP=base-python; bootstrap_base_python
 STEP=pi-config; bootstrap_pi_config
 STEP=secrets; bootstrap_secrets
@@ -87,6 +88,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE_ROOT/bootstrap-complete"
     echo "base_numpy: $NUMPY_VERSION"
     echo "node: $NODE_RESULT"
     echo "github_cli: $GITHUB_CLI_RESULT"
+    echo "ngrok: $NGROK_RESULT"
     echo "claude_code: $CLAUDE_RESULT"
     echo "codex: $CODEX_RESULT"
     echo "pi: $PI_RESULT"

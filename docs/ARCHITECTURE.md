@@ -6,7 +6,7 @@ The bootstrap is split by responsibility rather than kept as one large script.
 server-bootstrap.sh           orchestration of the base host setup
 server-provision.sh           first-run and multi-bundle orchestration
 server-bundle-install         one-bundle command-line interface
-server-accept.sh              rented-machine validation
+server-accept.sh              hardware check against the declared specification
 server-vscode-extensions      idempotent Remote-SSH extension installer
 server-secrets                API key file management
 config/packages.txt           required and optional apt package manifest
@@ -24,6 +24,7 @@ lib/bootstrap/ai_cli.sh       isolated Claude Code, Codex and pi npm installatio
 lib/bootstrap/pi.sh           pi configuration directory and models.json seed
 lib/bootstrap/uv.sh           optional pinned uv installation
 lib/bootstrap/github_cli.sh   pinned, verified GitHub CLI binary installation
+lib/bootstrap/ngrok.sh        pinned, verified ngrok CLI installation, no configuration
 lib/bootstrap/python.sh       isolated base Python environment
 lib/bootstrap/shell.sh        Zsh, Oh My Zsh, aliases, VS Code startup hook
 lib/bootstrap/vscode.sh       immediate-or-deferred extension orchestration
@@ -57,7 +58,7 @@ verify bootstrap archive
 
 ```text
 workspace → apt packages → persistent tools → Node.js → Claude/Codex/pi
-→ uv → GitHub CLI → base Python → pi config → API keys → shell
+→ uv → GitHub CLI → ngrok → base Python → pi config → API keys → shell
 → VS Code extensions → acceptance → optional legacy add-on → report → state
 ```
 

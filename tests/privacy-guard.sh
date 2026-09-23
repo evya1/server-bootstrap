@@ -137,8 +137,8 @@ done
 # ---------------------------------------------------------------------------
 # Policy: no private-use wording in the acceptance script
 # ---------------------------------------------------------------------------
-# server-accept.sh is read by whoever is evaluating a rented machine; wording
-# that assumes the reader personally rented it leaks how this repo is used.
+# server-accept.sh is read by whoever is evaluating a host; wording that
+# assumes how the reader obtained it leaks how this repo is used.
 if [[ -f "$TARGET/server-accept.sh" ]]; then
     while IFS= read -r phrase; do
         [[ -n "$phrase" ]] || continue
