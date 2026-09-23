@@ -175,7 +175,7 @@ command -v server-bundle-install >/dev/null 2>&1 || { echo "ERROR: bootstrap did
 ACCEPTANCE=not-run
 if [[ "$ACCEPT_POLICY" != off ]]; then
     STEP=acceptance
-    echo "==> Checking rented server"
+    echo "==> Checking host hardware"
     result=0; server-accept || result=$?
     case "$result" in 0) ACCEPTANCE=accept ;; 1) ACCEPTANCE=reject ;; 2) ACCEPTANCE=warn ;; *) echo "ERROR: server-accept failed: $result" >&2; exit "$result" ;; esac
     [[ "$ACCEPT_POLICY" != reject-stop || "$result" != 1 ]] || { echo "ERROR: server rejected; workloads were not installed" >&2; exit 1; }

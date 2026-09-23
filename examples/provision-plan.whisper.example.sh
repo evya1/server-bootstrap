@@ -8,7 +8,7 @@ if ! declare -F register_bootstrap >/dev/null 2>&1; then
     exit 2
 fi
 
-# Set these to the specifications promised by the rental provider.
+# Set these to the host's declared or required specification.
 export MIN_VRAM_MIB=0
 export MIN_CORES=0
 export MIN_RAM_GB=0

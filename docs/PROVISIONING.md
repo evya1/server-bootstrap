@@ -108,9 +108,9 @@ Thresholds such as `MIN_RAM_GB`, `MIN_CORES`, `MIN_DISK_GB`, and `MIN_VRAM_MIB`
 can be exported in the plan and are inherited by `server-accept`.
 
 CPU, RAM, and disk are checked on every machine. The accelerator checks run only
-when `nvidia-smi` is present, because a CPU-only box is a legitimate rental. Set
-`REQUIRE_ACCELERATOR=1` in the plan when you are paying for a GPU and a machine
-without one is a failed delivery.
+when `nvidia-smi` is present, because a CPU-only host is a valid configuration.
+Set `REQUIRE_ACCELERATOR=1` in the plan when the declared specification requires
+a GPU, so that a machine without one is rejected.
 
 ## Direct one-bundle installation
 

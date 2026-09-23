@@ -2040,8 +2040,8 @@ publisher.after' ]]; then
 else bad "VS Code helper partial-failure behavior"; fi
 
 section "Acceptance test is accelerator-optional"
-# A CPU-only box is a legitimate rental. Absent nvidia-smi must be a note, not a
-# rejection, unless the caller says it paid for a GPU.
+# A CPU-only host is a valid configuration. Absent nvidia-smi must be a note,
+# not a rejection, unless the declared specification requires a GPU.
 ACCEPT_FIX="$TMP/accept"; mkdir -p "$ACCEPT_FIX"
 if PATH=/usr/bin:/bin command -v nvidia-smi >/dev/null 2>&1; then
     ok "accelerator-absent path skipped (this machine has nvidia-smi)"
@@ -2312,7 +2312,7 @@ done
 
 # The quick-start plan must install the foundation only. An active
 # register_bundle naming an archive that ships nowhere aborts provisioning
-# after the bootstrap has already installed, reporting FAILED on a box that
+# after the bootstrap has already installed, reporting FAILED on a host that
 # was in fact provisioned.
 if grep -qE '^[[:space:]]*register_bundle' examples/provision-plan.example.sh; then
     bad "provision-plan.example.sh registers a bundle; quick start would fail"
@@ -2903,7 +2903,7 @@ grep -q 'bootstrap_github_cli_installed_version /usr/local/bin/gh' lib/bootstrap
     && ok "gh is verified through the path it was installed to" || bad "gh post-install verification"
 grep -q 'bootstrap_uv_installed_version /usr/local/bin/uv' lib/bootstrap/uv.sh \
     && ok "uv is verified through the path it was installed to" || bad "uv post-install verification"
-# The run summary is how an operator learns what is on the box, so it must
+# The run summary is how an operator learns what is on the host, so it must
 # never report a version read from a binary the bootstrap did not install.
 grep -q '"$AI_CLI_PREFIX/bin/claude" --version' lib/bootstrap/ai_cli.sh \
     && grep -q '"$AI_CLI_PREFIX/bin/codex" --version' lib/bootstrap/ai_cli.sh \

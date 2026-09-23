@@ -100,8 +100,8 @@ cat /workspace/startup-logs/latest-provision-summary.txt
 ```
 
 An acceptance rejection intentionally stops before workload bundles. Review the
-`server-accept` findings and destroy the rented instance when the advertised
-hardware is not present.
+`server-accept` findings. When the host does not meet its declared
+specification, correct or replace it before you rerun provisioning.
 
 ## Checksum mismatch for a workload bundle
 

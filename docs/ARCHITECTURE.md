@@ -6,7 +6,7 @@ The bootstrap is split by responsibility rather than kept as one large script.
 server-bootstrap.sh           orchestration of the base host setup
 server-provision.sh           first-run and multi-bundle orchestration
 server-bundle-install         one-bundle command-line interface
-server-accept.sh              rented-machine validation
+server-accept.sh              hardware check against the declared specification
 server-vscode-extensions      idempotent Remote-SSH extension installer
 server-secrets                API key file management
 config/packages.txt           required and optional apt package manifest

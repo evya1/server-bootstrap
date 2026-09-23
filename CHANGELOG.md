@@ -60,6 +60,16 @@
   the legacy `INSTALL_ADDON` path alike. Local archives are still verified
   first, exactly as before. ([#53][])
 
+- **Deployment-neutral wording.** The README, guides, example plans, command
+  output and comments now describe a server, VM, container or host and its
+  declared or required specification, without assuming how the machine was
+  obtained. `server-accept` reports a CPU or RAM shortfall against the
+  "required" value, its verdict lines name the declared specification, and
+  `server-provision` prints `Checking host hardware`. No command name,
+  threshold, `--json` field, check name or exit code changes. ([#59][])
+
+[#59]: https://github.com/evya1/server-bootstrap/issues/59
+
 ## 2.2.3
 
 *Released 2026-09-12.*

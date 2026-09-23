@@ -2,9 +2,9 @@
 
 # server-bootstrap
 
-**One command turns a freshly rented Ubuntu server into a working dev machine.**
+**One command turns a fresh Ubuntu server, VM, or container into a working development environment.**
 
-Verifies the hardware you paid for, installs a pinned toolchain, and starts nothing on its own.
+Checks the host against its declared specification, installs a pinned toolchain, and starts nothing on its own.
 
 [![ci](https://github.com/evya1/server-bootstrap/actions/workflows/ci.yml/badge.svg)](https://github.com/evya1/server-bootstrap/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/evya1/server-bootstrap?color=2563eb&label=release)](https://github.com/evya1/server-bootstrap/releases/latest)
@@ -17,7 +17,7 @@ Verifies the hardware you paid for, installs a pinned toolchain, and starts noth
 
 ## Install
 
-Paste this whole block into a freshly rented Ubuntu server, as root:
+Paste this whole block into a fresh Ubuntu server, VM, or container, as root:
 
 ```bash
 V=2.2.3
@@ -35,7 +35,7 @@ chmod +x server-provision.sh
 That is the whole installation — roughly five minutes, most of it `apt`.
 
 > [!NOTE]
-> Rented hosts hand you a root shell and often ship without `sudo`.
+> Fresh hosts and containers often provide a root shell and ship without `sudo`.
 > Prefix the last command with `sudo` only if you are not root.
 
 Then start the new shell and paste your API keys once, into the one file every
@@ -103,10 +103,10 @@ flowchart LR
   E --> F["workload bundles<br/>in plan order"]
 ```
 
-Acceptance runs **before** any workload. A rejected box stops provisioning, so
-you find out the disk is slow or the riser is x1 while destroying the instance
-is still cheap. A machine with no GPU is accepted normally — set
-`REQUIRE_ACCELERATOR=1` when a missing GPU means a failed delivery.
+Acceptance runs **before** any workload. A rejected host stops provisioning, so
+you find out the disk is slow or the riser is x1 before any workload depends on
+it. A machine with no GPU is accepted normally — set `REQUIRE_ACCELERATOR=1`
+when the declared specification requires a GPU.
 
 ---
 
@@ -115,9 +115,9 @@ is still cheap. A machine with no GPU is accepted normally — set
 | Goal | Command |
 | --- | --- |
 | Provision a fresh server end to end | `./server-provision.sh --plan ./provision-plan.example.sh` |
-| Re-run or repair the foundation on a box that already has it | `server-bootstrap` |
+| Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
-| Re-check that the rented box matches spec | `server-accept` |
+| Re-check the host against its declared specification | `server-accept` |
 | Install or repair the VS Code extension list | `server-vscode-extensions` |
 | Paste, inspect or edit your API keys | `server-secrets` |
 | Preview a plan without touching anything | `server-provision --plan … --dry-run` |
@@ -278,7 +278,7 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 | `server-bootstrap` | Prepare or refresh the general server foundation |
 | `server-provision` | Execute a local multi-bundle provisioning plan |
 | `server-bundle-install` | Install one verified bundle archive |
-| `server-accept` | Validate CPU, RAM, disk, and any GPU before you pay for the hour |
+| `server-accept` | Check CPU, RAM, disk, and any GPU against the required specification |
 | `server-vscode-extensions` | Install or repair the Remote-SSH extension manifest |
 | `server-secrets` | Store and inspect the API keys every login shell loads |
 

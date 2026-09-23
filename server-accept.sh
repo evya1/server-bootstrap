@@ -17,8 +17,8 @@
 #   - PCIe link narrower than the card supports (x16 card on an x1/x4 riser).
 #     Costs little at idle and increases transfer time during workload execution.
 #   - Persistent thermal/power throttling (an unsuitable thermal environment).
-#   - Volatile uncorrected ECC errors (walk away; do not debug).
-#   - Less VRAM/RAM/vCPU than advertised.
+#   - Volatile uncorrected ECC errors (reject; do not debug).
+#   - Less VRAM/RAM/vCPU than the declared specification requires.
 #   - Storage slower than the model download (a 3GB model at 40MB/s is a bad day).
 # =============================================================================
 set -Eeuo pipefail
@@ -70,11 +70,11 @@ q() {  # q FIELD  -> first GPU's value for an nvidia-smi query field
 (( JSON )) || echo "== server-accept =="
 
 # ---- Accelerator (optional) -------------------------------------------------
-# A CPU-only machine is a valid rental, so a missing nvidia-smi is only a hard
-# failure when the caller says it paid for a GPU.
+# A CPU-only machine is a valid host, so a missing nvidia-smi is only a hard
+# failure when REQUIRE_ACCELERATOR=1 says the declared specification needs one.
 if ! command -v nvidia-smi >/dev/null 2>&1; then
     if [[ "$REQUIRE_ACCELERATOR" == 1 ]]; then
-        reject "accelerator" "nvidia-smi absent but REQUIRE_ACCELERATOR=1 — this box has no usable GPU"
+        reject "accelerator" "nvidia-smi absent but REQUIRE_ACCELERATOR=1 — this host has no usable GPU"
     else
         note "accelerator" "no NVIDIA GPU detected; accelerator checks skipped (set REQUIRE_ACCELERATOR=1 to reject)"
     fi
@@ -88,8 +88,8 @@ else
 
 # -- PCIe. A hardware/specification mismatch and a common false positive.
     # link.*.current downtrains to x1/gen1 at idle to save power, so reading it
-    # on a quiet box tells you nothing. link.*.max is the negotiated ceiling —
-    # that is the number that exposes a x16 card sitting on a x1 mining riser.
+    # on an idle host tells you nothing. link.*.max is the negotiated ceiling —
+    # that is the number that exposes a x16 card sitting on a x1 riser.
     W_MAX="$(q pcie.link.width.max)"; W_CUR="$(q pcie.link.width.current)"
     G_MAX="$(q pcie.link.gen.max)";   G_CUR="$(q pcie.link.gen.current)"
     if [[ -z "$W_MAX" || "$W_MAX" == "[N/A]" ]]; then
@@ -137,12 +137,12 @@ fi
 CORES="$(nproc)"
 RAM_GB="$(awk '/MemTotal/{printf "%d", $2/1048576}' /proc/meminfo)"
 if [[ "$MIN_CORES" -gt 0 && "$CORES" -lt "$MIN_CORES" ]]; then
-    reject "cpu" "$CORES cores < advertised $MIN_CORES"
+    reject "cpu" "$CORES cores < required $MIN_CORES"
 else
     note "cpu" "$CORES cores"
 fi
 if [[ "$MIN_RAM_GB" -gt 0 && "$RAM_GB" -lt "$MIN_RAM_GB" ]]; then
-    reject "ram" "${RAM_GB}GB < advertised ${MIN_RAM_GB}GB"
+    reject "ram" "${RAM_GB}GB < required ${MIN_RAM_GB}GB"
 else
     note "ram" "${RAM_GB}GB"
 fi
@@ -198,11 +198,11 @@ if (( JSON )); then
 else
     echo
     if (( REJECT )); then
-        echo "VERDICT: REJECT ($REJECT hard, $WARN warn) — stop provisioning and replace the host."
+        echo "VERDICT: REJECT ($REJECT hard, $WARN warn) — stop provisioning; the host does not meet its declared specification."
     elif (( WARN )); then
         echo "VERDICT: WARN ($WARN) — usable, but read the warnings before a long batch."
     else
-        echo "VERDICT: ACCEPT — box matches spec."
+        echo "VERDICT: ACCEPT — host matches its declared specification."
     fi
 fi
 
