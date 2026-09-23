@@ -14,6 +14,14 @@ sb_bundle_validate_name() {
     [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || sb_die "invalid bundle name: $1"
 }
 
+# True when an https:// source carries user information (user@ or user:pass@).
+sb_bundle_url_has_credentials() {
+    local authority
+    [[ "$1" == https://* ]] || return 1
+    authority="${1#https://}"; authority="${authority%%[/?#]*}"
+    [[ "$authority" == *@* ]]
+}
+
 sb_bundle_materialize() {
     local source_ref="$1" expected="$2" temp_dir="$3" output_var="$4"
     local local_path output
@@ -71,18 +79,37 @@ sb_install_bundle() (
     sb_bundle_validate_name "$name" || return
     [[ -n "$version" ]] || sb_die "bundle version is required" || return
     [[ -n "$source_ref" ]] || sb_die "bundle source is required" || return
+    # Refused before the state check, the fetch, any log line, or a state write,
+    # and without echoing the URL: its credentials must not reach any of them.
+    ! sb_bundle_url_has_credentials "$source_ref" \
+        || sb_die "remote bundle URL must not carry credentials" || return
     sb_valid_sha256 "$expected" || sb_die "bundle SHA-256 must be 64 hexadecimal characters" || return
+    expected="${expected,,}"
     [[ "$installer" != */* ]] || sb_die "installer must be a filename, not a path: $installer" || return
-
-    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/server-bundle.XXXXXX")"
-    trap 'rm -rf -- "$temp_dir"' EXIT
-    sb_bundle_materialize "$source_ref" "$expected" "$temp_dir" archive || return
-    actual="$(sb_sha256 "$archive")"
 
     state_dir="$state_root/bundles/$name"
     legacy_dir="$state_root/addons/$name"
     current_version="$(cat "$state_dir/version" 2>/dev/null || true)"
     current_sha="$(cat "$state_dir/archive-sha256" 2>/dev/null || true)"
+
+    # A remote archive is fetched only when the recorded state cannot already
+    # decide: the same version and checksum is skipped, and the same version with
+    # another checksum is refused, both before any network request. A remote
+    # source is never a local file, so neither branch reaches the deletion path.
+    # Local archives keep the verify-first order below.
+    if [[ "$source_ref" == https://* && "$force" != 1 && -n "$current_sha" \
+        && "$current_version" == "$version" ]]; then
+        [[ "${current_sha,,}" == "$expected" ]] \
+            || sb_die "$name $version is already recorded with a different archive hash; use --force only after review" \
+            || return
+        sb_log "bundle already installed: $name $version (skipped before download)"
+        return 0
+    fi
+
+    temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/server-bundle.XXXXXX")"
+    trap 'rm -rf -- "$temp_dir"' EXIT
+    sb_bundle_materialize "$source_ref" "$expected" "$temp_dir" archive || return
+    actual="$(sb_sha256 "$archive")"
 
     if [[ -z "$current_version" && -f "$legacy_dir/version" ]]; then
         current_version="$(cat "$legacy_dir/version")"

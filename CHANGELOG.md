@@ -11,6 +11,19 @@
 
 [#52]: https://github.com/evya1/server-bootstrap/issues/52
 
+- **`register_remote_bundle NAME VERSION HTTPS_URL SHA256 [INSTALLER] [ARGS...]`**
+  — a provision plan can register one bundle by HTTPS URL and pinned SHA-256
+  instead of a local archive. The URL must be plain HTTPS with no credentials,
+  query string, or fragment, and the checksum exactly 64 hexadecimal characters,
+  compared and recorded in lowercase. Both are checked while the plan is read,
+  so a bad entry fails even `--dry-run`, before any request. The entry is passed
+  to `server-bundle-install --source … --sha256 …` with its installer and
+  arguments unchanged, and never reaches local archive deletion.
+  `register_bundle` is unchanged. A placeholder example that installs nothing
+  ships as `examples/provision-plan.remote.example.sh`. ([#53][])
+
+[#53]: https://github.com/evya1/server-bootstrap/issues/53
+
 ### Changed
 
 - **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`
@@ -23,6 +36,14 @@
   ([#51][])
 
 [#51]: https://github.com/evya1/server-bootstrap/issues/51
+
+- **An installed remote bundle is no longer downloaded again.** The shared
+  bundle engine now compares the recorded version and checksum with an
+  `https://` source before fetching it: the same pair is skipped, and the same
+  version with a different checksum is refused without a download unless
+  `--force` is given. This covers `server-bundle-install`, provision plans, and
+  the legacy `INSTALL_ADDON` path alike. Local archives are still verified
+  first, exactly as before. ([#53][])
 
 ## 2.2.3
 
