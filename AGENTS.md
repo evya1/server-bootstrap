@@ -28,6 +28,7 @@ Details: [README](README.md), [ARCHITECTURE](docs/ARCHITECTURE.md),
 | `server-bundle-install` | Install one named, versioned, checksum-verified bundle |
 | `server-accept.sh` | Hardware acceptance report and policy |
 | `server-vscode-extensions`, `server-secrets` | Extension installer; API key file manager |
+| `server-profile` | Install an optional built-in profile, such as `ml`; a plan's `enable_profile` runs it |
 | `release/build-release.sh`, `tools/release-preflight.sh` | Reproducible build; every pre-publication gate |
 
 A `provision-plan*.sh` file is data read through `server-provision.sh --plan`.
@@ -40,6 +41,10 @@ Never execute one directly.
   subsystem; `lib/bootstrap/config.sh` is the canonical source of the toolchain
   pins. The scanner and linter pins live in `tools/gitleaks.sh` and
   `tools/actionlint.sh`.
+- `profiles/` optional built-in profiles. Workload code lives here, never in
+  the foundation modules. `profiles/ml/` holds the ML installer, commands,
+  backend table, requirements and locks; `tools/ml-lock.sh` generates and
+  verifies the locks.
 - `config/` apt package and VS Code extension manifests.
 - `checksums/` pinned upstream checksums and `SHA256SUMS`, the release manifest.
 - `examples/` shipped plans and templates; `docs/` user guides.

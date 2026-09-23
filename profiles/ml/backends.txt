@@ -1,0 +1,12 @@
+# Backends the ml profile can be locked for. tools/ml-lock.sh reads this table
+# and writes locks/<backend>-<arch>.txt for each architecture a row lists.
+# A backend is offered to a host only when its lock for that architecture is
+# committed; a row without a lock is pending and is never selected.
+#
+# cuda is the CUDA version a backend's PyTorch build targets: none for CPU. On
+# an NVIDIA host, `--backend auto` picks the locked row with the highest cuda
+# that is not above the CUDA version the driver reports in nvidia-smi's header.
+# Add a CUDA row only together with its lock, and validate it on real hardware.
+#
+# backend  cuda  architectures   index
+cpu        none  x86_64,aarch64  https://download.pytorch.org/whl/cpu

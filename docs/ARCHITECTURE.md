@@ -9,6 +9,7 @@ server-bundle-install         one-bundle command-line interface
 server-accept.sh              hardware check against the declared specification
 server-vscode-extensions      idempotent Remote-SSH extension installer
 server-secrets                API key file management
+server-profile                installs an optional built-in profile by name
 config/packages.txt           required and optional apt package manifest
 config/vscode-extensions.txt  requested extension manifest
 lib/core.sh                   logging, retries, checksums, verified downloads,
@@ -31,6 +32,9 @@ lib/bootstrap/vscode.sh       immediate-or-deferred extension orchestration
 lib/bootstrap/runtime.sh      persistent command and manifest installation
 lib/bootstrap/secrets.sh      API key file and its generated Zsh loader
 lib/bootstrap/report.sh       acceptance policy and system report
+profiles/ml/                  optional ML profile: installer, shared logic,
+                              checks, commands, backend table, requirements,
+                              and frozen per-backend locks
 tools/refresh-pins.sh         upstream pin drift report and rewrite
 tools/write-pins.py           applies a resolved pin set to every file recording it
 tools/check-pins.sh           offline check that those recordings still agree
@@ -39,6 +43,7 @@ tools/release-preflight.sh    every pre-publication gate, run by CI and by the r
 tools/check-release-tag.sh    tag-versus-VERSION verification, testable offline
 tools/actionlint.sh           pinned, checksum-verified workflow linter
 tools/pin-drift-report.sh     turns a weekly --check result into one GitHub issue
+tools/ml-lock.sh              generates and verifies the ML profile's locks
 ```
 
 ## Execution order
@@ -50,6 +55,7 @@ verify bootstrap archive
 → extract bootstrap safely
 → install server foundation
 → run server-accept
+→ install enabled built-in profiles
 → install registered bundles in plan order
 → write one provisioning summary
 ```
@@ -62,7 +68,8 @@ workspace → apt packages → persistent tools → Node.js → Claude/Codex/pi
 → VS Code extensions → acceptance → optional legacy add-on → report → state
 ```
 
-The acceptance test therefore still runs before every optional workload bundle.
+The acceptance test therefore still runs before every optional workload bundle
+and every enabled profile.
 The coding-agent CLIs and editor manifest are treated as part of the reusable
 host developer environment, not as a project workload.
 
@@ -85,6 +92,15 @@ module uses an existing server CLI when available. Otherwise the persistent
 helper and manifest are installed, and the generated Zsh hook invokes the helper
 only from a VS Code terminal. A lock, completion marker, and retry interval make
 that path idempotent.
+
+## Optional profiles
+
+A profile is optional workload code that ships inside the release rather than as
+a separate bundle. The foundation copies `profiles/` and installs
+`server-profile`, and nothing more: no environment, state, or command of a
+profile exists until a plan's `enable_profile` or a person runs
+`server-profile install NAME`. Workload-specific code stays under `profiles/`,
+so the foundation modules remain neutral.
 
 ## Why the provisioner is partly self-contained
 

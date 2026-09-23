@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Diagnose the installed ml-workbench environment with synthetic, local data:
+# imports, a CPU tensor operation, a vision transform, notebook kernel
+# discovery, and GPU checks reported as passed, failed, skipped or not
+# applicable. Downloads nothing.
+#
+#   ml-doctor [--json]
+#
+# Exit status: 0 when no check failed, 1 otherwise.
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+# shellcheck source=../lib.sh
+source "$(dirname -- "$SELF")/../lib.sh"
+ml_load_config
+
+args=()
+while (($#)); do
+    case "$1" in
+        --json) args+=(--json); shift ;;
+        -h|--help) sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+ml_require_installed
+ml_detect_gpu
+cuda="$(ml_state cuda)"
+exec "$ML_ENV/bin/python" "$ML_PROFILE_DIR/check.py" doctor \
+    --backend-cuda "${cuda:-none}" --host-gpu "$ML_GPU_STATE" "${args[@]}"

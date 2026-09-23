@@ -196,7 +196,10 @@ JSON
 
 verify="$(scratch_dir)"
 tar -xzf "$DIST/$NAME-$VERSION.tar.gz" -C "$verify"
-for file in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions server-secrets config/vscode-extensions.txt config/packages.txt lib/secrets-load.sh lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/pi.sh lib/bootstrap/secrets.sh lib/bootstrap/github_cli.sh lib/bootstrap/ngrok.sh lib/bootstrap/vscode.sh examples/secrets.env.example examples/pi-models.example.json docs/QUICKSTART.md; do
+for file in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions server-secrets config/vscode-extensions.txt config/packages.txt lib/secrets-load.sh lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/pi.sh lib/bootstrap/secrets.sh lib/bootstrap/github_cli.sh lib/bootstrap/ngrok.sh lib/bootstrap/vscode.sh examples/secrets.env.example examples/pi-models.example.json docs/QUICKSTART.md \
+    server-profile profiles/ml/install.sh profiles/ml/lib.sh profiles/ml/check.py profiles/ml/backends.txt \
+    profiles/ml/requirements.in profiles/ml/bin/ml-env profiles/ml/bin/ml-status profiles/ml/bin/ml-doctor \
+    profiles/ml/bin/ml-preflight profiles/ml/bin/ml-jupyter; do
     [[ -f "$verify/$NAME-$VERSION/$file" ]] || { echo "ERROR: missing from release: $file" >&2; exit 1; }
 done
 scan_release_tree "$verify" "extracted $NAME-$VERSION.tar.gz"

@@ -39,6 +39,32 @@
 
 [#58]: https://github.com/evya1/server-bootstrap/issues/58
 
+- **An optional, built-in `ml` profile: installer, commands and lock tooling,
+  with no backend locked yet.** A provision plan can declare
+  `enable_profile "ml" --backend auto`, and a host that has the foundation can
+  run `server-profile install ml`. The profile builds one Python 3.12
+  environment at `/workspace/venvs/ml-workbench` from a frozen lock. The lock
+  pins every package with a SHA-256 and takes `torch` and `torchvision` from
+  the backend's official `https://download.pytorch.org/whl/<backend>` index.
+  It installs with `uv pip sync --require-hashes --no-build`. Each build
+  happens beside the active environment, is verified, and is switched in with
+  one rename. A failure leaves the previous environment, its commands and the
+  recorded state unchanged, and a repeat run rebuilds nothing.
+  `--backend auto` never falls back to CPU on a host with NVIDIA hardware,
+  and changing backend needs `--reconfigure`. State under
+  `/workspace/.setup-state/profiles/ml` records the repository version,
+  backend, lock digest and core package versions. `ml-env`, `ml-status`,
+  `ml-doctor`, `ml-preflight` and `ml-jupyter` are linked only once the
+  profile is installed. `ml-jupyter` binds to `127.0.0.1`, and nothing starts
+  it. The foundation itself only copies the profile files and installs
+  `server-profile`. `tools/ml-lock.sh` generates the locks and verifies them
+  offline. No lock is committed yet. `backends.txt` declares the CPU backend
+  for x86-64 and ARM64, but until those locks are generated no backend is
+  offered and the profile installs nothing. No CUDA backend is declared.
+  ([#54][])
+
+[#54]: https://github.com/evya1/server-bootstrap/issues/54
+
 ### Changed
 
 - **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`

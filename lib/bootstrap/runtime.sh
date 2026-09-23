@@ -11,6 +11,7 @@ bootstrap_install_runtime_tools() {
     install -m 0755 "$source_root/server-accept.sh" "$stage/server-accept.sh"
     install -m 0755 "$source_root/server-vscode-extensions" "$stage/server-vscode-extensions"
     install -m 0755 "$source_root/server-secrets" "$stage/server-secrets"
+    install -m 0755 "$source_root/server-profile" "$stage/server-profile"
     install -m 0644 "$source_root/lib/core.sh" "$stage/lib/core.sh"
     install -m 0644 "$source_root/lib/archive.sh" "$stage/lib/archive.sh"
     install -m 0644 "$source_root/lib/bundle.sh" "$stage/lib/bundle.sh"
@@ -29,6 +30,13 @@ bootstrap_install_runtime_tools() {
     install -m 0644 "$source_root/config/packages.txt" "$stage/config/packages.txt"
     install -m 0644 "$source_root/examples/secrets.env.example" "$stage/examples/secrets.env.example"
     install -m 0644 "$source_root/examples/pi-models.example.json" "$stage/examples/pi-models.example.json"
+    # Optional profiles are copied as files only. Nothing here enables one: no
+    # environment, command or state exists until server-profile installs it.
+    local file mode
+    while IFS= read -r -d '' file; do
+        if [[ -x "$file" ]]; then mode=0755; else mode=0644; fi
+        install -D -m "$mode" "$file" "$stage/${file#"$source_root"/}"
+    done < <(find "$source_root/profiles" -type f -not -name '*.pyc' -print0 2>/dev/null)
     rm -rf -- "$destination"
     mv -- "$stage" "$destination"
     ln -sfn "$destination/server-bootstrap.sh" /usr/local/bin/server-bootstrap
@@ -38,5 +46,6 @@ bootstrap_install_runtime_tools() {
     ln -sfn "$destination/server-accept.sh" /usr/local/bin/server-accept.sh
     ln -sfn "$destination/server-vscode-extensions" /usr/local/bin/server-vscode-extensions
     ln -sfn "$destination/server-secrets" /usr/local/bin/server-secrets
+    ln -sfn "$destination/server-profile" /usr/local/bin/server-profile
     sb_log "installed bootstrap runtime tools under $destination"
 }

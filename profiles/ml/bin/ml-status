@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Show what the ml profile recorded, whether its environment is present, and
+# whether this release ships a different lock for it. Reads state only.
+#
+# Exit status: 0 installed and present, 1 not installed or environment missing.
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+# shellcheck source=../lib.sh
+source "$(dirname -- "$SELF")/../lib.sh"
+ml_load_config
+
+case "${1:-}" in
+    -h|--help) sed -n '2,5p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+row() { printf '%-20s %s\n' "$1:" "$2"; }
+
+backend="$(ml_state backend)"
+if [[ -z "$backend" ]]; then
+    row "ml profile" "not installed (install with: server-profile install ml)"
+    exit 1
+fi
+ml_detect_gpu
+arch="$(ml_state arch)"; recorded_sha="$(ml_state lock-sha256)"
+shipped="$(ml_lock_path "$backend" "$arch")"
+if [[ ! -f "$shipped" ]]; then
+    lock_note="this release ships no lock for $backend on $arch"
+elif [[ "$(sha256sum -- "$shipped" | awk '{print $1}')" == "$recorded_sha" ]]; then
+    lock_note="matches the lock this release ships"
+else
+    lock_note="differs from this release's lock; update with: server-profile install ml"
+fi
+
+present=0
+if ml_installed && [[ "$(readlink -f -- "$ML_ENV")" == "$(ml_state environment)" ]]; then
+    present=1
+fi
+
+row "ml profile" "$( (( present )) && echo installed || echo "recorded, but the environment is missing or not the recorded one")"
+row "backend" "$backend (CUDA $(ml_state cuda))"
+row "lock" "$(ml_state lock) sha256 $recorded_sha"
+row "lock status" "$lock_note"
+row "environment" "$ML_ENV -> $(readlink -- "$ML_ENV" 2>/dev/null || echo missing)"
+while IFS= read -r pin; do
+    [[ "$pin" == *==* ]] || continue
+    row "${pin%%==*}" "${pin#*==}"
+done < <(cat -- "$ML_STATE_DIR/core-versions" 2>/dev/null || true)
+row "repository version" "$(ml_state repository-version)"
+row "installed at" "$(ml_state installed-at)"
+row "gpu" "$ML_GPU_SUMMARY"
+(( present ))

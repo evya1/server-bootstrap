@@ -74,6 +74,27 @@ A dry run needs no root, writes no files, and makes no network request. Without
 installed or anything is written, deleted, or fetched. To use it as a template,
 copy it, replace the placeholders, and delete its preview guard.
 
+## Built-in profiles
+
+An optional profile that ships inside the bootstrap archive is enabled by name:
+
+```bash
+enable_profile "ml" --backend auto
+```
+
+- A profile brings no URL, archive, or checksum of its own: it is part of the
+  verified bootstrap archive.
+- The only options are `--backend NAME` and `--reconfigure`. Anything else, an
+  invalid name, or the same profile enabled twice stops the run while the plan
+  is read, `--dry-run` included.
+- After the archive is extracted and before the foundation is installed, the
+  run stops if the archive does not carry the profile.
+- Enabled profiles install after `server-accept` and before bundles, through
+  `server-profile install NAME [options]`. A repeat run leaves an up-to-date
+  profile as it is.
+
+See [ML-PROFILE](ML-PROFILE.md) for the `ml` profile.
+
 ## Archive deletion
 
 The default is:

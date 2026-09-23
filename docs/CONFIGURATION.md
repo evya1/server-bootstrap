@@ -24,6 +24,8 @@ convenient place to export them.
 | `BASE_PYTHON_PACKAGES` | `numpy` | packages installed in that environment |
 | `RUN_ACCEPT_TEST` | `1` | bootstrap-local acceptance; provisioner runs it separately |
 
+The optional ML profile has its own settings; see [ML-PROFILE](ML-PROFILE.md).
+
 ## Distribution packages
 
 The apt package set lives in `config/packages.txt` rather than in shell code, so

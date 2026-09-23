@@ -1,0 +1,27 @@
+# Top-level packages of the ml profile. tools/ml-lock.sh resolves this file for
+# every row of backends.txt. The locks, not this file, are what gets installed.
+# torch and torchvision are pinned as a matching pair; the backend's index
+# supplies the build, for example 2.14.0+cpu.
+
+# PyTorch
+torch==2.14.0
+torchvision==0.29.0
+
+# Scientific and data
+numpy
+scipy
+pandas
+scikit-learn
+matplotlib
+
+# Image and vision
+pillow
+opencv-python-headless
+
+# Notebooks
+jupyterlab
+ipykernel
+ipywidgets
+
+# Diagnostics
+psutil
