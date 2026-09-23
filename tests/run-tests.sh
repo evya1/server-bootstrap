@@ -1635,6 +1635,10 @@ ROTHER="$(printf 'another archive\n' | sha256sum | cut -c1-64)"
 RURL=https://example.invalid/rtool-1.0.0.tar.gz
 RARGS=(--flag 'two words' "it's" '$HOME' '*' 'say "hi"' '')
 RARGS_SEEN="$(printf '[%s]' "${RARGS[@]}")"
+# Credential-shaped test data is built at runtime, never committed (SECURITY.md).
+RCRED="$(printf '%s:%s' demo-user demo-secret)"
+RCRED_URLS=("https://$RCRED@example.invalid/rtool-1.0.0.tar.gz" "https://demo-user@example.invalid/rtool-1.0.0.tar.gz")
+rcred_leak() { [[ "$1" == *demo-user* || "$1" == *demo-secret* ]]; }
 rfetches() { if [[ -f "$REMOTE/curl.log" ]]; then wc -l < "$REMOTE/curl.log"; else echo 0; fi; }
 rinstall() {  # STATE_ROOT, then server-bundle-install arguments
     local state="$1"; shift
@@ -1692,6 +1696,29 @@ elif [[ "$(rfetches)" == 0 && ! -e "$REMOTE/state-bad" ]]; then
     ok "server-bundle-install rejects a malformed checksum or http:// source without fetching"
 else bad "server-bundle-install fetched before rejecting its input"; fi
 
+# A credential in a source URL would reach curl's arguments, the log, and the
+# recorded source. The engine refuses it before anything else, the installed-
+# state fast path included, and never echoes it back.
+rcred_ok=1
+for url in "${RCRED_URLS[@]}"; do
+    rm -f "$REMOTE/curl.log"
+    rout="$(rinstall "$REMOTE/state-cred" --name rtool --version 1.0.0 --source "$url" --sha256 "$RSHA" 2>&1)"; rcode=$?
+    [[ "$rcode" != 0 && "$rout" == *'must not carry credentials'* && "$(rfetches)" == 0 && ! -e "$REMOTE/state-cred" ]] \
+        && ! rcred_leak "$rout" || rcred_ok=0
+done
+(( rcred_ok )) && ok "server-bundle-install refuses a credential-bearing URL: no fetch, no state, no echo" \
+    || bad "server-bundle-install accepted or echoed a credential-bearing URL (exit $rcode, $(rfetches) fetches)"
+rcred_ok=1
+for url in "${RCRED_URLS[@]}"; do
+    rm -f "$REMOTE/curl.log"
+    rout="$(rinstall "$REMOTE/state" --name rtool --version 1.0.0 --source "$url" --sha256 "$RSHA" 2>&1)"; rcode=$?
+    [[ "$rcode" != 0 && "$rout" == *'must not carry credentials'* && "$rout" != *'already installed'* \
+        && "$(rfetches)" == 0 ]] && ! rcred_leak "$rout" || rcred_ok=0
+done
+[[ "$(cat "$REMOTE/state/bundles/rtool/source")" == "$RURL" ]] && ! grep -rqsF demo- "$REMOTE/state" || rcred_ok=0
+(( rcred_ok )) && ok "a credential-bearing URL is refused before the installed-state fast path" \
+    || bad "a credential-bearing URL reached the fast path or the state (exit $rcode)"
+
 # The local deletion path strips an optional file:// prefix and removes what is
 # left. A URL must never get that far: put files where an https:// URL and its
 # sidecar would land, relative to the working directory, and prove they survive
@@ -1726,10 +1753,11 @@ else bad "local verification failure deleted its archive"; fi
 grep -qF 'sb_install_bundle "$ADDON_NAME" "$ADDON_VERSION" "$ADDON_URL" "$ADDON_SHA256"' server-bootstrap.sh \
     && ok "the legacy add-on path still uses the shared bundle engine" \
     || bad "the legacy add-on path no longer calls sb_install_bundle"
-addon_engine() {  # STATE_ROOT SHA256
+addon_engine() {  # STATE_ROOT SHA256 [URL]; the ERR trap reports the failing command, as on_error does
     PATH="$REMOTE/bin:$PATH" CURL_LOG="$REMOTE/curl.log" REMOTE_FIXTURE="$REMOTE/rtool-1.0.0.tar.gz" \
         RTOOL_MARK="$REMOTE/mark" bash -c 'set -Eeuo pipefail; source lib/bundle.sh; SB_LOG_PREFIX=server-bootstrap
-            sb_install_bundle rtool 1.0.0 "$1" "$2" "setup tool.sh" 0 0 "$3" "" --addon-arg' _ "$RURL" "$2" "$1"
+            trap "echo \"command: \$BASH_COMMAND\" >&2" ERR
+            sb_install_bundle rtool 1.0.0 "$1" "$2" "setup tool.sh" 0 0 "$3" "" --addon-arg' _ "${3:-$RURL}" "$2" "$1"
 }
 rm -f "$REMOTE/curl.log" "$REMOTE/mark"
 addon_engine "$REMOTE/state-addon" "$RSHA" >/dev/null 2>&1; first_code=$?; first_fetches="$(rfetches)"
@@ -1742,6 +1770,19 @@ addon_engine "$REMOTE/state-addon" "$ROTHER" >/dev/null 2>&1 && addon_code=0 || 
 [[ "$addon_code" != 0 && "$(rfetches)" == 1 ]] \
     && ok "the legacy add-on path refuses a changed checksum before downloading" \
     || bad "legacy add-on checksum conflict (exit $addon_code, $(rfetches) fetches)"
+rcred_ok=1
+for url in "${RCRED_URLS[@]}"; do
+    for state in "$REMOTE/state-addon-cred" "$REMOTE/state-addon"; do
+        rm -f "$REMOTE/curl.log"
+        rout="$(addon_engine "$state" "$RSHA" "$url" 2>&1)"; rcode=$?
+        [[ "$rcode" != 0 && "$rout" == *'must not carry credentials'* && "$(rfetches)" == 0 ]] \
+            && ! rcred_leak "$rout" || rcred_ok=0
+    done
+done
+[[ ! -e "$REMOTE/state-addon-cred" && "$(cat "$REMOTE/state-addon/bundles/rtool/source")" == "$RURL" ]] \
+    && ! grep -rqsF demo- "$REMOTE/state-addon" || rcred_ok=0
+(( rcred_ok )) && ok "the legacy add-on path refuses a credential-bearing URL: no fetch, no state, no echo" \
+    || bad "the legacy add-on path accepted or echoed a credential-bearing URL (exit $rcode)"
 
 section "Remote bundles: plan registration"
 RPLAN="$REMOTE/plan"; mkdir -p "$RPLAN" "$REMOTE/dry-tmp"
@@ -1791,6 +1832,26 @@ after="$(find "$REMOTE" | LC_ALL=C sort)"
     && ok "the documented remote example previews its bundle without a request or a file" \
     || bad "remote example dry run: $rout"
 
+# Without --dry-run the example must stop while the plan is read. Beside it sit
+# a bootstrap archive whose installer leaves a mark and the checksum sidecar a
+# successful run would delete; neither may be touched, and no log, lock, or
+# request may appear.
+REX="$REMOTE/example-real"; mkdir -p "$REX/src/base" "$REX/tmp"
+rex_version="$(tr -d '[:space:]' < VERSION)"
+printf '#!/usr/bin/env bash\ntouch %q\n' "$REX/bootstrap-ran" > "$REX/src/base/server-bootstrap.sh"
+tar -czf "$REX/server-bootstrap-$rex_version.tar.gz" -C "$REX/src" base
+sha256sum "$REX/server-bootstrap-$rex_version.tar.gz" > "$REX/server-bootstrap-$rex_version.tar.gz.sha256"
+cp examples/provision-plan.remote.example.sh "$REX/plan.sh"
+rm -f "$REMOTE/curl.log"
+before="$(find "$REX" | LC_ALL=C sort)"
+rout="$(PATH="$REMOTE/bin:$PATH" CURL_LOG="$REMOTE/curl.log" TMPDIR="$REX/tmp" WORKSPACE_ROOT="$REX/ws" \
+    ./server-provision.sh --plan "$REX/plan.sh" 2>&1)"; rcode=$?
+after="$(find "$REX" | LC_ALL=C sort)"
+[[ "$rcode" == 2 && "$rout" == *'preview-only'* && "$before" == "$after" && ! -e "$REX/bootstrap-ran" \
+    && ! -e "$REX/ws" && ! -e "$REX/tmp/server-provision.lock" && ! -e "$REMOTE/curl.log" ]] \
+    && ok "the remote example refuses a real run before bootstrap, logging, deletion, or a fetch" \
+    || bad "the remote example ran without --dry-run (exit $rcode): $rout"
+
 raccept=1
 for url in https://example.invalid:8443/pkg/rtool-1.0.0.tgz https://127.0.0.1/rtool-1.0.0.zip \
     'https://[::1]/rtool-1.0.0.tar.xz' https://registry.example.invalid/@scope/rtool/-/rtool-1.0.0.txz; do
@@ -1826,7 +1887,6 @@ RWHY_PLAIN="URL is not a plain https://HOST/PATH address"
 RWHY_ARCHIVE="URL must name a .tar.gz"
 RWHY_SHA="SHA-256 must be exactly 64 hexadecimal characters"
 RWHY_ARGS="needs NAME VERSION HTTPS_URL SHA256"
-RCRED="$(printf '%s:%s' demo-user demo-secret)"
 remote_plan_rejects "an http:// URL" "$RWHY_SCHEME" "" rtool 1.0.0 http://example.invalid/rtool-1.0.0.tar.gz "$RSHA"
 remote_plan_rejects "an ftp:// URL" "$RWHY_SCHEME" "" rtool 1.0.0 ftp://example.invalid/rtool-1.0.0.tar.gz "$RSHA"
 remote_plan_rejects "a file:// URL" "$RWHY_SCHEME" "" rtool 1.0.0 file:///srv/rtool-1.0.0.tar.gz "$RSHA"

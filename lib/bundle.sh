@@ -14,6 +14,14 @@ sb_bundle_validate_name() {
     [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || sb_die "invalid bundle name: $1"
 }
 
+# True when an https:// source carries user information (user@ or user:pass@).
+sb_bundle_url_has_credentials() {
+    local authority
+    [[ "$1" == https://* ]] || return 1
+    authority="${1#https://}"; authority="${authority%%[/?#]*}"
+    [[ "$authority" == *@* ]]
+}
+
 sb_bundle_materialize() {
     local source_ref="$1" expected="$2" temp_dir="$3" output_var="$4"
     local local_path output
@@ -71,6 +79,10 @@ sb_install_bundle() (
     sb_bundle_validate_name "$name" || return
     [[ -n "$version" ]] || sb_die "bundle version is required" || return
     [[ -n "$source_ref" ]] || sb_die "bundle source is required" || return
+    # Refused before the state check, the fetch, any log line, or a state write,
+    # and without echoing the URL: its credentials must not reach any of them.
+    ! sb_bundle_url_has_credentials "$source_ref" \
+        || sb_die "remote bundle URL must not carry credentials" || return
     sb_valid_sha256 "$expected" || sb_die "bundle SHA-256 must be 64 hexadecimal characters" || return
     expected="${expected,,}"
     [[ "$installer" != */* ]] || sb_die "installer must be a filename, not a path: $installer" || return

@@ -62,14 +62,17 @@ register_remote_bundle \
 - The download lives in a temporary directory removed after the run. Archive
   deletion applies to local files only.
 
-`examples/provision-plan.remote.example.sh` holds one placeholder entry that
-installs nothing. Preview it:
+`examples/provision-plan.remote.example.sh` holds one placeholder entry and is
+preview-only:
 
 ```bash
 ./server-provision.sh --plan ./examples/provision-plan.remote.example.sh --dry-run
 ```
 
-A dry run needs no root, writes no files, and makes no network request.
+A dry run needs no root, writes no files, and makes no network request. Without
+`--dry-run` the example stops while the plan is read, before the foundation is
+installed or anything is written, deleted, or fetched. To use it as a template,
+copy it, replace the placeholders, and delete its preview guard.
 
 ## Archive deletion
 
