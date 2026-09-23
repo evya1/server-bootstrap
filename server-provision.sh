@@ -13,6 +13,7 @@ Usage: sudo ./server-provision.sh [--plan FILE] [--dry-run] [--keep-archives]
 The plan is a Bash data file that calls:
   register_bootstrap ARCHIVE SHA256_FILE [BOOTSTRAP_SCRIPT]
   register_bundle NAME VERSION ARCHIVE SHA256_FILE [INSTALLER] [INSTALLER_ARGS...]
+  register_remote_bundle NAME VERSION HTTPS_URL SHA256 [INSTALLER] [INSTALLER_ARGS...]
 USAGE
 }
 while (($#)); do
@@ -30,6 +31,8 @@ PLAN_DIR="$(cd -- "$(dirname -- "$PLAN")" && pwd -P)"
 
 BOOTSTRAP_ARCHIVE=""; BOOTSTRAP_SHA_FILE=""; BOOTSTRAP_SCRIPT=server-bootstrap.sh
 BUNDLE_NAMES=(); BUNDLE_VERSIONS=(); BUNDLE_ARCHIVES=(); BUNDLE_SHA_FILES=(); BUNDLE_INSTALLERS=()
+# Set only at the index of a remote entry: its pinned, lowercased SHA-256.
+BUNDLE_SHA256S=()
 
 resolve_plan_path() { [[ "$1" == /* ]] && realpath -m -- "$1" || realpath -m -- "$PLAN_DIR/$1"; }
 register_bootstrap() {
@@ -43,6 +46,36 @@ register_bundle() {
     BUNDLE_NAMES+=("$1"); BUNDLE_VERSIONS+=("$2")
     BUNDLE_ARCHIVES+=("$(resolve_plan_path "$3")")
     BUNDLE_SHA_FILES+=("$(resolve_plan_path "$4")")
+    BUNDLE_INSTALLERS+=("${5:-install.sh}")
+    shift $(( $# >= 5 ? 5 : 4 ))
+    declare -g -a "BUNDLE_ARGS_$index=()"
+    local -n args_ref="BUNDLE_ARGS_$index"
+    args_ref=("$@")
+}
+
+# A plain https://HOST[:PORT]/PATH. User information, a query string and a
+# fragment are all refused, so no credential reaches the plan output, a log, or
+# the recorded installation state. Prints the problem; prints nothing if valid.
+REMOTE_URL_PATTERN='^https://([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?/[A-Za-z0-9._~%/+:@=,-]+$'
+remote_url_problem() {
+    local url="$1" authority
+    [[ "$url" == https://* ]] || { echo "must start with https://"; return; }
+    authority="${url#https://}"; authority="${authority%%[/?#]*}"
+    [[ "$authority" != *@* ]] || { echo "must not carry credentials"; return; }
+    [[ "$url" =~ $REMOTE_URL_PATTERN ]] || { echo "is not a plain https://HOST/PATH address"; return; }
+    [[ "$url" =~ \.(tar\.gz|tgz|tar\.xz|txz|zip)$ ]] || echo "must name a .tar.gz, .tgz, .tar.xz, .txz, or .zip archive"
+}
+# Validated while the plan is read, so a bad entry stops even a dry run before
+# anything is fetched. The URL itself is never echoed: it may hold a credential.
+register_remote_bundle() {
+    (( $# >= 4 )) || { echo "ERROR: register_remote_bundle needs NAME VERSION HTTPS_URL SHA256" >&2; return 2; }
+    local problem index="${#BUNDLE_NAMES[@]}"
+    problem="$(remote_url_problem "$3")"
+    [[ -z "$problem" ]] || { echo "ERROR: register_remote_bundle $1: URL $problem" >&2; return 2; }
+    [[ "$4" =~ ^[0-9A-Fa-f]{64}$ ]] \
+        || { echo "ERROR: register_remote_bundle $1: SHA-256 must be exactly 64 hexadecimal characters" >&2; return 2; }
+    BUNDLE_NAMES+=("$1"); BUNDLE_VERSIONS+=("$2")
+    BUNDLE_ARCHIVES+=("$3"); BUNDLE_SHA_FILES+=(""); BUNDLE_SHA256S[index]="${4,,}"
     BUNDLE_INSTALLERS+=("${5:-install.sh}")
     shift $(( $# >= 5 ? 5 : 4 ))
     declare -g -a "BUNDLE_ARGS_$index=()"
@@ -65,7 +98,12 @@ if (( DRY_RUN )); then
     printf 'Bootstrap: %s\n' "$BOOTSTRAP_ARCHIVE"
     printf 'Bundles: %d\n' "${#BUNDLE_NAMES[@]}"
     for i in "${!BUNDLE_NAMES[@]}"; do
-        printf '  %d. %s %s <- %s\n' "$((i+1))" "${BUNDLE_NAMES[i]}" "${BUNDLE_VERSIONS[i]}" "${BUNDLE_ARCHIVES[i]}"
+        if [[ -n "${BUNDLE_SHA256S[i]:-}" ]]; then
+            printf '  %d. %s %s <- %s (sha256 %s)\n' "$((i+1))" "${BUNDLE_NAMES[i]}" "${BUNDLE_VERSIONS[i]}" \
+                "${BUNDLE_ARCHIVES[i]}" "${BUNDLE_SHA256S[i]}"
+        else
+            printf '  %d. %s %s <- %s\n' "$((i+1))" "${BUNDLE_NAMES[i]}" "${BUNDLE_VERSIONS[i]}" "${BUNDLE_ARCHIVES[i]}"
+        fi
     done
     exit 0
 fi
@@ -149,11 +187,17 @@ for i in "${!BUNDLE_NAMES[@]}"; do
     name="${BUNDLE_NAMES[i]}"; version="${BUNDLE_VERSIONS[i]}"
     archive="${BUNDLE_ARCHIVES[i]}"; sha_file="${BUNDLE_SHA_FILES[i]}"; installer="${BUNDLE_INSTALLERS[i]}"
     local_delete=(); (( DELETE_ARCHIVES_AFTER_SUCCESS == 0 )) || local_delete=(--delete-after-success)
+    source_args=(--archive "$archive" --sha256-file "$sha_file")
+    # A remote entry is a URL, not a file of ours: it passes its pinned checksum
+    # and never the local deletion flag.
+    if [[ -n "${BUNDLE_SHA256S[i]:-}" ]]; then
+        source_args=(--source "$archive" --sha256 "${BUNDLE_SHA256S[i]}"); local_delete=()
+    fi
     declare -n args_ref="BUNDLE_ARGS_$i"
     STEP="bundle:$name"
     echo "==> Installing $name $version"
-    server-bundle-install --name "$name" --version "$version" --archive "$archive" \
-        --sha256-file "$sha_file" --installer "$installer" "${local_delete[@]}" -- "${args_ref[@]}"
+    server-bundle-install --name "$name" --version "$version" "${source_args[@]}" \
+        --installer "$installer" "${local_delete[@]}" -- "${args_ref[@]}"
     INSTALLED=$((INSTALLED + 1))
 done
 

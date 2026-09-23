@@ -44,6 +44,11 @@ Successful installations record:
 A version change is treated as an upgrade. Reusing the same version with changed
 bytes is blocked by default because it is not a reproducible release.
 
+For an `https://` source the recorded version and checksum are compared before
+anything is downloaded: a match is skipped, and the same version with another
+checksum is refused unless `--force` is given. A local archive is still verified
+before that comparison.
+
 ## Archive safety
 
 The shared extractor rejects absolute member names, parent traversal, backslash

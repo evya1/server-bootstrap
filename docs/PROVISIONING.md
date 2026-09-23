@@ -31,6 +31,46 @@ that reuse it, and put personal configuration bundles last.
 
 Paths may be absolute or relative to the plan file.
 
+## Remote bundle registration
+
+A bundle can also be fetched over HTTPS and pinned to its SHA-256:
+
+```bash
+register_remote_bundle \
+  "toolkit-name" \
+  "1.0.0" \
+  "https://example.com/toolkit-name-1.0.0.tar.gz" \
+  "<64 hexadecimal characters>" \
+  "install.sh" \
+  --installer-option
+```
+
+- The URL must be a plain `https://host[:port]/path` naming a `.tar.gz`,
+  `.tgz`, `.tar.xz`, `.txz`, or `.zip` archive. Credentials, a query string, or
+  a fragment are rejected, so none can reach a log or the installation state.
+- The SHA-256 must be exactly 64 hexadecimal characters. Either case is
+  accepted; it is compared and recorded in lowercase.
+- Both are checked while the plan is read, so an invalid entry stops the run,
+  `--dry-run` included, before anything is fetched.
+- The entry runs in plan order through
+  `server-bundle-install --source URL --sha256 SHA256`, with the installer name
+  and arguments passed through unchanged.
+- If the recorded state already holds the same version and checksum, the bundle
+  is skipped without a download. The same version with a different checksum
+  stops the run before downloading; only `server-bundle-install --force`, after
+  review, installs over it.
+- The download lives in a temporary directory removed after the run. Archive
+  deletion applies to local files only.
+
+`examples/provision-plan.remote.example.sh` holds one placeholder entry that
+installs nothing. Preview it:
+
+```bash
+./server-provision.sh --plan ./examples/provision-plan.remote.example.sh --dry-run
+```
+
+A dry run needs no root, writes no files, and makes no network request.
+
 ## Archive deletion
 
 The default is:

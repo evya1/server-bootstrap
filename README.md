@@ -123,9 +123,10 @@ is still cheap. A machine with no GPU is accepted normally — set
 
 > [!WARNING]
 > **Never execute a `provision-plan*.sh` file directly.** A plan is a data file,
-> not a program: it only calls `register_bootstrap` and `register_bundle`, which
-> exist for as long as `server-provision.sh` is reading it. Always pass it with
-> `--plan`. Running one on its own exits with that reminder.
+> not a program: it only calls `register_bootstrap`, `register_bundle`, and
+> `register_remote_bundle`, which exist for as long as `server-provision.sh` is
+> reading it. Always pass it with `--plan`. Running one on its own exits with
+> that reminder.
 
 `server-bootstrap.sh` inside the archive is the inner foundation installer.
 `server-provision.sh` verifies the archive, unpacks it, runs that script, runs the
@@ -230,9 +231,10 @@ over HTTPS from the same origin as the artifact. That is the same
 integrity-not-authenticity trade as above, made at run time instead of at
 release time. Pinned versions remain the default for exactly that reason.
 
-`server-provision.sh` resolves plan entries as local paths, so the bootstrap
-archive must be downloaded first. Workload bundles do not: `server-bundle-install`
-accepts an `https://` source directly and enforces TLS plus an exact SHA-256.
+`server-provision.sh` resolves the bootstrap and `register_bundle` entries as
+local paths, so the bootstrap archive must be downloaded first. Workload bundles
+need not be: `register_remote_bundle` in a plan, or `server-bundle-install`
+directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 
 </details>
 

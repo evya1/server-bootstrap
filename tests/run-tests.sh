@@ -1606,6 +1606,328 @@ else
     ok "full provision integration skipped without root"
 fi
 
+section "Remote bundles: checksum-pinned HTTPS sources"
+# Every fetch goes through a curl stub, first on PATH, that logs the URL and
+# serves a local fixture. Nothing here reaches the network: example.invalid
+# never resolves, and the stub's call count is how "before download" is proven.
+REMOTE="$TMP/remote"; mkdir -p "$REMOTE/bin" "$REMOTE/src/rtool-1.0.0"
+REMOTE="$(cd "$REMOTE" && pwd -P)"
+printf '1.0.0\n' > "$REMOTE/src/rtool-1.0.0/VERSION"
+cat > "$REMOTE/src/rtool-1.0.0/setup tool.sh" <<'INSTALL'
+#!/usr/bin/env bash
+set -e
+printf '[%s]' "$@" > "$RTOOL_MARK"
+INSTALL
+tar -czf "$REMOTE/rtool-1.0.0.tar.gz" -C "$REMOTE/src" rtool-1.0.0
+cat > "$REMOTE/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+out=
+for ((i = 1; i <= $#; i++)); do
+    [[ "${!i}" == -o ]] && { j=$((i + 1)); out="${!j}"; }
+done
+printf '%s\n' "${!#}" >> "$CURL_LOG"
+[[ -z "$out" ]] || cp -- "$REMOTE_FIXTURE" "$out"
+CURL
+chmod 0755 "$REMOTE/bin/curl"
+RSHA="$(sha256sum "$REMOTE/rtool-1.0.0.tar.gz" | cut -c1-64)"
+RSHA_UPPER="${RSHA^^}"
+ROTHER="$(printf 'another archive\n' | sha256sum | cut -c1-64)"
+RURL=https://example.invalid/rtool-1.0.0.tar.gz
+RARGS=(--flag 'two words' "it's" '$HOME' '*' 'say "hi"' '')
+RARGS_SEEN="$(printf '[%s]' "${RARGS[@]}")"
+rfetches() { if [[ -f "$REMOTE/curl.log" ]]; then wc -l < "$REMOTE/curl.log"; else echo 0; fi; }
+rinstall() {  # STATE_ROOT, then server-bundle-install arguments
+    local state="$1"; shift
+    PATH="$REMOTE/bin:$PATH" CURL_LOG="$REMOTE/curl.log" REMOTE_FIXTURE="$REMOTE/rtool-1.0.0.tar.gz" \
+        RTOOL_MARK="$REMOTE/mark" STATE_ROOT="$state" "$ROOT/server-bundle-install" "$@"
+}
+
+rm -f "$REMOTE/curl.log" "$REMOTE/mark"
+if rinstall "$REMOTE/state" --name rtool --version 1.0.0 --source "$RURL" --sha256 "$RSHA" \
+        --installer 'setup tool.sh' -- "${RARGS[@]}" >/dev/null 2>&1 \
+    && [[ "$(rfetches)" == 1 && "$(cat "$REMOTE/curl.log")" == "$RURL" ]]; then
+    ok "a pinned HTTPS bundle with a lowercase SHA-256 is fetched once and installed"
+else bad "remote install with a lowercase SHA-256"; fi
+[[ "$(cat "$REMOTE/mark" 2>/dev/null)" == "$RARGS_SEEN" ]] \
+    && ok "remote installer name, argument order, spaces and quoting are preserved" \
+    || bad "remote installer arguments: $(cat "$REMOTE/mark" 2>/dev/null)"
+[[ "$(cat "$REMOTE/state/bundles/rtool/archive-sha256" 2>/dev/null)" == "$RSHA" \
+    && "$(cat "$REMOTE/state/bundles/rtool/source" 2>/dev/null)" == "$RURL" \
+    && "$(cat "$REMOTE/state/bundles/rtool/installer" 2>/dev/null)" == 'setup tool.sh' ]] \
+    && ok "remote state records the checksum, URL and installer" || bad "remote state"
+
+rm -f "$REMOTE/curl.log"
+if rinstall "$REMOTE/state-upper" --name rtool --version 1.0.0 --source "$RURL" --sha256 "$RSHA_UPPER" \
+        --installer 'setup tool.sh' >/dev/null 2>&1 \
+    && [[ "$(rfetches)" == 1 && "$(cat "$REMOTE/state-upper/bundles/rtool/archive-sha256" 2>/dev/null)" == "$RSHA" ]]; then
+    ok "an uppercase SHA-256 is accepted and recorded in lowercase"
+else bad "remote install with an uppercase SHA-256"; fi
+
+rm -f "$REMOTE/curl.log" "$REMOTE/mark"
+if rinstall "$REMOTE/state" --name rtool --version 1.0.0 --source "$RURL" --sha256 "$RSHA" \
+        --installer 'setup tool.sh' >/dev/null 2>&1 \
+    && rinstall "$REMOTE/state" --name rtool --version 1.0.0 --source "$RURL" --sha256 "$RSHA_UPPER" \
+        --installer 'setup tool.sh' >/dev/null 2>&1 \
+    && [[ "$(rfetches)" == 0 && ! -e "$REMOTE/mark" ]]; then
+    ok "the same version and checksum is skipped before the fetch stub is called"
+else bad "an installed remote bundle reached the fetch stub ($(rfetches) calls)"; fi
+
+rm -f "$REMOTE/curl.log"
+rout="$(rinstall "$REMOTE/state" --name rtool --version 1.0.0 --source "$RURL" --sha256 "$ROTHER" 2>&1)"; rcode=$?
+[[ "$rcode" != 0 && "$rout" == *'different archive hash'* && "$(rfetches)" == 0 \
+    && "$(cat "$REMOTE/state/bundles/rtool/archive-sha256")" == "$RSHA" ]] \
+    && ok "the same version with a different checksum fails before the fetch stub is called" \
+    || bad "remote checksum conflict (exit $rcode, $(rfetches) fetches)"
+
+rm -f "$REMOTE/curl.log" "$REMOTE/mark"
+rinstall "$REMOTE/state" --name rtool --version 1.0.0 --source "$RURL" --sha256 "$RSHA" \
+    --installer 'setup tool.sh' --force >/dev/null 2>&1 && [[ "$(rfetches)" == 1 && -e "$REMOTE/mark" ]] \
+    && ok "the existing --force path still fetches and reinstalls" || bad "remote --force"
+
+rm -f "$REMOTE/curl.log"
+if rinstall "$REMOTE/state-bad" --name rtool --version 1.0.0 --source "$RURL" --sha256 "${RSHA:0:63}" >/dev/null 2>&1 \
+    || rinstall "$REMOTE/state-bad" --name rtool --version 1.0.0 --source "${RURL/https/http}" --sha256 "$RSHA" >/dev/null 2>&1; then
+    bad "server-bundle-install accepted a malformed checksum or an http:// source"
+elif [[ "$(rfetches)" == 0 && ! -e "$REMOTE/state-bad" ]]; then
+    ok "server-bundle-install rejects a malformed checksum or http:// source without fetching"
+else bad "server-bundle-install fetched before rejecting its input"; fi
+
+# The local deletion path strips an optional file:// prefix and removes what is
+# left. A URL must never get that far: put files where an https:// URL and its
+# sidecar would land, relative to the working directory, and prove they survive
+# both an installation and a skip.
+mkdir -p "$REMOTE/cwd/https:/example.invalid"
+printf 'keep\n' > "$REMOTE/cwd/https:/example.invalid/rtool-1.0.0.tar.gz"
+printf '%s  rtool-1.0.0.tar.gz\n' "$RSHA" > "$REMOTE/cwd/rtool.sha256"
+rm -f "$REMOTE/curl.log"
+rout="$(cd "$REMOTE/cwd" \
+    && rinstall "$REMOTE/state-delete" --name rtool --version 1.0.0 --source "$RURL" \
+        --sha256-file rtool.sha256 --installer 'setup tool.sh' --delete-after-success 2>&1 \
+    && rinstall "$REMOTE/state-delete" --name rtool --version 1.0.0 --source "$RURL" \
+        --sha256-file rtool.sha256 --installer 'setup tool.sh' --delete-after-success 2>&1)"; rcode=$?
+[[ "$rcode" == 0 && "$(rfetches)" == 1 && "$rout" != *'deleted installed archive'* \
+    && -e "$REMOTE/cwd/https:/example.invalid/rtool-1.0.0.tar.gz" && -e "$REMOTE/cwd/rtool.sha256" ]] \
+    && ok "a remote source never enters local archive deletion, installed or skipped" \
+    || bad "a remote source reached local archive deletion (exit $rcode)"
+
+# Local archives keep verify-first: a recorded match must not skip an archive
+# whose bytes no longer match its sidecar, and a failure keeps the file.
+cp "$FIX/demo-1.0.0.tar.gz" "$FIX/corrupt.tar.gz"; printf 'x' >> "$FIX/corrupt.tar.gz"
+if DEMO_MARK="$FIX/corrupt-mark" STATE_ROOT="$STATE" ./server-bundle-install --name demo --version 1.0.0 \
+    --archive "$FIX/corrupt.tar.gz" --sha256-file "$FIX/demo.sha256" --delete-after-success >/dev/null 2>&1; then
+    bad "a recorded local match skipped verification of a changed archive"
+elif [[ -e "$FIX/corrupt.tar.gz" && -e "$FIX/demo.sha256" ]]; then
+    ok "a local archive is still verified before a recorded match can skip it"
+else bad "local verification failure deleted its archive"; fi
+
+# server-bootstrap.sh hands INSTALL_ADDON to sb_install_bundle directly, not
+# through server-bundle-install, so the pre-download decision has to live in
+# the shared engine. This is that call, with the stub on PATH.
+grep -qF 'sb_install_bundle "$ADDON_NAME" "$ADDON_VERSION" "$ADDON_URL" "$ADDON_SHA256"' server-bootstrap.sh \
+    && ok "the legacy add-on path still uses the shared bundle engine" \
+    || bad "the legacy add-on path no longer calls sb_install_bundle"
+addon_engine() {  # STATE_ROOT SHA256
+    PATH="$REMOTE/bin:$PATH" CURL_LOG="$REMOTE/curl.log" REMOTE_FIXTURE="$REMOTE/rtool-1.0.0.tar.gz" \
+        RTOOL_MARK="$REMOTE/mark" bash -c 'set -Eeuo pipefail; source lib/bundle.sh; SB_LOG_PREFIX=server-bootstrap
+            sb_install_bundle rtool 1.0.0 "$1" "$2" "setup tool.sh" 0 0 "$3" "" --addon-arg' _ "$RURL" "$2" "$1"
+}
+rm -f "$REMOTE/curl.log" "$REMOTE/mark"
+addon_engine "$REMOTE/state-addon" "$RSHA" >/dev/null 2>&1; first_code=$?; first_fetches="$(rfetches)"
+rm -f "$REMOTE/mark"
+addon_engine "$REMOTE/state-addon" "$RSHA_UPPER" >/dev/null 2>&1; second_code=$?
+[[ "$first_code" == 0 && "$first_fetches" == 1 && "$second_code" == 0 && "$(rfetches)" == 1 && ! -e "$REMOTE/mark" ]] \
+    && ok "the legacy add-on path skips an installed remote bundle before downloading" \
+    || bad "legacy add-on skip (exits $first_code/$second_code, $(rfetches) fetches)"
+addon_engine "$REMOTE/state-addon" "$ROTHER" >/dev/null 2>&1 && addon_code=0 || addon_code=$?
+[[ "$addon_code" != 0 && "$(rfetches)" == 1 ]] \
+    && ok "the legacy add-on path refuses a changed checksum before downloading" \
+    || bad "legacy add-on checksum conflict (exit $addon_code, $(rfetches) fetches)"
+
+section "Remote bundles: plan registration"
+RPLAN="$REMOTE/plan"; mkdir -p "$RPLAN" "$REMOTE/dry-tmp"
+{
+    printf 'register_bootstrap ./base.tar.gz ./base.sha256\n'
+    printf 'register_bundle first 1.0.0 ./first.tar.gz ./first.sha256 install.sh --one\n'
+    printf 'register_remote_bundle rtool 1.0.0 %q %q %q' "$RURL" "$RSHA_UPPER" 'setup tool.sh'
+    printf ' %q' "${RARGS[@]}"; printf '\n'
+    printf 'register_bundle last 3.0.0 ./last.tar.gz ./last.sha256\n'
+} > "$RPLAN/plan.sh"
+rdry() {  # plan, then extra environment for a dry run with the stub on PATH
+    local plan="$1"; shift
+    env PATH="$REMOTE/bin:$PATH" CURL_LOG="$REMOTE/curl.log" TMPDIR="$REMOTE/dry-tmp" \
+        WORKSPACE_ROOT="$REMOTE/dry-ws" "$@" "$ROOT/server-provision.sh" --plan "$plan" --dry-run
+}
+rm -f "$REMOTE/curl.log"
+before="$(find "$REMOTE" | LC_ALL=C sort)"
+rout="$(rdry "$RPLAN/plan.sh" 2>&1)"; rcode=$?
+after="$(find "$REMOTE" | LC_ALL=C sort)"
+expected_dry="$(printf '%s\n' "Provision plan: $RPLAN/plan.sh" "Bootstrap: $RPLAN/base.tar.gz" 'Bundles: 3' \
+    "  1. first 1.0.0 <- $RPLAN/first.tar.gz" \
+    "  2. rtool 1.0.0 <- $RURL (sha256 $RSHA)" \
+    "  3. last 3.0.0 <- $RPLAN/last.tar.gz")"
+[[ "$rcode" == 0 && "$rout" == "$expected_dry" ]] \
+    && ok "dry run lists local and remote bundles in plan order, the checksum lowercased" \
+    || bad "remote dry-run output: $rout"
+[[ "$before" == "$after" && ! -e "$REMOTE/curl.log" ]] \
+    && ok "a remote dry run makes no request and creates no files" || bad "a remote dry run had side effects"
+if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
+    chmod a+rx "$TMP" "$REMOTE" "$REMOTE/bin" "$RPLAN" 2>/dev/null || true
+    chmod a+r "$RPLAN/plan.sh" 2>/dev/null || true
+    setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$REMOTE/bin:$PATH" \
+        "$ROOT/server-provision.sh" --plan "$RPLAN/plan.sh" --dry-run 2>/dev/null \
+        | grep -qF "  2. rtool 1.0.0 <- $RURL (sha256 $RSHA)" \
+        && ok "a remote dry run works without root" || bad "a remote dry run requires root"
+else
+    ok "remote dry run without root (already unprivileged or setpriv absent)"
+fi
+
+rm -f "$REMOTE/curl.log"
+before="$(find "$REMOTE" | LC_ALL=C sort)"
+rout="$(rdry "$ROOT/examples/provision-plan.remote.example.sh" 2>&1)"; rcode=$?
+after="$(find "$REMOTE" | LC_ALL=C sort)"
+[[ "$rcode" == 0 && "$rout" == *'Bundles: 1'* \
+    && "$rout" == *'  1. example-toolkit 1.0.0 <- https://example.com/example-toolkit-1.0.0.tar.gz (sha256 '* \
+    && "$before" == "$after" && ! -e "$REMOTE/curl.log" ]] \
+    && ok "the documented remote example previews its bundle without a request or a file" \
+    || bad "remote example dry run: $rout"
+
+raccept=1
+for url in https://example.invalid:8443/pkg/rtool-1.0.0.tgz https://127.0.0.1/rtool-1.0.0.zip \
+    'https://[::1]/rtool-1.0.0.tar.xz' https://registry.example.invalid/@scope/rtool/-/rtool-1.0.0.txz; do
+    printf 'register_bootstrap ./base.tar.gz ./base.sha256\nregister_remote_bundle rtool 1.0.0 %q %q\n' \
+        "$url" "$RSHA" > "$RPLAN/accept.sh"
+    rdry "$RPLAN/accept.sh" 2>/dev/null | grep -qF -- "<- $url (sha256 $RSHA)" \
+        || { bad "plan rejected a valid HTTPS URL: $url"; raccept=0; }
+done
+(( raccept )) && ok "plan accepts a port, an IP literal and an @-scoped path"
+
+# Each rejection is checked in a dry run and in a real run: the plan is read
+# before either does anything, so neither may fetch, create the workspace, or
+# echo a credential back.
+remote_plan_rejects() {  # label, expected reason, text never echoed, then register_remote_bundle arguments
+    local label="$1" reason="$2" secret="$3" dir out code mode clean=1
+    shift 3
+    dir="$(mktemp -d "$TMP/remote-reject.XXXXXX")"
+    { printf 'register_bootstrap ./base.tar.gz ./base.sha256\nregister_remote_bundle'
+      printf ' %q' "$@"; printf '\n'; } > "$dir/plan.sh"
+    for mode in --dry-run ''; do
+        out="$(PATH="$REMOTE/bin:$PATH" CURL_LOG="$dir/curl.log" TMPDIR="$dir" WORKSPACE_ROOT="$dir/ws" \
+            ./server-provision.sh --plan "$dir/plan.sh" ${mode:+"$mode"} 2>&1)"; code=$?
+        [[ "$code" == 2 && "$out" == *"ERROR: register_remote_bundle"*"$reason"* \
+            && ! -e "$dir/curl.log" && ! -e "$dir/ws" ]] || clean=0
+        [[ -z "$secret" || "$out" != *"$secret"* ]] || clean=0
+    done
+    (( clean )) && ok "plan rejects $label before any request" \
+        || bad "plan did not cleanly reject $label (last exit $code)"
+}
+RWHY_SCHEME="URL must start with https://"
+RWHY_CRED="URL must not carry credentials"
+RWHY_PLAIN="URL is not a plain https://HOST/PATH address"
+RWHY_ARCHIVE="URL must name a .tar.gz"
+RWHY_SHA="SHA-256 must be exactly 64 hexadecimal characters"
+RWHY_ARGS="needs NAME VERSION HTTPS_URL SHA256"
+RCRED="$(printf '%s:%s' demo-user demo-secret)"
+remote_plan_rejects "an http:// URL" "$RWHY_SCHEME" "" rtool 1.0.0 http://example.invalid/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "an ftp:// URL" "$RWHY_SCHEME" "" rtool 1.0.0 ftp://example.invalid/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a file:// URL" "$RWHY_SCHEME" "" rtool 1.0.0 file:///srv/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a local path" "$RWHY_SCHEME" "" rtool 1.0.0 ./rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "an upper-case HTTPS:// scheme" "$RWHY_SCHEME" "" rtool 1.0.0 HTTPS://example.invalid/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a scheme-relative URL" "$RWHY_SCHEME" "" rtool 1.0.0 //example.invalid/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a user and password in the URL" "$RWHY_CRED" demo-secret rtool 1.0.0 \
+    "https://$RCRED@example.invalid/rtool-1.0.0.tar.gz" "$RSHA"
+remote_plan_rejects "a user name in the URL" "$RWHY_CRED" demo-user rtool 1.0.0 \
+    https://demo-user@example.invalid/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a password with no user name in the URL" "$RWHY_CRED" demo-secret rtool 1.0.0 \
+    "https://${RCRED#demo-user}@example.invalid/rtool-1.0.0.tar.gz" "$RSHA"
+remote_plan_rejects "percent-encoded credentials in the URL" "$RWHY_CRED" demo-secret rtool 1.0.0 \
+    "https://demo-user%3Ademo-secret@example.invalid/rtool-1.0.0.tar.gz" "$RSHA"
+remote_plan_rejects "an empty URL" "$RWHY_SCHEME" "" rtool 1.0.0 '' "$RSHA"
+remote_plan_rejects "a URL with no host" "$RWHY_PLAIN" "" rtool 1.0.0 https:///rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a URL with no path" "$RWHY_PLAIN" "" rtool 1.0.0 https://example.invalid "$RSHA"
+remote_plan_rejects "a URL with no file name" "$RWHY_PLAIN" "" rtool 1.0.0 https://example.invalid/ "$RSHA"
+remote_plan_rejects "a space in the host" "$RWHY_PLAIN" "" rtool 1.0.0 'https://exa mple.invalid/rtool-1.0.0.tar.gz' "$RSHA"
+remote_plan_rejects "a newline in the URL" "$RWHY_PLAIN" "" rtool 1.0.0 $'https://example.invalid/rtool-1.0.0.tar.gz\nx.tar.gz' "$RSHA"
+remote_plan_rejects "a backslash in the URL" "$RWHY_PLAIN" "" rtool 1.0.0 'https://example.invalid\rtool-1.0.0.tar.gz' "$RSHA"
+remote_plan_rejects "a host starting with a hyphen" "$RWHY_PLAIN" "" rtool 1.0.0 https://-example.invalid/rtool-1.0.0.tar.gz "$RSHA"
+remote_plan_rejects "a query string" "$RWHY_PLAIN" "" rtool 1.0.0 'https://example.invalid/rtool-1.0.0.tar.gz?sig=abc' "$RSHA"
+remote_plan_rejects "a fragment" "$RWHY_PLAIN" "" rtool 1.0.0 'https://example.invalid/rtool-1.0.0.tar.gz#part' "$RSHA"
+remote_plan_rejects "a URL that names no supported archive" "$RWHY_ARCHIVE" "" rtool 1.0.0 https://example.invalid/rtool-1.0.0.txt "$RSHA"
+remote_plan_rejects "a 63-character SHA-256" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" "${RSHA:0:63}"
+remote_plan_rejects "a 65-character SHA-256" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" "${RSHA}0"
+remote_plan_rejects "a non-hexadecimal SHA-256" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" "${RSHA:0:63}g"
+remote_plan_rejects "an empty SHA-256" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" ''
+remote_plan_rejects "a prefixed SHA-256" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" "sha256:$RSHA"
+remote_plan_rejects "a SHA-256 containing a space" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" "${RSHA:0:32} ${RSHA:32}"
+remote_plan_rejects "a SHA-256 with a trailing newline" "$RWHY_SHA" "" rtool 1.0.0 "$RURL" "$RSHA"$'\n'
+remote_plan_rejects "a missing SHA-256" "$RWHY_ARGS" "" rtool 1.0.0 "$RURL"
+
+section "Remote bundles: provision integration"
+if (( EUID == 0 )); then
+    RFULL="$TMP/remote-full"; mkdir -p "$RFULL/bin" "$RFULL/bootstrap-src/base-1.2.0"
+    RFULL="$(cd "$RFULL" && pwd -P)"
+    cat > "$RFULL/bootstrap-src/base-1.2.0/server-bootstrap.sh" <<'FAKEBOOT'
+#!/usr/bin/env bash
+set -e
+cat > "$PROVISION_FAKE_BIN/server-accept" <<'ACCEPT'
+#!/usr/bin/env bash
+exit 0
+ACCEPT
+cat > "$PROVISION_FAKE_BIN/server-bundle-install" <<'BUNDLE'
+#!/usr/bin/env bash
+set -e
+{ printf '[%s]' "$@"; printf '\n'; } >> "$PROVISION_ARGV_LOG"
+archive= sha_file= delete=0
+while (($#)); do
+  case "$1" in
+    --archive) archive="$2"; shift 2 ;;
+    --sha256-file) sha_file="$2"; shift 2 ;;
+    --delete-after-success) delete=1; shift ;;
+    --) break ;;
+    *) shift ;;
+  esac
+done
+(( delete == 0 )) || rm -f -- "$archive" "$sha_file"
+BUNDLE
+chmod 0755 "$PROVISION_FAKE_BIN/server-accept" "$PROVISION_FAKE_BIN/server-bundle-install"
+FAKEBOOT
+    chmod +x "$RFULL/bootstrap-src/base-1.2.0/server-bootstrap.sh"
+    tar -czf "$RFULL/base.tar.gz" -C "$RFULL/bootstrap-src" base-1.2.0
+    sha256sum "$RFULL/base.tar.gz" > "$RFULL/base.sha256"
+    : > "$RFULL/one.tar.gz"; sha256sum "$RFULL/one.tar.gz" > "$RFULL/one.sha256"
+    : > "$RFULL/two.tar.gz"; sha256sum "$RFULL/two.tar.gz" > "$RFULL/two.sha256"
+    {
+        cat <<'PLAN'
+export WORKSPACE_ROOT="$PLAN_DIR/workspace"
+export PATH="$PLAN_DIR/bin:$PATH"
+export PROVISION_FAKE_BIN="$PLAN_DIR/bin"
+export PROVISION_ARGV_LOG="$PLAN_DIR/argv.log"
+export ACCEPT_POLICY=reject-stop
+export DELETE_ARCHIVES_AFTER_SUCCESS=1
+register_bootstrap ./base.tar.gz ./base.sha256
+register_bundle one 1.0.0 ./one.tar.gz ./one.sha256 install.sh
+PLAN
+        printf 'register_remote_bundle rtool 1.0.0 %q %q %q' "$RURL" "$RSHA_UPPER" 'setup tool.sh'
+        printf ' %q' "${RARGS[@]}"; printf '\n'
+        printf 'register_bundle two 2.0.0 ./two.tar.gz ./two.sha256\n'
+    } > "$RFULL/plan.sh"
+    expected_argv="$(printf '%s\n' \
+        "[--name][one][--version][1.0.0][--archive][$RFULL/one.tar.gz][--sha256-file][$RFULL/one.sha256][--installer][install.sh][--delete-after-success][--]" \
+        "[--name][rtool][--version][1.0.0][--source][$RURL][--sha256][$RSHA][--installer][setup tool.sh][--]$RARGS_SEEN" \
+        "[--name][two][--version][2.0.0][--archive][$RFULL/two.tar.gz][--sha256-file][$RFULL/two.sha256][--installer][install.sh][--delete-after-success][--]")"
+    if ./server-provision.sh --plan "$RFULL/plan.sh" >/dev/null 2>&1 \
+        && [[ "$(cat "$RFULL/argv.log" 2>/dev/null)" == "$expected_argv" ]]; then
+        ok "provision passes local and remote bundles to server-bundle-install in order, arguments intact"
+    else
+        bad "provision argv: $(cat "$RFULL/argv.log" 2>/dev/null)"
+    fi
+    [[ ! -e "$RFULL/base.tar.gz" && ! -e "$RFULL/one.tar.gz" && ! -e "$RFULL/one.sha256" \
+        && ! -e "$RFULL/two.tar.gz" && ! -e "$RFULL/two.sha256" ]] \
+        && ok "local archives beside a remote bundle are still deleted after success" \
+        || bad "local archive cleanup in a mixed plan"
+else
+    ok "remote provision integration skipped without root"
+fi
+
 section "VS Code extension helper"
 VSCODE_FIX="$TMP/vscode"; mkdir -p "$VSCODE_FIX"
 cat > "$VSCODE_FIX/code" <<'FAKECODE'
