@@ -49,7 +49,7 @@ EXTRA_PACKAGES="postgresql-client redis-tools"
 SKIP_PACKAGES="nmap tcpdump"
 ```
 
-Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`,
+Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, ngrok,
 and the AI CLIs — are deliberately absent from the manifest. Adding one of them
 to it would install a second, unpinned copy.
 
@@ -73,6 +73,39 @@ download. Authentication is interactive and never stored in the bundle:
 ```bash
 gh auth login
 ```
+
+## ngrok
+
+The ngrok agent CLI is part of every bootstrap run; there is no switch to omit
+it. The bootstrap downloads the pinned package file for the host's architecture
+from ngrok's own apt repository, verifies its SHA-256, and places the one binary
+it contains at `/usr/local/bin/ngrok`:
+
+```bash
+NGROK_VERSION=3.39.11
+NGROK_SHA256_X64=e51aa234283bcf20a777e21a624b2a3501b058b3d5a1faec59106311dbe30395
+NGROK_SHA256_ARM64=b307de23bddc13a5729b2c8d2283fe98166e2d211d59ceeb62204ff216798bcc
+```
+
+The checksums are the ones ngrok's `Packages` index records for each package
+file. The repository is not added to apt and no signing key is installed: the
+package holds only that binary and runs no maintainer script, so extracting it
+is the whole installation. The binary is staged beside its final path, checked
+with `ngrok version`, and renamed into place, so a failed download, a checksum
+mismatch or an unsupported architecture leaves no partial binary. Reruns are
+idempotent: a matching `/usr/local/bin/ngrok version` skips the download, and
+any other version is replaced by the pinned one.
+
+Nothing is configured. The bootstrap asks for and stores no auth token, writes
+no ngrok configuration file, starts no tunnel, and registers no service. Sign
+in yourself when you need it, which writes ngrok's own configuration file:
+
+```bash
+ngrok config add-authtoken <token>
+```
+
+`ngrok update` replaces the binary outside the pin; rerunning `server-bootstrap`
+restores the pinned version.
 
 ## Node.js and coding-agent CLIs
 
@@ -101,10 +134,10 @@ CODEX_VERSION=0.156.0
 PI_VERSION=0.87.1
 ```
 
-These are exact-version npm installs. Unlike Node.js, uv and `gh`, no SHA-256
-in this repository covers them: their integrity comes from npm and the registry.
-What the bootstrap adds is a check that npm installed the version it was asked
-for, read back from the installed `package.json`.
+These are exact-version npm installs. Unlike Node.js, uv, `gh` and ngrok,
+no SHA-256 in this repository covers them: their integrity comes from npm and
+the registry. What the bootstrap adds is a check that npm installed the version
+it was asked for, read back from the installed `package.json`.
 
 The bootstrap invokes npm directly while already running as root; it does not
 run `sudo npm`. Package versions are verified from their installed
@@ -194,6 +227,7 @@ Every version variable also accepts the literal `latest`:
 | `NODE_VERSION` | newest LTS in `nodejs.org/dist/index.json`, then `SHASUMS256.txt` |
 | `GH_VERSION` | newest `cli/cli` tag, then `gh_<version>_checksums.txt` |
 | `UV_VERSION` | newest `astral-sh/uv` tag, then the `.sha256` sidecar |
+| `NGROK_VERSION` | newest `ngrok` entry in ngrok's apt `Packages` index, with its SHA-256 |
 | `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `PI_VERSION` | the npm `latest` dist-tag |
 | `OH_MY_ZSH_REF` | current `master` commit, then the existing exact-commit verify |
 
@@ -236,11 +270,11 @@ leaves the tree partly updated, and the remedy is to rerun.
 failed to resolve. An upstream that cannot be resolved is never reported as
 `CURRENT`, and `--write` refuses to write a value it could not resolve.
 
-Node.js, `gh`, uv, Claude Code, Codex and pi resolve to a published release — a
-git tag or an npm `dist-tag` — and stay put until upstream cuts a new one. Oh My
-Zsh publishes no releases, so its pin tracks `refs/heads/master`, which moves
-several times a day. Moving it is a deliberate act: `--write` leaves it alone
-unless `--all` is given.
+Node.js, `gh`, uv, ngrok, Claude Code, Codex and pi resolve to a published
+release — a git tag, an npm `dist-tag`, or an apt package index entry — and stay
+put until upstream cuts a new one. Oh My Zsh publishes no releases, so its pin
+tracks `refs/heads/master`, which moves several times a day. Moving it is a
+deliberate act: `--write` leaves it alone unless `--all` is given.
 
 ## VS Code Remote-SSH extensions
 

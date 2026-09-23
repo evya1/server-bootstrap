@@ -24,6 +24,21 @@
 
 [#53]: https://github.com/evya1/server-bootstrap/issues/53
 
+- **The ngrok agent CLI is part of every bootstrap run.** ngrok `3.39.11` is
+  installed at `/usr/local/bin/ngrok` from the pinned package file for the
+  host's architecture in ngrok's own apt repository, verified against the
+  x86-64 or ARM64 SHA-256 recorded in `checksums/NGROK_SHA256.txt`. The
+  repository is not added to apt: the package's one binary is extracted,
+  checked with `ngrok version`, and renamed into place, so a failed download, a
+  checksum mismatch or an unsupported architecture leaves no partial binary,
+  and a rerun with the pinned version downloads nothing. There is no install
+  flag. No auth token is requested or stored, and no ngrok configuration file,
+  tunnel or service is created. The three new pins are covered by
+  `tools/check-pins.sh`, `tools/refresh-pins.sh --check` and `--write`, and
+  `NGROK_VERSION=latest` resolves from the same package index. ([#58][])
+
+[#58]: https://github.com/evya1/server-bootstrap/issues/58
+
 ### Changed
 
 - **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`

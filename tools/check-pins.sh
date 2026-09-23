@@ -59,6 +59,9 @@ MAP = [
     ("UV_VERSION",          CONFIG, r'^\s*UV_VERSION="\$\{UV_VERSION:-(\d+\.\d+\.\d+)\}"$'),
     ("UV_SHA256_X64",       CONFIG, r'^\s*UV_SHA256_X64="\$\{UV_SHA256_X64:-([0-9a-f]{64})\}"$'),
     ("UV_SHA256_ARM64",     CONFIG, r'^\s*UV_SHA256_ARM64="\$\{UV_SHA256_ARM64:-([0-9a-f]{64})\}"$'),
+    ("NGROK_VERSION",       CONFIG, r'^\s*NGROK_VERSION="\$\{NGROK_VERSION:-(\d+\.\d+\.\d+)\}"$'),
+    ("NGROK_SHA256_X64",    CONFIG, r'^\s*NGROK_SHA256_X64="\$\{NGROK_SHA256_X64:-([0-9a-f]{64})\}"$'),
+    ("NGROK_SHA256_ARM64",  CONFIG, r'^\s*NGROK_SHA256_ARM64="\$\{NGROK_SHA256_ARM64:-([0-9a-f]{64})\}"$'),
     ("OH_MY_ZSH_REF",       CONFIG, r'^\s*OH_MY_ZSH_REF="\$\{OH_MY_ZSH_REF:-([0-9a-f]{40})\}"$'),
     ("CLAUDE_CODE_VERSION", CONFIG, r'^\s*CLAUDE_CODE_VERSION="\$\{CLAUDE_CODE_VERSION:-(\d+\.\d+\.\d+)\}"$'),
     ("CODEX_VERSION",       CONFIG, r'^\s*CODEX_VERSION="\$\{CODEX_VERSION:-(\d+\.\d+\.\d+)\}"$'),
@@ -76,6 +79,9 @@ MAP = [
     ("UV_VERSION",          "config.example.env", r'^# UV_VERSION=(\d+\.\d+\.\d+)$'),
     ("UV_SHA256_X64",       "config.example.env", r'^# UV_SHA256_X64=([0-9a-f]{64})$'),
     ("UV_SHA256_ARM64",     "config.example.env", r'^# UV_SHA256_ARM64=([0-9a-f]{64})$'),
+    ("NGROK_VERSION",       "config.example.env", r'^# NGROK_VERSION=(\d+\.\d+\.\d+)$'),
+    ("NGROK_SHA256_X64",    "config.example.env", r'^# NGROK_SHA256_X64=([0-9a-f]{64})$'),
+    ("NGROK_SHA256_ARM64",  "config.example.env", r'^# NGROK_SHA256_ARM64=([0-9a-f]{64})$'),
     ("OH_MY_ZSH_REF",       "config.example.env", r'^# OH_MY_ZSH_REF=([0-9a-f]{40})$'),
     ("CLAUDE_CODE_VERSION", "config.example.env", r'^# CLAUDE_CODE_VERSION=(\d+\.\d+\.\d+)$'),
     ("CODEX_VERSION",       "config.example.env", r'^# CODEX_VERSION=(\d+\.\d+\.\d+)$'),
@@ -96,6 +102,11 @@ MAP = [
     ("GH_SHA256_X64",   "checksums/GH_SHA256.txt", r'^linux-amd64 +([0-9a-f]{64})$'),
     ("GH_SHA256_ARM64", "checksums/GH_SHA256.txt", r'^linux-arm64 +([0-9a-f]{64})$'),
 
+    ("NGROK_VERSION",      "checksums/NGROK_SHA256.txt", r'^# Assets: ngrok_(\d+\.\d+\.\d+)-0_amd64\.deb / ngrok_[\d.]+-0_arm64\.deb$'),
+    ("NGROK_VERSION",      "checksums/NGROK_SHA256.txt", r'^# Assets: ngrok_[\d.]+-0_amd64\.deb / ngrok_(\d+\.\d+\.\d+)-0_arm64\.deb$'),
+    ("NGROK_SHA256_X64",   "checksums/NGROK_SHA256.txt", r'^linux-amd64 +([0-9a-f]{64})$'),
+    ("NGROK_SHA256_ARM64", "checksums/NGROK_SHA256.txt", r'^linux-arm64 +([0-9a-f]{64})$'),
+
     ("UV_VERSION",      "checksums/UV_SHA256.txt", r'^# Source: https://github\.com/astral-sh/uv/releases/download/(\d+\.\d+\.\d+)/$'),
     ("UV_SHA256_X64",   "checksums/UV_SHA256.txt", r'^x86_64-unknown-linux-gnu +([0-9a-f]{64})$'),
     ("UV_SHA256_ARM64", "checksums/UV_SHA256.txt", r'^aarch64-unknown-linux-gnu +([0-9a-f]{64})$'),
@@ -111,17 +122,21 @@ MAP = [
     # matching inside "api"; the right-hand side is bounded so a README claiming
     # "pi 0.85.10" cannot satisfy a pinned "pi 0.85.1".
     ("GH_VERSION",          "README.md", r'\bGitHub CLI (\d+\.\d+\.\d+)(?![\d.])'),
+    ("NGROK_VERSION",       "README.md", r'\bngrok (\d+\.\d+\.\d+)(?![\d.])'),
     ("NODE_VERSION",        "README.md", r'\bNode\.js (\d+\.\d+\.\d+)(?![\d.])'),
     ("CLAUDE_CODE_VERSION", "README.md", r'\bClaude Code (\d+\.\d+\.\d+)(?![\d.])'),
     ("CODEX_VERSION",       "README.md", r'\bOpenAI Codex (\d+\.\d+\.\d+)(?![\d.])'),
     ("PI_VERSION",          "README.md", r'\bpi (\d+\.\d+\.\d+)(?![\d.])'),
 
-    # docs/CONFIGURATION.md repeats nine of them as literal env blocks. Before
+    # docs/CONFIGURATION.md repeats most of them as literal env blocks. Before
     # this table existed refresh-pins.sh did not rewrite that file, and two of
     # them had already gone stale by two releases.
     ("GH_VERSION",          "docs/CONFIGURATION.md", r'^GH_VERSION=(\d+\.\d+\.\d+)$'),
     ("GH_SHA256_X64",       "docs/CONFIGURATION.md", r'^GH_SHA256_X64=([0-9a-f]{64})$'),
     ("GH_SHA256_ARM64",     "docs/CONFIGURATION.md", r'^GH_SHA256_ARM64=([0-9a-f]{64})$'),
+    ("NGROK_VERSION",       "docs/CONFIGURATION.md", r'^NGROK_VERSION=(\d+\.\d+\.\d+)$'),
+    ("NGROK_SHA256_X64",    "docs/CONFIGURATION.md", r'^NGROK_SHA256_X64=([0-9a-f]{64})$'),
+    ("NGROK_SHA256_ARM64",  "docs/CONFIGURATION.md", r'^NGROK_SHA256_ARM64=([0-9a-f]{64})$'),
     ("NODE_VERSION",        "docs/CONFIGURATION.md", r'^NODE_VERSION=(\d+\.\d+\.\d+)$'),
     ("NODE_VERSION",        "docs/CONFIGURATION.md", r'\bNode\.js (\d+\.\d+\.\d+) LTS binary archive\b'),
     ("NODE_SHA256_X64",     "docs/CONFIGURATION.md", r'^NODE_SHA256_X64=([0-9a-f]{64})$'),

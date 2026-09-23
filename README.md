@@ -75,6 +75,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear` and disk/mem/GPU aliases |
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
 | **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.101.0 (`gh`) |
+| **Tunnels** | Checksum-verified ngrok 3.39.11 agent CLI (`ngrok`), installed only: no auth token, tunnel or service is set up |
 | **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
 | **Agents** | Claude Code 2.1.280, OpenAI Codex 0.156.0 and pi 0.87.1, isolated in `/opt/ai-cli` |
 | **API keys** | One root-only `secrets.env` (mode 0600) loaded into every login shell, managed with `server-secrets` |
@@ -84,7 +85,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 
 Every version above is pinned by the release. The two guarantees behind that
 word are different and worth separating: **downloaded binary artifacts** —
-Node.js, uv and `gh` — are verified against SHA-256 values pinned in this
+Node.js, uv, `gh` and ngrok — are verified against SHA-256 values pinned in this
 repository before they are extracted, while the **AI CLIs** are exact-version
 npm installs whose integrity comes from npm and the registry, not from a
 checksum stored here; the bootstrap then verifies that npm installed the version
@@ -167,13 +168,13 @@ SKIP_PACKAGES="nmap tcpdump" \
   server-bootstrap
 ```
 
-Each subsystem can also be switched off individually — `INSTALL_GITHUB_CLI=0`,
-`INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and so on. See
-[CONFIGURATION](docs/CONFIGURATION.md) for the full list.
+Each subsystem except ngrok can also be switched off individually —
+`INSTALL_GITHUB_CLI=0`, `INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and
+so on. See [CONFIGURATION](docs/CONFIGURATION.md) for the full list.
 
-Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, and the AI
-CLIs — are deliberately absent from the manifest. Adding one of them to it would
-install a second, unpinned copy.
+Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, ngrok, and
+the AI CLIs — are deliberately absent from the manifest. Adding one of them to
+it would install a second, unpinned copy.
 
 ### Keeping the pinned versions fresh
 
@@ -187,7 +188,7 @@ tools/check-pins.sh              # assert those recordings still agree, offline
 `--check` exits `0` when nothing is actionable, `1` when a pinned **release** is
 behind, `2` on a usage error, and `3` when an upstream could not be resolved at
 all — which is deliberately not `0`, so a run whose network was broken cannot
-read as a clean week. Six pins track published releases; the Oh My Zsh pin
+read as a clean week. Seven pins track published releases; the Oh My Zsh pin
 tracks a branch head that moves several times a day, so its movement is reported
 as `MOVED` and does not fail the check unless you ask with `--all`.
 
@@ -246,7 +247,7 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 - SHA-256 is checked before any downloaded archive is extracted.
 - Archives with absolute paths, `..` traversal, or escaping symlinks are rejected.
 - Remote sources and the npm registry must use HTTPS.
-- Node.js, `gh`, Claude Code, Codex, pi, uv, and Oh My Zsh are version-pinned by the release.
+- Node.js, `gh`, ngrok, Claude Code, Codex, pi, uv, and Oh My Zsh are version-pinned by the release.
 - API keys live in one root-owned file at mode 0600, never in `/etc/profile.d`, which is world-readable.
 - That file is parsed, not sourced: a backtick or `$(...)` in a pasted value is data, not a command.
 - An empty key is not exported, so an untouched placeholder is never mistaken for a credential.

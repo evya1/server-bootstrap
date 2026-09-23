@@ -20,6 +20,7 @@ names = [
     "NODE_VERSION", "NODE_SHA256_X64", "NODE_SHA256_ARM64",
     "GH_VERSION", "GH_SHA256_X64", "GH_SHA256_ARM64",
     "UV_VERSION", "UV_SHA256_X64", "UV_SHA256_ARM64",
+    "NGROK_VERSION", "NGROK_SHA256_X64", "NGROK_SHA256_ARM64",
     "CLAUDE_CODE_VERSION", "CODEX_VERSION", "PI_VERSION", "OH_MY_ZSH_REF",
 ]
 values = {n: os.environ[n] for n in names}
@@ -47,12 +48,13 @@ EDITS = [
      r'^(\s*%s=")\$\{%s:-[^}]*(\}")$' % (n, n), None, 1) for n in names
 ]
 
-# README.md's "What the run installs" table names five of these versions in
+# README.md's "What the run installs" table names six of these versions in
 # prose. A second copy of a value that a tool updates only half of is how
 # documentation goes stale, so they are rewritten here rather than left to the
 # maintainer.
 for label, name in (
     ("GitHub CLI", "GH_VERSION"),
+    ("ngrok", "NGROK_VERSION"),
     ("Node.js", "NODE_VERSION"),
     ("Claude Code", "CLAUDE_CODE_VERSION"),
     ("OpenAI Codex", "CODEX_VERSION"),
@@ -70,11 +72,12 @@ for name in names:
                   r"^# %s=%s$" % (re.escape(name), shape),
                   "# %s=%%s" % name, 1))
 
-# docs/CONFIGURATION.md repeats nine of them as literal environment blocks.
+# docs/CONFIGURATION.md repeats most of them as literal environment blocks.
 # Until they were added here, --write left that file alone and two of its
 # values were two releases behind what the bundle actually pinned.
 for name, shape in (
     ("GH_VERSION", SEMVER), ("GH_SHA256_X64", HEX64), ("GH_SHA256_ARM64", HEX64),
+    ("NGROK_VERSION", SEMVER), ("NGROK_SHA256_X64", HEX64), ("NGROK_SHA256_ARM64", HEX64),
     ("NODE_VERSION", SEMVER), ("NODE_SHA256_X64", HEX64), ("NODE_SHA256_ARM64", HEX64),
     ("CLAUDE_CODE_VERSION", SEMVER), ("CODEX_VERSION", SEMVER), ("PI_VERSION", SEMVER),
     ("OH_MY_ZSH_REF", HEX40),
@@ -126,6 +129,13 @@ values["OMZ_DATE"] = os.environ.get("OMZ_DATE", "unknown")
     "# Source: https://github.com/cli/cli/releases/download/v%(GH_VERSION)s/gh_%(GH_VERSION)s_checksums.txt\n"
     "linux-amd64 %(GH_SHA256_X64)s\n"
     "linux-arm64 %(GH_SHA256_ARM64)s\n" % values)
+
+(ROOT / "checksums/NGROK_SHA256.txt").write_text(
+    "# Pinned ngrok agent release used by server-bootstrap %(BUNDLE)s.\n"
+    "# Assets: ngrok_%(NGROK_VERSION)s-0_amd64.deb / ngrok_%(NGROK_VERSION)s-0_arm64.deb\n"
+    "# Source: https://ngrok-agent.s3.amazonaws.com/dists/buster/main/binary-<arch>/Packages\n"
+    "linux-amd64 %(NGROK_SHA256_X64)s\n"
+    "linux-arm64 %(NGROK_SHA256_ARM64)s\n" % values)
 
 (ROOT / "checksums/UV_SHA256.txt").write_text(
     "# Pinned uv release used by server-bootstrap %(BUNDLE)s.\n"

@@ -21,7 +21,7 @@ done < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' \
 for file in lib/core.sh lib/archive.sh lib/bundle.sh \
     lib/bootstrap/config.sh lib/bootstrap/workspace.sh lib/bootstrap/packages.sh \
     lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/vscode.sh lib/bootstrap/uv.sh lib/bootstrap/python.sh lib/bootstrap/shell.sh \
-    lib/bootstrap/github_cli.sh lib/bootstrap/runtime.sh lib/bootstrap/report.sh \
+    lib/bootstrap/github_cli.sh lib/bootstrap/ngrok.sh lib/bootstrap/runtime.sh lib/bootstrap/report.sh \
     lib/secrets-load.sh lib/bootstrap/secrets.sh lib/bootstrap/pi.sh; do
     [[ -f "$file" ]] && ok "module present: $file" || bad "missing module: $file"
 done
@@ -1283,7 +1283,7 @@ if grep -qF 'Every CI job checks out a branch' CHANGELOG.md; then
 fi
 (( changelog_drift == 0 )) && ok "CHANGELOG.md has an Unreleased section and no uncorrected claim"
 
-# 3. "Checksum-verified" covers Node.js, uv and gh, whose downloaded artifacts
+# 3. "Checksum-verified" covers Node.js, uv, gh and ngrok, whose downloaded artifacts
 # are checked against SHA-256 values pinned here. It does not cover the AI CLIs:
 # lib/bootstrap/ai_cli.sh runs one npm install at exact versions and then reads
 # the installed package.json back. That is a real guarantee, from npm and the
@@ -2128,7 +2128,7 @@ done
 section "Fitness: every pinned value agrees on every surface that records it"
 # lib/bootstrap/config.sh is canonical. config.example.env, checksums/*.txt,
 # README.md and docs/CONFIGURATION.md are second recordings of the same
-# thirteen values, and tools/refresh-pins.sh --write writes all of them.
+# sixteen values, and tools/refresh-pins.sh --write writes all of them.
 # tools/check-pins.sh asserts each recording is present exactly once, is well
 # formed, and equals the canonical value -- with every architecture anchored to
 # its own label, so an x64/arm64 swap fails. Before it existed a zeroed uv
@@ -2151,7 +2151,7 @@ pin_surface_copy() {
     dest="$(mktemp -d "$TMP/pins.XXXXXX")"
     for file in VERSION README.md config.example.env lib/bootstrap/config.sh \
         docs/CONFIGURATION.md checksums/NODE_SHA256.txt checksums/GH_SHA256.txt \
-        checksums/UV_SHA256.txt checksums/OH_MY_ZSH_REF.txt \
+        checksums/NGROK_SHA256.txt checksums/UV_SHA256.txt checksums/OH_MY_ZSH_REF.txt \
         checksums/AI_CLI_VERSIONS.txt examples/provision-plan.example.sh \
         examples/provision-plan.whisper.example.sh; do
         mkdir -p "$dest/$(dirname "$file")"
@@ -2187,7 +2187,8 @@ pin_reject "a zeroed uv checksum in the manifest" \
 for pair in \
     'checksums/UV_SHA256.txt|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu' \
     'checksums/NODE_SHA256.txt|linux-x64|linux-arm64' \
-    'checksums/GH_SHA256.txt|linux-amd64|linux-arm64'; do
+    'checksums/GH_SHA256.txt|linux-amd64|linux-arm64' \
+    'checksums/NGROK_SHA256.txt|linux-amd64|linux-arm64'; do
     IFS='|' read -r file x64_label arm_label <<< "$pair"
     root="$(pin_surface_copy)"
     python3 - "$root/$file" "$x64_label" "$arm_label" <<'SWAP'
@@ -2267,6 +2268,7 @@ if SB_PIN_ROOT="$root" \
     NODE_VERSION=25.1.0 NODE_SHA256_X64="${ZERO64/00/a1}" NODE_SHA256_ARM64="${ZERO64/00/a2}" \
     GH_VERSION=99.99.99 GH_SHA256_X64="${ZERO64/00/b1}" GH_SHA256_ARM64="${ZERO64/00/b2}" \
     UV_VERSION=0.13.0 UV_SHA256_X64="${ZERO64/00/c1}" UV_SHA256_ARM64="${ZERO64/00/c2}" \
+    NGROK_VERSION=4.0.0 NGROK_SHA256_X64="${ZERO64/00/d1}" NGROK_SHA256_ARM64="${ZERO64/00/d2}" \
     CLAUDE_CODE_VERSION=2.2.0 CODEX_VERSION=0.155.0 PI_VERSION=0.86.0 \
     OH_MY_ZSH_REF=1111111111111111111111111111111111111111 OMZ_DATE=2026-01-01 \
     python3 tools/write-pins.py >/dev/null 2>&1; then
@@ -2504,6 +2506,227 @@ grep -Eq '"(apiKey|key)"[[:space:]]*:[[:space:]]*"sk-' examples/pi-models.exampl
 grep -q 'e "$target"' lib/bootstrap/pi.sh && grep -q 'kept existing pi model configuration' lib/bootstrap/pi.sh \
     && ok "an existing models.json is never overwritten" || bad "models.json overwrite guard"
 
+section "ngrok CLI: pinned, verified, installed only"
+# ngrok is part of every bootstrap run, with no install flag and no plan step.
+# The install cases run the real module against fixture packages served by a
+# curl stub, with uname stubbed to choose the architecture and sleep stubbed so
+# retries are instant. Nothing reaches the network and nothing is written
+# outside $TMP. See #58.
+grep -q '^STEP=ngrok; bootstrap_ngrok$' server-bootstrap.sh \
+    && grep -q 'bootstrap/github_cli bootstrap/ngrok' server-bootstrap.sh \
+    && grep -q 'lib/bootstrap/ngrok.sh' release/build-release.sh \
+    && ok "the base bootstrap sources and runs the ngrok step, and the release ships it" \
+    || bad "ngrok step wiring"
+grep -q 'INSTALL_NGROK' lib/bootstrap/config.sh server-bootstrap.sh config.example.env docs/CONFIGURATION.md \
+    && bad "ngrok has an install flag" || ok "ngrok has no install flag: every bootstrap run installs it"
+grep -qi 'ngrok' examples/provision-plan*.sh \
+    && bad "an example plan carries its own ngrok step" || ok "no example plan carries its own ngrok step"
+grep -Eq '^ngrok$' config/packages.txt \
+    && bad "ngrok must be installed from the pinned package, not apt" \
+    || ok "ngrok is not duplicated in the apt manifest"
+grep -Eq 'NGROK_VERSION="\$\{NGROK_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}"' lib/bootstrap/config.sh \
+    && grep -Eq 'NGROK_SHA256_X64="\$\{NGROK_SHA256_X64:-[0-9a-f]{64}\}"' lib/bootstrap/config.sh \
+    && grep -Eq 'NGROK_SHA256_ARM64="\$\{NGROK_SHA256_ARM64:-[0-9a-f]{64}\}"' lib/bootstrap/config.sh \
+    && ok "ngrok is version pinned and checksum pinned for both architectures" \
+    || bad "ngrok pin defaults"
+grep -v '^[[:space:]]*#' lib/bootstrap/ngrok.sh \
+    | grep -Eiq 'authtoken|systemctl|service|\.config/ngrok|ngrok\.yml' \
+    && bad "the ngrok module has a credential, configuration, tunnel or service action" \
+    || ok "the ngrok module has no credential, configuration, tunnel or service action"
+
+# The index parser is pure, so it is driven with a synthetic Packages body.
+# Hashes are made here rather than written down: no pin literal in this file.
+# shellcheck source=lib/core.sh
+source lib/core.sh
+# shellcheck source=lib/bootstrap/ngrok.sh
+source lib/bootstrap/ngrok.sh
+nh1="$(printf 'ngrok index one' | sha256sum | cut -c1-64)"
+nh2="$(printf 'ngrok index two' | sha256sum | cut -c1-64)"
+nh3="$(printf 'ngrok index three' | sha256sum | cut -c1-64)"
+ngrok_index="$(printf 'Package: ngrok\nVersion: 3.9.0\nArchitecture: amd64\nSHA256: %s\n\nPackage: ngrok\nVersion: 3.10.0\nArchitecture: amd64\nSHA256: %s\n\nPackage: ngrok\nVersion: 3.10.0\nArchitecture: arm64\nSHA256: %s\n\nPackage: other\nVersion: 9.0.0\nArchitecture: amd64\nSHA256: %s\n' \
+    "$nh1" "$nh2" "$nh3" "$nh3")"
+[[ "$(bootstrap_ngrok_index_entry "$ngrok_index" latest amd64)" == "3.10.0 $nh2" ]] \
+    && ok "latest is the highest version, compared as a version rather than as text" \
+    || bad "ngrok latest resolution: $(bootstrap_ngrok_index_entry "$ngrok_index" latest amd64)"
+[[ "$(bootstrap_ngrok_index_entry "$ngrok_index" 3.9.0 amd64)" == "3.9.0 $nh1" \
+    && "$(bootstrap_ngrok_index_entry "$ngrok_index" 3.10.0 arm64)" == "3.10.0 $nh3" ]] \
+    && ok "an exact version resolves to that architecture's checksum" \
+    || bad "ngrok exact version lookup"
+if bootstrap_ngrok_index_entry "$ngrok_index" 9.0.0 amd64 >/dev/null \
+    || bootstrap_ngrok_index_entry "$ngrok_index" 3.9.0 arm64 >/dev/null \
+    || bootstrap_ngrok_index_entry "${ngrok_index//$nh1/not-a-checksum}" 3.9.0 amd64 >/dev/null; then
+    bad "the ngrok index parser accepted another package, a missing version, or a malformed checksum"
+else
+    ok "another package, a missing version, and a malformed checksum all fail"
+fi
+
+if ! command -v dpkg-deb >/dev/null 2>&1; then
+    skip "ngrok install cases need dpkg-deb to build their fixture packages"
+else
+    NGROK_FIX="$TMP/ngrok"; mkdir -p "$NGROK_FIX/stub" "$NGROK_FIX/tmp" "$NGROK_FIX/home"
+    NGROK_FIX="$(cd "$NGROK_FIX" && pwd -P)"
+    NGROK_REPO=https://ngrok-agent.s3.amazonaws.com
+    NGROK_POOL="$NGROK_FIX/serve/pool/main/n/ngrok"
+    mkdir -p "$NGROK_POOL" "$NGROK_FIX/serve/dists/buster/main/binary-amd64"
+
+    # A package shaped like the real one: one executable at usr/local/bin/ngrok.
+    # Its binary logs every invocation and reports REPORTED as its version.
+    ngrok_package() {  # version, arch, reported version -> path of the .deb
+        local tree="$NGROK_FIX/pkg-$1-$2-$3"
+        mkdir -p "$tree/DEBIAN" "$tree/usr/local/bin"
+        printf 'Package: ngrok\nVersion: %s\nArchitecture: %s\nMaintainer: fixture\nDescription: fixture\n' \
+            "$1" "$2" > "$tree/DEBIAN/control"
+        sed "s/@VERSION@/$3/" > "$tree/usr/local/bin/ngrok" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$NGROK_CALLS"
+[[ "${1:-}" == version ]] && printf 'ngrok version @VERSION@\n'
+exit 0
+STUB
+        chmod 0755 "$tree/usr/local/bin/ngrok"
+        dpkg-deb --root-owner-group -Zgzip --build "$tree" "$tree.deb" >/dev/null 2>&1
+        printf '%s\n' "$tree.deb"
+    }
+    cat > "$NGROK_FIX/stub/curl" <<'CURL'
+#!/usr/bin/env bash
+out=
+for ((i = 1; i <= $#; i++)); do
+    [[ "${!i}" == -o ]] && { j=$((i + 1)); out="${!j}"; }
+done
+url="${!#}"
+printf '%s\n' "$url" >> "$NGROK_CURL_LOG"
+file="$NGROK_SERVE/${url#https://ngrok-agent.s3.amazonaws.com/}"
+[[ "${NGROK_CURL_FAIL:-0}" == 0 && -f "$file" ]] || exit 22
+if [[ -n "$out" ]]; then cp -- "$file" "$out"; else cat -- "$file"; fi
+CURL
+    printf '#!/usr/bin/env bash\n[[ "${1:-}" == -m ]] && printf "%%s\\n" "$NGROK_MACHINE"\n' > "$NGROK_FIX/stub/uname"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$NGROK_FIX/stub/sleep"
+    chmod 0755 "$NGROK_FIX/stub/curl" "$NGROK_FIX/stub/uname" "$NGROK_FIX/stub/sleep"
+
+    ngrok_serve() {  # package path, version, arch
+        cp -- "$1" "$NGROK_POOL/ngrok_$2-0_$3.deb"
+    }
+    ngrok_sha() { sha256sum -- "$1" | cut -c1-64; }
+    ngrok_fetches() { if [[ -f "$NGROK_FIX/curl.log" ]]; then wc -l < "$NGROK_FIX/curl.log"; else echo 0; fi; }
+    ngrok_reported() {
+        [[ -x "$1/ngrok" ]] && NGROK_CALLS="$NGROK_FIX/calls.log" "$1/ngrok" version | awk '{print $3}'
+    }
+    # No staged binary beside the target and no temporary download left behind.
+    ngrok_clean() {
+        [[ -z "$(find "$1" -maxdepth 1 -name '.ngrok.*' 2>/dev/null)" \
+            && -z "$(find "$NGROK_FIX/tmp" -mindepth 1 -print -quit)" ]]
+    }
+    ngrok_run() {  # machine, bin dir, VAR=value... ; output in $NGROK_FIX/out
+        local machine="$1" bin="$2"; shift 2
+        rm -f "$NGROK_FIX/curl.log"
+        (
+            export PATH="$NGROK_FIX/stub:$PATH" NGROK_MACHINE="$machine" TMPDIR="$NGROK_FIX/tmp" \
+                HOME="$NGROK_FIX/home" NGROK_SERVE="$NGROK_FIX/serve" \
+                NGROK_CURL_LOG="$NGROK_FIX/curl.log" NGROK_CALLS="$NGROK_FIX/calls.log" \
+                NGROK_VERSION=9.8.7 NGROK_SHA256_X64="$NGROK_AMD_SHA" NGROK_SHA256_ARM64="$NGROK_ARM_SHA"
+            for assignment in "$@"; do export "${assignment?}"; done
+            bootstrap_load_config
+            STATE_ROOT="$NGROK_FIX/state-$(basename -- "$bin")"
+            mkdir -p "$STATE_ROOT"
+            bootstrap_ngrok "$bin"
+        ) > "$NGROK_FIX/out" 2>&1
+    }
+    # shellcheck source=lib/bootstrap/config.sh
+    source lib/bootstrap/config.sh
+
+    NGROK_AMD="$(ngrok_package 9.8.7 amd64 9.8.7)"; NGROK_AMD_SHA="$(ngrok_sha "$NGROK_AMD")"
+    NGROK_ARM="$(ngrok_package 9.8.7 arm64 9.8.7)"; NGROK_ARM_SHA="$(ngrok_sha "$NGROK_ARM")"
+    NGROK_OLD="$(ngrok_package 9.8.6 amd64 9.8.6)"; NGROK_OLD_SHA="$(ngrok_sha "$NGROK_OLD")"
+    NGROK_LIAR="$(ngrok_package 9.8.7 amd64 9.9.9)"; NGROK_LIAR_SHA="$(ngrok_sha "$NGROK_LIAR")"
+    ngrok_serve "$NGROK_AMD" 9.8.7 amd64; ngrok_serve "$NGROK_ARM" 9.8.7 arm64
+    ngrok_serve "$NGROK_OLD" 9.8.6 amd64
+
+    # Fresh install, x86_64.
+    bin="$NGROK_FIX/bin-amd64"
+    if ngrok_run x86_64 "$bin" && [[ "$(ngrok_reported "$bin")" == 9.8.7 \
+        && "$(cat "$NGROK_FIX/curl.log")" == "$NGROK_REPO/pool/main/n/ngrok/ngrok_9.8.7-0_amd64.deb" \
+        && "$(stat -c %a "$bin/ngrok")" == 755 \
+        && "$(cat "$NGROK_FIX/state-bin-amd64/ngrok-version")" == 9.8.7 ]] && ngrok_clean "$bin"; then
+        ok "x86_64 downloads the amd64 package once, verifies it, and installs a working ngrok"
+    else bad "ngrok x86_64 install: $(cat "$NGROK_FIX/out")"; fi
+
+    # Repeat run: the pinned version is already there.
+    if ngrok_run x86_64 "$bin" && [[ "$(ngrok_fetches)" == 0 && "$(ngrok_reported "$bin")" == 9.8.7 ]] \
+        && grep -q 'ngrok 9.8.7 already installed' "$NGROK_FIX/out"; then
+        ok "a repeat run with the pinned version installed downloads nothing"
+    else bad "ngrok repeat run ($(ngrok_fetches) downloads): $(cat "$NGROK_FIX/out")"; fi
+
+    # ARM64 selects its own package and its own checksum.
+    bin="$NGROK_FIX/bin-arm64"
+    if ngrok_run aarch64 "$bin" && [[ "$(ngrok_reported "$bin")" == 9.8.7 \
+        && "$(cat "$NGROK_FIX/curl.log")" == "$NGROK_REPO/pool/main/n/ngrok/ngrok_9.8.7-0_arm64.deb" ]] \
+        && ngrok_clean "$bin" && ngrok_run aarch64 "$bin" && [[ "$(ngrok_fetches)" == 0 ]]; then
+        ok "aarch64 downloads the arm64 package, verifies it against the ARM64 checksum, and reruns idempotently"
+    else bad "ngrok aarch64 install: $(cat "$NGROK_FIX/out")"; fi
+
+    # Unsupported architecture: refused before any download.
+    bin="$NGROK_FIX/bin-riscv"
+    if ngrok_run riscv64 "$bin"; then bad "ngrok installed on an unsupported architecture"
+    elif grep -q 'unsupported ngrok architecture: riscv64' "$NGROK_FIX/out" \
+        && [[ "$(ngrok_fetches)" == 0 && ! -e "$bin/ngrok" ]]; then
+        ok "an unsupported architecture fails clearly, before any download"
+    else bad "ngrok unsupported architecture: $(cat "$NGROK_FIX/out")"; fi
+
+    # Failed download.
+    bin="$NGROK_FIX/bin-offline"
+    if ngrok_run x86_64 "$bin" NGROK_CURL_FAIL=1; then bad "ngrok installed after a failed download"
+    elif [[ ! -e "$bin/ngrok" && "$(ngrok_fetches)" -ge 1 ]] && ngrok_clean "$bin"; then
+        ok "a failed download fails and leaves no binary and no partial file"
+    else bad "ngrok failed download left something behind: $(cat "$NGROK_FIX/out")"; fi
+
+    # Wrong checksum: the other architecture's hash, which proves the check is
+    # per architecture, and then a stranger's hash over an existing install.
+    bin="$NGROK_FIX/bin-mismatch"
+    if ngrok_run x86_64 "$bin" NGROK_SHA256_X64="$NGROK_ARM_SHA"; then bad "ngrok accepted the ARM64 checksum on x86_64"
+    elif grep -q 'checksum mismatch' "$NGROK_FIX/out" && [[ ! -e "$bin/ngrok" ]] && ngrok_clean "$bin"; then
+        ok "a checksum mismatch fails and leaves no binary and no partial file"
+    else bad "ngrok checksum mismatch: $(cat "$NGROK_FIX/out")"; fi
+
+    bin="$NGROK_FIX/bin-upgrade"
+    ngrok_run x86_64 "$bin" NGROK_VERSION=9.8.6 NGROK_SHA256_X64="$NGROK_OLD_SHA" \
+        || bad "ngrok older fixture install: $(cat "$NGROK_FIX/out")"
+    if ngrok_run x86_64 "$bin" NGROK_SHA256_X64="$(printf 'another package' | sha256sum | cut -c1-64)"; then
+        bad "ngrok upgraded with a wrong checksum"
+    elif [[ "$(ngrok_reported "$bin")" == 9.8.6 ]] && ngrok_clean "$bin"; then
+        ok "a checksum mismatch during an upgrade leaves the installed binary untouched"
+    else bad "ngrok mismatch replaced the installed binary: $(cat "$NGROK_FIX/out")"; fi
+
+    # A verified package whose binary is not the pinned version is not installed.
+    ngrok_serve "$NGROK_LIAR" 9.8.7 amd64
+    if ngrok_run x86_64 "$bin" NGROK_SHA256_X64="$NGROK_LIAR_SHA"; then bad "ngrok installed a binary that is not the pinned version"
+    elif grep -q 'ngrok version verification failed' "$NGROK_FIX/out" \
+        && [[ "$(ngrok_reported "$bin")" == 9.8.6 ]] && ngrok_clean "$bin"; then
+        ok "a package that is not the pinned version is refused, and the installed binary is kept"
+    else bad "ngrok version verification: $(cat "$NGROK_FIX/out")"; fi
+    ngrok_serve "$NGROK_AMD" 9.8.7 amd64
+
+    # And the upgrade itself.
+    if ngrok_run x86_64 "$bin" && [[ "$(ngrok_reported "$bin")" == 9.8.7 && "$(ngrok_fetches)" == 1 ]]; then
+        ok "an installed older version is replaced by the pinned one"
+    else bad "ngrok upgrade: $(cat "$NGROK_FIX/out")"; fi
+
+    # latest: version and checksum both come from the index, not from the pins.
+    printf 'Package: ngrok\nVersion: 9.8.6\nArchitecture: amd64\nSHA256: %s\n\nPackage: ngrok\nVersion: 9.8.7\nArchitecture: amd64\nSHA256: %s\n' \
+        "$NGROK_OLD_SHA" "$NGROK_AMD_SHA" > "$NGROK_FIX/serve/dists/buster/main/binary-amd64/Packages"
+    bin="$NGROK_FIX/bin-latest"
+    if ngrok_run x86_64 "$bin" NGROK_VERSION=latest NGROK_SHA256_X64="$NGROK_OLD_SHA" \
+        && [[ "$(ngrok_reported "$bin")" == 9.8.7 ]] && grep -q 'resolved latest ngrok: 9.8.7' "$NGROK_FIX/out"; then
+        ok "NGROK_VERSION=latest takes the newest version and its checksum from the index"
+    else bad "ngrok latest install: $(cat "$NGROK_FIX/out")"; fi
+
+    # Across every run above, the only thing ever asked of ngrok is its version,
+    # and nothing was written to the home directory: no auth token, no
+    # configuration file, no tunnel, no service.
+    if [[ "$(sort -u "$NGROK_FIX/calls.log")" == version \
+        && -z "$(find "$NGROK_FIX/home" -mindepth 1 -print -quit)" ]]; then
+        ok "installation only ever runs 'ngrok version' and writes nothing to the home directory"
+    else bad "ngrok was invoked with: $(sort -u "$NGROK_FIX/calls.log" | tr '\n' ' ')"; fi
+fi
+
 section "Upstream version resolution"
 # shellcheck source=lib/core.sh
 source lib/core.sh
@@ -2527,7 +2750,7 @@ sb_checksum_from_manifest 'http://example.com/checksums.txt' file >/dev/null 2>&
 
 # Resolution must feed the same verification gate as a pin, never bypass it.
 resolution_guard=0
-for module in lib/bootstrap/node.sh lib/bootstrap/github_cli.sh lib/bootstrap/uv.sh; do
+for module in lib/bootstrap/node.sh lib/bootstrap/github_cli.sh lib/bootstrap/uv.sh lib/bootstrap/ngrok.sh; do
     grep -q 'sb_is_latest' "$module" || { bad "no latest support in $module"; resolution_guard=1; }
     grep -q 'sb_valid_sha256' "$module" || { bad "no checksum gate in $module"; resolution_guard=1; }
 done
@@ -2588,12 +2811,13 @@ done <<'KINDS'
 nodejs|release
 github-cli|release
 uv|release
+ngrok|release
 claude-code|release
 codex|release
 pi|release
 oh-my-zsh|branch-head
 KINDS
-(( kind_drift == 0 )) && ok "six release pins and one branch head, as registered"
+(( kind_drift == 0 )) && ok "seven release pins and one branch head, as registered"
 [[ "$(refresh_pins_kind not-a-tool 2>/dev/null || true)" == unknown ]] \
     && ok "an unregistered tool is not silently classified" || bad "unregistered tool classification"
 
