@@ -3043,13 +3043,23 @@ PY
     || bad "requirements.in and check.py IMPORTS disagree"
 grep -qiE '^[[:space:]]*torchtext' profiles/ml/requirements.in \
     && bad "torchtext is in the default ml profile" || ok "torchtext is not part of the default ml profile"
+# The language stack every lock must carry; the verifier then holds each lock
+# to requirements.in, with a hash for every artifact.
+missing_language=""
+for package in transformers datasets tokenizers sentencepiece accelerate safetensors huggingface-hub evaluate sacremoses; do
+    grep -qx "$package" <<< "$req_names" || missing_language+=" $package"
+done
+[[ -z "$missing_language" ]] && ok "requirements.in names the whole language stack" \
+    || bad "requirements.in does not name:$missing_language"
 
 # Synthetic locks, built here. Their hashes are digests of strings, not of any
 # artifact, and never leave this temporary directory.
 ML_ARCH="$(case "$(uname -m)" in aarch64|arm64) echo aarch64 ;; *) echo x86_64 ;; esac)"
 ML_PINS=(torch=2.14.0 torchvision=0.29.0 numpy=2.3.1 scipy=1.16.0 pandas=2.3.0 scikit-learn=1.7.0
     matplotlib=3.10.3 pillow=11.3.0 opencv-python-headless=4.12.0.88 jupyterlab=4.4.4 ipykernel=6.29.5
-    ipywidgets=8.1.7 psutil=7.0.0 jupyter-client=8.6.3)
+    ipywidgets=8.1.7 psutil=7.0.0 transformers=5.17.0 datasets=5.0.1 tokenizers=0.23.2 sentencepiece=0.2.2
+    accelerate=1.15.0 safetensors=0.8.0 huggingface-hub=1.33.0 evaluate=0.4.6 sacremoses=0.2.0 spacy=3.8.16
+    jupyter-client=8.6.3)
 ml_fixture_lock() {  # out, backend, arch, cuda, index, [local version suffix], [extra name=version...]
     local out="$1" backend="$2" arch="$3" cuda="$4" index="$5" suffix="${6-+$2}" pin name version source
     shift 6 || shift $#
@@ -3330,6 +3340,26 @@ def device(kind, index=None):
     return (kind, index)
 
 
+def manual_seed(seed):
+    return None
+
+
+def tensor(rows):
+    return Tensor([value for row in rows for value in row], (len(rows), len(rows[0])))
+
+
+def allclose(first, second):
+    return first.shape == second.shape and first._data == second._data
+
+
+class no_grad:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 class cuda:
     @staticmethod
     def is_available():
@@ -3372,6 +3402,172 @@ class KernelSpecManager:
     def find_kernel_specs(self):
         return {"python3": "/fake/share/jupyter/kernels/python3"}
 PY
+# Stand-ins for the language stack: just the calls check.py makes, working on
+# the files and strings it passes them.
+mkdir -p "$MLI/templates/tokenizers" "$MLI/templates/transformers" "$MLI/templates/sentencepiece" \
+    "$MLI/templates/sacremoses" "$MLI/templates/datasets" "$MLI/templates/spacy" "$MLI/templates/huggingface_hub"
+cat > "$MLI/templates/tokenizers/__init__.py" <<'PY'
+import json
+from . import models, pre_tokenizers, trainers
+
+
+class Tokenizer:
+    def __init__(self, model):
+        self.model, self.pre_tokenizer, self.vocab = model, None, {}
+
+    def train_from_iterator(self, lines, trainer):
+        self.vocab = {token: index for index, token in enumerate(trainer.special_tokens)}
+        for line in lines:
+            for word in line.split():
+                self.vocab.setdefault(word, len(self.vocab))
+
+    def save(self, path):
+        with open(path, "w") as handle:
+            json.dump({"vocab": self.vocab}, handle)
+PY
+printf 'class WordLevel:\n    def __init__(self, unk_token=None):\n        self.unk_token = unk_token\n' \
+    > "$MLI/templates/tokenizers/models.py"
+printf 'class Whitespace:\n    pass\n' > "$MLI/templates/tokenizers/pre_tokenizers.py"
+printf 'class WordLevelTrainer:\n    def __init__(self, special_tokens=()):\n        self.special_tokens = list(special_tokens)\n' \
+    > "$MLI/templates/tokenizers/trainers.py"
+cat > "$MLI/templates/transformers/__init__.py" <<'PY'
+import json
+import os
+
+import torch
+
+
+class PreTrainedTokenizerFast:
+    def __init__(self, tokenizer_file, unk_token="[UNK]", pad_token=None):
+        with open(tokenizer_file) as handle:
+            self.vocab = json.load(handle)["vocab"]
+        self.unk_token_id = self.vocab[unk_token]
+        self.words = {index: word for word, index in self.vocab.items()}
+
+    def encode(self, text, add_special_tokens=True):
+        return [self.vocab.get(word, self.unk_token_id) for word in text.split()]
+
+    def decode(self, ids):
+        return " ".join(self.words[index] for index in ids)
+
+
+class BertConfig:
+    def __init__(self, **values):
+        self.hidden_size, self.num_hidden_layers = 768, 12
+        self.__dict__.update(values)
+
+    def save_pretrained(self, path):
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "config.json"), "w") as handle:
+            json.dump(self.__dict__, handle)
+
+
+class AutoConfig:
+    @staticmethod
+    def from_pretrained(path, local_files_only=False):
+        assert local_files_only, "the checks must never reach the Hub"
+        with open(os.path.join(path, "config.json")) as handle:
+            return BertConfig(**json.load(handle))
+
+
+class _Output:
+    def __init__(self, hidden):
+        self.last_hidden_state = hidden
+
+
+class BertModel:
+    def __init__(self, config):
+        self.config = config
+
+    def eval(self):
+        return self
+
+    def __call__(self, input_ids):
+        tokens, width = input_ids.shape[1], self.config.hidden_size
+        return _Output(torch.Tensor([0.5] * (tokens * width), (1, tokens, width)))
+
+    def save_pretrained(self, path):
+        self.config.save_pretrained(path)
+        with open(os.path.join(path, "model.safetensors"), "wb") as handle:
+            handle.write(b"stand-in weights")
+
+
+class AutoModel:
+    @staticmethod
+    def from_pretrained(path, local_files_only=False):
+        return BertModel(AutoConfig.from_pretrained(path, local_files_only=local_files_only))
+PY
+cat > "$MLI/templates/sentencepiece/__init__.py" <<'PY'
+import json
+
+
+class SentencePieceTrainer:
+    @staticmethod
+    def train(sentence_iterator, model_writer, **options):
+        model_writer.write(json.dumps(sorted({w for line in sentence_iterator for w in line.split()})).encode())
+
+
+class SentencePieceProcessor:
+    def __init__(self, model_proto):
+        self.pieces = json.loads(model_proto)
+
+    def encode(self, text):
+        return [self.pieces.index(word) for word in text.split()]
+
+    def decode(self, ids):
+        return " ".join(self.pieces[index] for index in ids)
+
+    def get_piece_size(self):
+        return len(self.pieces)
+PY
+cat > "$MLI/templates/sacremoses/__init__.py" <<'PY'
+import re
+
+
+class MosesTokenizer:
+    def __init__(self, lang):
+        self.lang = lang
+
+    def tokenize(self, text):
+        return re.findall(r"\w+|[^\w\s]", text)
+PY
+cat > "$MLI/templates/datasets/__init__.py" <<'PY'
+class Dataset:
+    def __init__(self, columns):
+        self._columns = columns
+
+    @classmethod
+    def from_dict(cls, columns):
+        return cls({name: list(values) for name, values in columns.items()})
+
+    def map(self, function):
+        rows = [dict(zip(self._columns, values)) for values in zip(*self._columns.values())]
+        added = [function(row) for row in rows]
+        columns = dict(self._columns)
+        for name in added[0]:
+            columns[name] = [row[name] for row in added]
+        return Dataset(columns)
+
+    def __getitem__(self, name):
+        return self._columns[name]
+PY
+cat > "$MLI/templates/spacy/__init__.py" <<'PY'
+import re
+from . import util
+
+
+class _Token:
+    def __init__(self, text):
+        self.text = text
+
+
+def blank(lang):
+    return lambda text: [_Token(piece) for piece in re.findall(r"\w+|[^\w\s]", text)]
+PY
+printf 'import os\n\n\ndef get_installed_models():\n    return [m for m in os.environ.get("FAKE_SPACY_MODELS", "").split(",") if m]\n' \
+    > "$MLI/templates/spacy/util.py"
+printf 'import os\nHF_HUB_OFFLINE = os.environ.get("HF_HUB_OFFLINE") == "1"\n' > "$MLI/templates/huggingface_hub/constants.py"
+: > "$MLI/templates/huggingface_hub/__init__.py"
 cat > "$MLI/build-site.py" <<'PY'
 # Writes one importable module and one dist-info per pin of a lock.
 import os, re, shutil, sys
@@ -3594,6 +3790,21 @@ ml_env ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" ./profiles/ml/bin/ml-doctor 2>&1
     && ok "ml-doctor reports the GPU as skipped for a CPU backend on an NVIDIA host" || bad "ml-doctor skip on CPU backend"
 ml_env HF_HOME="$HF_TEST_HOME" ./profiles/ml/bin/ml-doctor --json >"$MLI/doctor" 2>/dev/null && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["summary"]["fail"] == 0 and d["checks"]' "$MLI/doctor" \
     && ok "ml-doctor --json emits the same checks as JSON" || bad "ml-doctor --json"
+ml_doctor
+language_ok=1
+for check in 'language tokenizer' 'language model files' sentencepiece sacremoses datasets spacy 'hub offline' torchtext; do
+    grep -q "^PASS  $check: " "$MLI/doctor" || language_ok=0
+done
+(( language_ok )) && ok "ml-doctor runs the language smoke checks on files it creates, and they pass" \
+    || bad "ml-doctor language checks: $(grep -E 'language|sentencepiece|sacremoses|datasets|spacy|hub|torchtext' "$MLI/doctor")"
+mkdir -p "$ML_LINK/lib/site/torchtext"; : > "$ML_LINK/lib/site/torchtext/__init__.py"
+ml_doctor; tt_code=$?
+rm -rf "$ML_LINK/lib/site/torchtext"
+[[ "$tt_code" == 1 ]] && grep -q '^FAIL  torchtext: .*not part of the default profile' "$MLI/doctor" \
+    && ok "ml-doctor fails when torchtext is present in the environment" || bad "torchtext detection (exit $tt_code)"
+ml_doctor FAKE_SPACY_MODELS=en_core_web_sm; spacy_code=$?
+[[ "$spacy_code" == 1 ]] && grep -q '^FAIL  spacy: .*a spaCy language model is installed: en_core_web_sm' "$MLI/doctor" \
+    && ok "ml-doctor fails when a spaCy language model is installed" || bad "spaCy model detection (exit $spacy_code)"
 
 ml_install --backend cu130 --reconfigure || bad "reinstall cu130 for diagnostics: $(cat "$MLI/out")"
 gpu_case() {  # label, expected status line, exit (0|1), env assignments...

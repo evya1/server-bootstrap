@@ -2,7 +2,7 @@
 
 `ml` is an optional profile built into `server-bootstrap`. It installs one
 Python 3.12 environment for PyTorch, torchvision, scientific and data work,
-image processing, and Jupyter, at:
+image processing, Jupyter, and language and transformer tooling, at:
 
 ```text
 /workspace/venvs/ml-workbench
@@ -77,7 +77,9 @@ A CUDA backend is listed only after it has been validated on real hardware.
 - If any step before the switch fails, the new build is deleted. The previous
   environment, its commands and the recorded state stay as they were.
 - A repeat run with the same backend and lock, on an intact environment,
-  rebuilds nothing.
+  rebuilds nothing. The environment is exactly its lock: if packages were
+  added, removed, or changed in it, the next run rebuilds it from the lock.
+  Keep your own extra packages in a project environment.
 - When a newer release ships a changed lock, the next
   `server-profile install ml` builds the new environment and switches to it.
 - Changing backend replaces the environment, so it needs `--reconfigure`.
@@ -100,7 +102,7 @@ The installation links five commands into `/usr/local/bin`:
 | --- | --- |
 | `ml-env` | Open a shell with the environment active, or run one command in it: `ml-env python train.py` |
 | `ml-status` | Show the recorded backend, lock, and versions, and whether this release ships a different lock. Reads state only |
-| `ml-doctor` | Check imports, a CPU tensor operation, a vision transform, and notebook kernel discovery on synthetic data, then check the GPU. `--json` is available |
+| `ml-doctor` | Check imports, a CPU tensor operation, a vision transform, notebook kernel discovery, and the language stack on synthetic data, then check the GPU. `--json` is available |
 | `ml-preflight` | Check architecture, Python 3.12, uv, the GPU and driver, the backend that would be used, and free disk space. Changes nothing |
 | `ml-jupyter` | Run JupyterLab in the foreground on `127.0.0.1:8888` |
 
@@ -149,10 +151,82 @@ Generation needs the pinned uv and HTTPS access to `pypi.org` and
 is not written. To add a CUDA backend, add its row to `backends.txt`, generate
 its locks, and validate it on a real NVIDIA host before listing it.
 
+## Language tooling
+
+Every lock must pin `transformers`, `datasets`, `tokenizers`, `sentencepiece`,
+`accelerate`, `safetensors`, `huggingface-hub`, `evaluate`, `sacremoses`, and
+the `spacy` library, each with a SHA-256; `tools/ml-lock.sh --verify` enforces
+this. They never choose the PyTorch build: `torch` and `torchvision` stay
+pinned in `requirements.in` and come from the backend's official index. No
+model, tokenizer, dataset, metric, or spaCy language model is included.
+
+`ml-doctor` checks this stack using only files it creates in a temporary
+directory, which it then removes:
+
+- it trains a word-level tokenizer and a SentencePiece model on four
+  sentences;
+- it saves a one-layer configuration with random weights as safetensors and
+  reloads it;
+- it maps an in-memory dataset and tokenizes with Moses and a blank spaCy
+  pipeline;
+- it confirms that no spaCy language model and no `torchtext` are installed.
+
+It forces the Hugging Face offline switches on for the run.
+
+To try the stack yourself without any download:
+
+```bash
+HF_HUB_OFFLINE=1 ml-env python - <<'PY'
+import tempfile
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+from transformers import AutoConfig, BertConfig, PreTrainedTokenizerFast
+
+with tempfile.TemporaryDirectory() as workdir:
+    tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer.train_from_iterator(["hello local world"], trainers.WordLevelTrainer(special_tokens=["[UNK]"]))
+    tokenizer.save(f"{workdir}/tokenizer.json")
+    fast = PreTrainedTokenizerFast(tokenizer_file=f"{workdir}/tokenizer.json", unk_token="[UNK]")
+    print(fast.decode(fast.encode("hello world", add_special_tokens=False)))
+    BertConfig(hidden_size=16, num_hidden_layers=1, num_attention_heads=2).save_pretrained(workdir)
+    print(AutoConfig.from_pretrained(workdir, local_files_only=True).hidden_size)
+PY
+```
+
+It prints `hello world` and `16`.
+
+### Caches and downloads
+
+Models and datasets are downloaded only when you ask for one: for example
+`from_pretrained("<model id>")`, `load_dataset("<name>")`, `hf download`, or
+`python -m spacy download <model>`. Installation and `ml-doctor` never download
+one. Login shells on a bootstrapped host keep every cache under `/workspace`:
+
+| Cache | Location |
+| --- | --- |
+| Hugging Face models, tokenizers and Hub files | `/workspace/.cache/huggingface/hub` (`HF_HOME`, `HUGGINGFACE_HUB_CACHE`) |
+| Hugging Face datasets and `evaluate` metrics | `/workspace/.cache/huggingface/datasets`, `.../metrics`, `.../evaluate` |
+| PyTorch Hub | `/workspace/.cache/torch/hub` (`XDG_CACHE_HOME=/workspace/.cache`) |
+| Package downloads | `/workspace/.cache/uv` |
+
+A spaCy language model is a Python package, so `python -m spacy download`
+adds it to the environment, and the next `server-profile install ml` rebuilds
+the environment without it. Export `HF_HUB_OFFLINE=1` in a shell to keep the
+Hugging Face libraries offline there too.
+
+### Compatibility boundary
+
+The default profile targets current PyTorch and current transformer APIs.
+`torchtext` is not installed: it is no longer developed, and its last release
+(0.18.0, April 2024) was built for PyTorch 2.3. Code that needs it belongs in
+a separate, opt-in compatibility profile with its own lock. Such a profile
+will be added only when a concrete legacy target exists; none ships today.
+
 ## Not included
 
 Model weights, datasets, checkpoints, credentials, a notebook or inference
-service, the NVIDIA driver, a system CUDA toolkit, and `torchtext`.
+service, the NVIDIA driver, a system CUDA toolkit, a spaCy language model, and
+`torchtext`.
 
 ## Troubleshooting
 

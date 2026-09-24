@@ -65,6 +65,24 @@
 
 [#54]: https://github.com/evya1/server-bootstrap/issues/54
 
+- **Language and transformer tooling in the `ml` profile, with its locks still
+  pending.** `profiles/ml/requirements.in` now names `transformers`,
+  `datasets`, `tokenizers`, `sentencepiece`, `accelerate`, `safetensors`,
+  `huggingface-hub`, `evaluate`, `sacremoses` and the `spacy` library. The
+  existing lock verifier requires every lock to pin each of them with a
+  SHA-256. `spacy` is provisional: it stays only if it resolves cleanly in
+  every lock without changing the locked PyTorch build. `ml-doctor` adds a
+  local-only smoke test on files it creates in a temporary directory: a
+  tokenizer and configuration round trip through `transformers`, random
+  one-layer weights saved as safetensors and reloaded, SentencePiece, Moses,
+  an in-memory dataset, and a blank spaCy pipeline. It also fails if
+  `torchtext` or a spaCy language model is installed. Nothing downloads a
+  model, tokenizer or dataset. `docs/ML-PROFILE.md` documents the cache
+  locations and the `torchtext` compatibility boundary. No lock containing
+  these packages exists yet. ([#55][])
+
+[#55]: https://github.com/evya1/server-bootstrap/issues/55
+
 ### Changed
 
 - **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`

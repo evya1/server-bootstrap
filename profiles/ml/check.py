@@ -3,10 +3,12 @@
   check.py verify --lock LOCK   before an environment is switched in: the core
                                 packages import at their locked versions and a
                                 small tensor operation works
-  check.py doctor [--json]      diagnostics on synthetic, in-memory data
+  check.py doctor [--json]      diagnostics on synthetic, in-memory data, and a
+                                language smoke test on files it creates itself
 
-Nothing here downloads a model, dataset or package. Every GPU result is one of
-pass, fail, skip or n/a, and says which and why.
+Nothing here downloads a model, dataset or package, and nothing is written
+outside a temporary directory that is removed afterwards. Every GPU result is
+one of pass, fail, skip or n/a, and says which and why.
 """
 
 import argparse
@@ -16,6 +18,7 @@ import os
 import platform
 import re
 import sys
+import tempfile
 from importlib import metadata
 
 # Forced, not defaulted: a caller's environment must not be able to turn a
@@ -24,6 +27,10 @@ for _name in ("HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE", "TRANSFORMERS_OFFLINE",
               "HF_HUB_DISABLE_TELEMETRY"):
     os.environ[_name] = "1"
 os.environ["MPLBACKEND"] = "Agg"
+# Quiet libraries: one line per check is the report.
+for _name in ("HF_HUB_DISABLE_PROGRESS_BARS", "HF_DATASETS_DISABLE_PROGRESS_BARS", "TQDM_DISABLE"):
+    os.environ[_name] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
 PYTHON_SERIES = (3, 12)
 
@@ -42,6 +49,16 @@ IMPORTS = (
     ("ipykernel", "ipykernel"),
     ("ipywidgets", "ipywidgets"),
     ("psutil", "psutil"),
+    ("transformers", "transformers"),
+    ("datasets", "datasets"),
+    ("tokenizers", "tokenizers"),
+    ("sentencepiece", "sentencepiece"),
+    ("accelerate", "accelerate"),
+    ("safetensors", "safetensors"),
+    ("huggingface-hub", "huggingface_hub"),
+    ("evaluate", "evaluate"),
+    ("sacremoses", "sacremoses"),
+    ("spacy", "spacy"),
 )
 CORE = ("torch", "torchvision", "numpy")
 
@@ -163,6 +180,127 @@ def check_kernel():
     return f"python3 kernel available ({len(specs)} kernel spec(s))"
 
 
+# A few sentences are all the language checks ever read: no model, tokenizer,
+# dataset or spaCy pipeline is fetched, and what they write stays in workdir.
+CORPUS = (
+    "the quick brown fox jumps over the lazy dog",
+    "a lazy dog sleeps in the warm sun",
+    "the brown fox runs past the sleeping dog",
+    "quick thinking saves the day",
+)
+
+
+def check_tokenizer(workdir):
+    from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+    from transformers import PreTrainedTokenizerFast
+    tokenizer = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer.train_from_iterator(CORPUS, trainers.WordLevelTrainer(special_tokens=["[UNK]", "[PAD]"]))
+    path = os.path.join(workdir, "tokenizer.json")
+    tokenizer.save(path)
+    fast = PreTrainedTokenizerFast(tokenizer_file=path, unk_token="[UNK]", pad_token="[PAD]")
+    ids = fast.encode("the lazy fox", add_special_tokens=False)
+    if fast.decode(ids) != "the lazy fox":
+        raise AssertionError(f"round trip gave {fast.decode(ids)!r}")
+    if fast.encode("zebra", add_special_tokens=False) != [fast.unk_token_id]:
+        raise AssertionError("an unseen word did not map to [UNK]")
+    return f"word-level tokenizer trained on {len(CORPUS)} local sentences round-trips through transformers"
+
+
+def check_config_and_weights(workdir):
+    import torch
+    from transformers import AutoConfig, AutoModel, BertConfig, BertModel
+    config = BertConfig(vocab_size=32, hidden_size=16, num_hidden_layers=1, num_attention_heads=2,
+                        intermediate_size=32, max_position_embeddings=16)
+    torch.manual_seed(0)
+    model = BertModel(config).eval()
+    path = os.path.join(workdir, "tiny-model")
+    model.save_pretrained(path)
+    if not os.path.exists(os.path.join(path, "model.safetensors")):
+        raise AssertionError("save_pretrained wrote no model.safetensors")
+    loaded = AutoConfig.from_pretrained(path, local_files_only=True)
+    if (loaded.hidden_size, loaded.num_hidden_layers) != (16, 1):
+        raise AssertionError("the configuration did not round-trip")
+    reloaded = AutoModel.from_pretrained(path, local_files_only=True).eval()
+    ids = torch.tensor([[1, 2, 3, 4]])
+    with torch.no_grad():
+        first = model(input_ids=ids).last_hidden_state
+        second = reloaded(input_ids=ids).last_hidden_state
+    if tuple(first.shape) != (1, 4, 16) or not torch.allclose(first, second):
+        raise AssertionError("the reloaded model gives a different output")
+    return "a 1-layer configuration and random weights saved as safetensors reload locally with the same output"
+
+
+def check_sentencepiece():
+    import io
+    import sentencepiece
+    model = io.BytesIO()
+    sentencepiece.SentencePieceTrainer.train(
+        sentence_iterator=iter(CORPUS), model_writer=model, vocab_size=40,
+        hard_vocab_limit=False, minloglevel=2)
+    processor = sentencepiece.SentencePieceProcessor(model_proto=model.getvalue())
+    decoded = processor.decode(processor.encode("the lazy fox"))
+    if decoded != "the lazy fox":
+        raise AssertionError(f"round trip gave {decoded!r}")
+    return f"model trained in memory ({processor.get_piece_size()} pieces) round-trips"
+
+
+def check_moses():
+    from sacremoses import MosesTokenizer
+    tokens = MosesTokenizer(lang="en").tokenize("Hello, world!")
+    if tokens != ["Hello", ",", "world", "!"]:
+        raise AssertionError(f"got {tokens}")
+    return "Moses tokenizer splits punctuation with its bundled rules"
+
+
+def check_datasets():
+    from datasets import Dataset
+    counts = Dataset.from_dict({"text": list(CORPUS)}).map(
+        lambda row: {"words": len(row["text"].split())})["words"]
+    if list(counts) != [len(text.split()) for text in CORPUS]:
+        raise AssertionError(f"got {counts}")
+    return "an in-memory dataset maps without a cache file"
+
+
+def check_spacy():
+    import spacy
+    tokens = [token.text for token in spacy.blank("en")("Hello, world!")]
+    if tokens != ["Hello", ",", "world", "!"]:
+        raise AssertionError(f"got {tokens}")
+    models = spacy.util.get_installed_models()
+    if models:
+        raise AssertionError(f"a spaCy language model is installed: {', '.join(sorted(models))}")
+    return "blank English pipeline tokenizes; no language model is installed"
+
+
+def check_hub_offline():
+    from huggingface_hub import constants
+    if not constants.HF_HUB_OFFLINE:
+        raise AssertionError("the Hugging Face Hub is not in offline mode")
+    return "Hugging Face Hub offline mode is on for this run"
+
+
+def check_no_torchtext():
+    import importlib.util
+    if importlib.util.find_spec("torchtext") is not None:
+        raise AssertionError("torchtext is installed; it is not part of the default profile")
+    return "torchtext is not installed"
+
+
+def language_checks(report):
+    """Local-only checks of the language stack, in a directory removed afterwards."""
+    with tempfile.TemporaryDirectory(prefix="ml-doctor-") as workdir:
+        report.run("language tokenizer", lambda: check_tokenizer(workdir))
+        report.run("language model files", lambda: check_config_and_weights(workdir))
+        report.run("sentencepiece", check_sentencepiece)
+        report.run("sacremoses", check_moses)
+        report.run("datasets", check_datasets)
+        if "spacy" in dict(IMPORTS):
+            report.run("spacy", check_spacy)
+        report.run("hub offline", check_hub_offline)
+        report.run("torchtext", check_no_torchtext)
+
+
 def check_build(backend_cuda):
     import torch
     built = torch.version.cuda
@@ -242,6 +380,7 @@ def cmd_doctor(args):
     report.run("cpu tensor", check_cpu_tensor)
     report.run("vision", check_vision)
     report.run("notebook kernel", check_kernel)
+    language_checks(report)
     report.run("torch build", lambda: check_build(args.backend_cuda))
     try:
         check_gpu(report, args.backend_cuda, args.host_gpu)

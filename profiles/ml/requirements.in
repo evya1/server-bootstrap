@@ -25,3 +25,16 @@ ipywidgets
 
 # Diagnostics
 psutil
+
+# Language and transformers. Models, tokenizers and datasets are downloaded
+# only by an explicit user command, never by installation or ml-doctor.
+transformers
+datasets
+tokenizers
+sentencepiece
+accelerate
+safetensors
+huggingface-hub
+evaluate
+sacremoses
+spacy
