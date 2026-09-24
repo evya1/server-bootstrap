@@ -3858,8 +3858,10 @@ grep -q 'differs from this release' "$MLI/status" \
     && ok "ml-status says when the shipped lock differs from the installed one" || bad "ml-status lock drift"
 # A run killed after the switch cannot restore anything itself. The state then
 # still names the previous environment, so the next run rebuilds rather than
-# keeping, and clears what the killed run left.
-ml_install PATH="$MLF/kill:$MLI/bin:$PATH" --backend cu130
+# keeping, and clears what the killed run left. Its own temporary files stay
+# in this suite's directory.
+mkdir -p "$MLF/tmp"
+ml_install TMPDIR="$MLF/tmp" PATH="$MLF/kill:$MLI/bin:$PATH" --backend cu130
 killed_link="$(readlink -- "$ML_LINK")"
 if [[ "$killed_link" != "$second_target" && "$(cat "$ML_STATE/environment")" == "$second_target" ]] \
     && ls -d "$MLW/.setup-state/profiles/".ml-state-previous.* >/dev/null 2>&1 \
