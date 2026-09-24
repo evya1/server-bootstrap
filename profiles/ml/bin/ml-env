@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Run a command inside the ml-workbench environment, or open a shell in it.
+#
+#   ml-env                  an interactive shell with the environment active
+#   ml-env python train.py  one command inside it
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+# shellcheck source=../lib.sh
+source "$(dirname -- "$SELF")/../lib.sh"
+ml_load_config
+
+case "${1:-}" in
+    -h|--help) sed -n '2,5p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+ml_require_installed
+export VIRTUAL_ENV="$ML_ENV"
+export PATH="$ML_ENV/bin:$PATH"
+unset PYTHONHOME
+(( $# == 0 )) || exec "$@"
+echo "ml-workbench environment active; type exit to leave" >&2
+exec "${SHELL:-/bin/bash}"

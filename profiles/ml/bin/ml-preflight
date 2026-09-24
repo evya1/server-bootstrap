@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Check whether this host can install or change the ml profile: architecture,
+# Python 3.12, uv, the GPU and driver, the locked backend that would be used,
+# and free disk space. Changes nothing.
+#
+#   ml-preflight [--backend auto|NAME]
+#
+# Exit status: 0 when an installation would proceed, 1 otherwise.
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+# shellcheck source=../lib.sh
+source "$(dirname -- "$SELF")/../lib.sh"
+ml_load_config
+
+requested=auto
+while (($#)); do
+    case "$1" in
+        --backend) requested="${2:?--backend needs a value}"; shift 2 ;;
+        --backend=*) requested="${1#--backend=}"; shift ;;
+        -h|--help) sed -n '2,8p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+ml_preflight "$requested"

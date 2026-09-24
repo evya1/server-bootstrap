@@ -16,8 +16,8 @@ section "Syntax and structure"
 while IFS= read -r file; do
     bash -n "$file" && ok "bash -n $file" || bad "syntax: $file"
 done < <(find . -type f \( -name '*.sh' -o -name 'server-bundle-install' \
-    -o -name 'server-vscode-extensions' -o -name 'server-secrets' \) \
-    -not -path './release/dist/*' | LC_ALL=C sort)
+    -o -name 'server-vscode-extensions' -o -name 'server-secrets' -o -name 'server-profile' \
+    -o -path './profiles/*/bin/*' \) -not -path './release/dist/*' | LC_ALL=C sort)
 for file in lib/core.sh lib/archive.sh lib/bundle.sh \
     lib/bootstrap/config.sh lib/bootstrap/workspace.sh lib/bootstrap/packages.sh \
     lib/bootstrap/node.sh lib/bootstrap/ai_cli.sh lib/bootstrap/vscode.sh lib/bootstrap/uv.sh lib/bootstrap/python.sh lib/bootstrap/shell.sh \
@@ -25,7 +25,9 @@ for file in lib/core.sh lib/archive.sh lib/bundle.sh \
     lib/secrets-load.sh lib/bootstrap/secrets.sh lib/bootstrap/pi.sh; do
     [[ -f "$file" ]] && ok "module present: $file" || bad "missing module: $file"
 done
-for command in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions server-secrets; do
+for command in server-bootstrap.sh server-provision.sh server-bundle-install server-accept.sh server-vscode-extensions server-secrets \
+    server-profile profiles/ml/install.sh profiles/ml/bin/ml-env profiles/ml/bin/ml-status profiles/ml/bin/ml-doctor \
+    profiles/ml/bin/ml-preflight profiles/ml/bin/ml-jupyter tools/ml-lock.sh; do
     [[ -x "$command" ]] && ok "executable: $command" || bad "not executable: $command"
 done
 
@@ -33,7 +35,8 @@ done
 # faster-whisper et al. and "torch" covers pytorch.
 auto_terms=(whisper transcribe torch)
 term_hit=0
-for file in server-bootstrap.sh server-bundle-install lib/*.sh lib/bootstrap/*.sh; do
+# Optional workloads live under profiles/, so the generic entry points stay neutral too.
+for file in server-bootstrap.sh server-bundle-install server-profile server-provision.sh lib/*.sh lib/bootstrap/*.sh; do
     for term in "${auto_terms[@]}"; do
         if grep -qi -- "$term" "$file"; then bad "workload term '$term' in neutral code: $file"; term_hit=1; fi
     done
@@ -2121,7 +2124,7 @@ grep -q "alias c='clear'" lib/bootstrap/shell.sh \
 grep -q 'bootstrap_set_default_zsh' lib/bootstrap/shell.sh \
     && grep -q 'usermod --shell' lib/bootstrap/shell.sh \
     && ok "Zsh login shell enforcement" || bad "Zsh default shell enforcement"
-for doc in QUICKSTART PROVISIONING ARCHITECTURE BUNDLE-CONTRACT CONFIGURATION TROUBLESHOOTING SECURITY-SCANNING; do
+for doc in QUICKSTART PROVISIONING ARCHITECTURE BUNDLE-CONTRACT CONFIGURATION TROUBLESHOOTING SECURITY-SCANNING ML-PROFILE; do
     [[ -s "docs/$doc.md" ]] && ok "documentation: $doc" || bad "missing documentation: $doc"
 done
 
@@ -2918,8 +2921,1080 @@ grep -q '/usr/local/bin/uv --version' lib/bootstrap/report.sh \
 grep -q 'if \[\[ "$(bootstrap_github_cli_installed_version)" == "$GH_VERSION" \]\]' lib/bootstrap/github_cli.sh \
     && ok "the gh already-installed short-circuit stays PATH-based" || bad "gh short-circuit changed"
 
+section "Built-in profiles: plan declaration"
+# enable_profile names a profile the bootstrap archive already carries, so it
+# brings no URL, archive or checksum of its own. A bad declaration stops the run
+# while the plan is read, like a bad register_remote_bundle entry.
+PPLAN="$TMP/profile-plan"; mkdir -p "$PPLAN"
+printf '%s\n' 'register_bootstrap ./base.tar.gz ./base.sha256' \
+    'register_bundle first 1.0.0 ./first.tar.gz ./first.sha256' \
+    'enable_profile ml --backend auto' > "$PPLAN/plan.sh"
+pout="$(WORKSPACE_ROOT="$PPLAN/ws" ./server-provision.sh --plan "$PPLAN/plan.sh" --dry-run 2>&1)"; pcode=$?
+expected_pdry="$(printf '%s\n' "Provision plan: $PPLAN/plan.sh" "Bootstrap: $PPLAN/base.tar.gz" 'Bundles: 1' \
+    "  1. first 1.0.0 <- $PPLAN/first.tar.gz" 'Profiles: 1' '  1. ml --backend auto')"
+[[ "$pcode" == 0 && "$pout" == "$expected_pdry" && ! -e "$PPLAN/ws" ]] \
+    && ok "dry run lists an enabled profile after the bundles and writes nothing" \
+    || bad "profile dry run: $pout"
+printf '%s\n' 'register_bootstrap ./base.tar.gz ./base.sha256' 'enable_profile ml' > "$PPLAN/bare.sh"
+[[ "$(./server-provision.sh --plan "$PPLAN/bare.sh" --dry-run 2>&1 | tail -n 2)" == $'Profiles: 1\n  1. ml' ]] \
+    && ok "a profile without options is listed as declared" || bad "bare profile dry run"
+[[ "$(./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>&1)" != *Profiles* ]] \
+    && ok "a plan without enable_profile prints no profile section" || bad "profile section without a profile"
+
+profile_plan_rejects() {  # label, expected reason, then plan lines after the bootstrap
+    local label="$1" reason="$2" dir out code mode clean=1
+    shift 2
+    dir="$(mktemp -d "$TMP/profile-reject.XXXXXX")"
+    printf '%s\n' 'register_bootstrap ./base.tar.gz ./base.sha256' "$@" > "$dir/plan.sh"
+    for mode in --dry-run ''; do
+        out="$(TMPDIR="$dir" WORKSPACE_ROOT="$dir/ws" ./server-provision.sh --plan "$dir/plan.sh" ${mode:+"$mode"} 2>&1)"; code=$?
+        [[ "$code" == 2 && "$out" == *"$reason"* && ! -e "$dir/ws" ]] || clean=0
+    done
+    (( clean )) && ok "plan rejects $label before anything runs" \
+        || bad "plan did not cleanly reject $label (last exit $code): $out"
+}
+profile_plan_rejects "enable_profile without a name" "needs a profile name" 'enable_profile'
+profile_plan_rejects "an invalid profile name" "invalid profile name" 'enable_profile ML'
+profile_plan_rejects "a path as a profile name" "invalid profile name" 'enable_profile ../ml'
+profile_plan_rejects "--backend without a value" "--backend needs a backend name" 'enable_profile ml --backend'
+profile_plan_rejects "a malformed backend" "--backend needs a backend name" 'enable_profile ml --backend "../cpu"'
+profile_plan_rejects "--force in a plan" "unknown option: --force" 'enable_profile ml --force'
+profile_plan_rejects "a profile enabled twice" "enabled twice" 'enable_profile ml' 'enable_profile ml --backend cpu'
+
+if (( EUID == 0 )); then
+    # A fake foundation that installs logging stand-ins for server-accept,
+    # server-profile and server-bundle-install, so the order is observable.
+    PFULL="$TMP/profile-full"; mkdir -p "$PFULL/bin" "$PFULL/with/base-1.2.0/profiles/ml" "$PFULL/without/base-1.2.0"
+    PFULL="$(cd "$PFULL" && pwd -P)"
+    for tree in with without; do
+        cat > "$PFULL/$tree/base-1.2.0/server-bootstrap.sh" <<'FAKEBOOT'
+#!/usr/bin/env bash
+set -e
+printf 'bootstrap\n' >> "$PROVISION_ORDER_LOG"
+for command in server-accept server-profile server-bundle-install; do
+    printf '#!/usr/bin/env bash\nprintf "%s %%s\\n" "$*" >> "$PROVISION_ORDER_LOG"\n' "$command" \
+        > "$PROVISION_FAKE_BIN/$command"
+    chmod 0755 "$PROVISION_FAKE_BIN/$command"
+done
+FAKEBOOT
+        chmod +x "$PFULL/$tree/base-1.2.0/server-bootstrap.sh"
+        tar -czf "$PFULL/$tree.tar.gz" -C "$PFULL/$tree" base-1.2.0
+        sha256sum "$PFULL/$tree.tar.gz" > "$PFULL/$tree.sha256"
+    done
+    printf '#!/usr/bin/env bash\n' > "$PFULL/with/base-1.2.0/profiles/ml/install.sh"
+    tar -czf "$PFULL/with.tar.gz" -C "$PFULL/with" base-1.2.0
+    sha256sum "$PFULL/with.tar.gz" > "$PFULL/with.sha256"
+    : > "$PFULL/one.tar.gz"; sha256sum "$PFULL/one.tar.gz" > "$PFULL/one.sha256"
+    pplan() {  # archive stem, then extra plan lines
+        local stem="$1"; shift
+        printf '%s\n' 'export WORKSPACE_ROOT="$PLAN_DIR/workspace"' 'export PATH="$PLAN_DIR/bin:$PATH"' \
+            'export PROVISION_FAKE_BIN="$PLAN_DIR/bin"' 'export PROVISION_ORDER_LOG="$PLAN_DIR/order.log"' \
+            'export DELETE_ARCHIVES_AFTER_SUCCESS=0' "register_bootstrap ./$stem.tar.gz ./$stem.sha256" \
+            'register_bundle one 1.0.0 ./one.tar.gz ./one.sha256' "$@" > "$PFULL/plan.sh"
+        rm -f "$PFULL/order.log" "$PFULL/bin/"*
+    }
+    pplan with 'enable_profile ml --backend auto'
+    if ./server-provision.sh --plan "$PFULL/plan.sh" >/dev/null 2>&1 \
+        && [[ "$(cat "$PFULL/order.log")" == $'bootstrap\nserver-accept \nserver-profile install ml --backend auto\nserver-bundle-install '* ]] \
+        && grep -qx 'profiles_installed: 1' "$PFULL/workspace/startup-logs/latest-provision-summary.txt"; then
+        ok "an enabled profile installs after acceptance and before the bundles"
+    else
+        bad "profile provision order: $(tr '\n' '|' < "$PFULL/order.log" 2>/dev/null)"
+    fi
+    pplan with
+    ./server-provision.sh --plan "$PFULL/plan.sh" >/dev/null 2>&1 \
+        && ! grep -q '^server-profile' "$PFULL/order.log" \
+        && grep -qx 'profiles_installed: 0' "$PFULL/workspace/startup-logs/latest-provision-summary.txt" \
+        && ok "a foundation-only plan never runs server-profile" \
+        || bad "a plan without enable_profile ran a profile"
+    pplan without 'enable_profile ml'
+    pout="$(./server-provision.sh --plan "$PFULL/plan.sh" 2>&1)"; pcode=$?
+    [[ "$pcode" != 0 && "$pout" == *"has no 'ml' profile"* && ! -e "$PFULL/order.log" ]] \
+        && ok "a profile missing from the archive stops the run before the foundation installs" \
+        || bad "missing profile was not refused before bootstrap (exit $pcode)"
+else
+    ok "profile provision integration skipped without root"
+fi
+
+section "ML profile: locks"
+# The locks are the contract: every committed one is frozen, hashed, and takes
+# torch and torchvision from an official PyTorch index. A backend declared in
+# backends.txt without a lock is reported, never offered.
+ml_lock_out="$(bash tools/ml-lock.sh --verify 2>&1)" \
+    && ok "every committed ml lock verifies" || bad "ml lock verification: $ml_lock_out"
+while IFS= read -r pending; do
+    skip "${pending#ml-lock: pending: } (lock generation needs https://download.pytorch.org)"
+done < <(grep '^ml-lock: pending: ' <<< "$ml_lock_out")
+awk '!/^#/ && NF { print $4 }' profiles/ml/backends.txt | grep -Evq '^https://download\.pytorch\.org/whl/[a-z0-9]+$' \
+    && bad "a backends.txt index is not an official PyTorch index" \
+    || ok "every backends.txt row names an official PyTorch index"
+req_names="$(sed 's/#.*//' profiles/ml/requirements.in | awk 'NF { split($1, a, /[=<>!~\[;]/); print tolower(a[1]) }' | LC_ALL=C sort)"
+check_names="$(python3 - <<'PY'
+import ast
+tree = ast.parse(open("profiles/ml/check.py").read())
+for node in tree.body:
+    if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "IMPORTS":
+        for dist, _ in ast.literal_eval(node.value):
+            print(dist)
+PY
+)"
+[[ -n "$req_names" && "$req_names" == "$(LC_ALL=C sort <<< "$check_names")" ]] \
+    && ok "ml-doctor imports exactly the packages requirements.in names" \
+    || bad "requirements.in and check.py IMPORTS disagree"
+grep -qiE '^[[:space:]]*torchtext' profiles/ml/requirements.in \
+    && bad "torchtext is in the default ml profile" || ok "torchtext is not part of the default ml profile"
+# The language stack every lock must carry; the verifier then holds each lock
+# to requirements.in, with a hash for every artifact.
+missing_language=""
+for package in transformers datasets tokenizers sentencepiece accelerate safetensors huggingface-hub evaluate sacremoses; do
+    grep -qx "$package" <<< "$req_names" || missing_language+=" $package"
+done
+[[ -z "$missing_language" ]] && ok "requirements.in names the whole language stack" \
+    || bad "requirements.in does not name:$missing_language"
+
+# Synthetic locks, built here. Their hashes are digests of strings, not of any
+# artifact, and never leave this temporary directory.
+ML_ARCH="$(case "$(uname -m)" in aarch64|arm64) echo aarch64 ;; *) echo x86_64 ;; esac)"
+ML_PINS=(torch=2.14.0 torchvision=0.29.0 numpy=2.3.1 scipy=1.16.0 pandas=2.3.0 scikit-learn=1.7.0
+    matplotlib=3.10.3 pillow=11.3.0 opencv-python-headless=4.12.0.88 jupyterlab=4.4.4 ipykernel=6.29.5
+    ipywidgets=8.1.7 psutil=7.0.0 transformers=5.17.0 datasets=5.0.1 tokenizers=0.23.2 sentencepiece=0.2.2
+    accelerate=1.15.0 safetensors=0.8.0 huggingface-hub=1.33.0 evaluate=0.4.6 sacremoses=0.2.0 spacy=3.8.16
+    jupyter-client=8.6.3)
+ml_fixture_lock() {  # out, backend, arch, cuda, index, [local version suffix], [extra name=version...]
+    local out="$1" backend="$2" arch="$3" cuda="$4" index="$5" suffix="${6-+$2}" pin name version source
+    shift 6 || shift $#
+    {
+        printf '# ml profile lock, generated by tools/ml-lock.sh. Do not edit by hand.\n'
+        printf '# backend: %s\n# arch: %s\n# python: 3.12\n# cuda: %s\n# torch-index: %s\n' \
+            "$backend" "$arch" "$cuda" "$index"
+        printf '%s\n' '--index-url https://pypi.org/simple' ''
+        for pin in "${ML_PINS[@]}" "$@"; do
+            name="${pin%%=*}"; version="${pin#*=}"; source=https://pypi.org/simple
+            if [[ "$name" == torch || "$name" == torchvision ]]; then version="$version$suffix"; source="$index"; fi
+            printf '%s==%s \\\n    --hash=sha256:%s\n    # from %s\n' "$name" "$version" \
+                "$(printf '%s' "$name$version" | sha256sum | cut -c1-64)" "$source"
+        done
+    } > "$out"
+}
+MLV="$TMP/ml-verify"; mkdir -p "$MLV/locks"
+cp profiles/ml/requirements.in "$MLV/"
+printf '%s\n' 'cpu none x86_64,aarch64 https://download.pytorch.org/whl/cpu' \
+    'cu130 13.0 x86_64 https://download.pytorch.org/whl/cu130' \
+    'cu126 12.6 x86_64 https://download.pytorch.org/whl/cu130' > "$MLV/backends.txt"
+ml_fixture_lock "$MLV/good.txt" cpu x86_64 none https://download.pytorch.org/whl/cpu
+ml_verify_fixture() {  # label, expect (pass|fail), fragment, lock name, sed expression
+    local label="$1" expect="$2" fragment="$3" name="$4" out code
+    rm -f "$MLV/locks/"*
+    sed "$5" "$MLV/good.txt" > "$MLV/locks/$name"
+    out="$(bash tools/ml-lock.sh --verify --dir "$MLV" 2>&1)"; code=$?
+    if [[ "$expect" == pass ]]; then
+        [[ "$code" == 0 ]] && ok "ml lock verifier accepts $label" || bad "ml lock verifier rejected $label: $out"
+    else
+        [[ "$code" != 0 && "$out" == *"$fragment"* ]] && ok "ml lock verifier rejects $label" \
+            || bad "ml lock verifier did not reject $label for '$fragment': $out"
+    fi
+}
+ml_verify_fixture "a well-formed lock" pass "" cpu-x86_64.txt ''
+ml_verify_fixture "a requirement without a hash" fail "numpy has no SHA-256" cpu-x86_64.txt \
+    '/^numpy==/{n;d}'
+ml_verify_fixture "a malformed hash" fail "malformed hash" cpu-x86_64.txt \
+    '0,/--hash=sha256:/s/--hash=sha256:\([0-9a-f]\{60\}\)[0-9a-f]\{4\}/--hash=sha256:\1/'
+ml_verify_fixture "an unpinned requirement" fail "not an exact name==version pin" cpu-x86_64.txt \
+    's/^scipy==1.16.0 \\$/scipy>=1.16 \\/'
+ml_verify_fixture "an index that is not the official PyTorch one" fail "not an official" cpu-x86_64.txt \
+    's#https://download.pytorch.org/whl/cpu#https://mirror.example.com/whl/cpu#g'
+ml_verify_fixture "torch taken from PyPI" fail "torch is not taken from" cpu-x86_64.txt \
+    '/^torch==/,/# from/s#\# from https://download.pytorch.org/whl/cpu#\# from https://pypi.org/simple#'
+ml_verify_fixture "a lock whose header names another backend" fail "do not match the file name" cpu-x86_64.txt \
+    's/^# backend: cpu$/# backend: cu130/'
+ml_verify_fixture "an undeclared backend" fail "not declared in backends.txt" cu999-x86_64.txt \
+    's/^# backend: cpu$/# backend: cu999/'
+ml_verify_fixture "an undeclared architecture" fail "does not declare aarch64 for cu130" cu130-aarch64.txt \
+    's/^# backend: cpu$/# backend: cu130/; s/^# arch: x86_64$/# arch: aarch64/; s/^# cuda: none$/# cuda: 13.0/; s#/whl/cpu#/whl/cu130#g'
+ml_verify_fixture "a lock missing a requirements.in package" fail "requirements.in names psutil, the lock does not pin it" cpu-x86_64.txt \
+    '/^psutil==/,/# from/d'
+ml_verify_fixture "torch at another version than requirements.in" fail "does not match requirements.in" cpu-x86_64.txt \
+    's/^torch==2.14.0+cpu/torch==2.13.0+cpu/'
+ml_verify_fixture "torchtext in the default lock" fail "torchtext is excluded" cpu-x86_64.txt \
+    '$a torchtext==0.18.0 \\\n    --hash=sha256:'"$(printf 'x' | sha256sum | cut -c1-64)"'\n    # from https://pypi.org/simple'
+# The installer routes torch and torchvision with uv's --torch-backend; an index
+# line in the lock would send other packages to the PyTorch index's old copies.
+ml_verify_fixture "an extra index that would reroute packages at install" fail "option not allowed in a lock" \
+    cpu-x86_64.txt 's#^--index-url https://pypi.org/simple$#&\n--extra-index-url https://download.pytorch.org/whl/cpu#'
+ml_verify_fixture "a lock that does not name PyPI" fail "does not name PyPI as its index" cpu-x86_64.txt \
+    '/^--index-url /d'
+ml_verify_fixture "a backend whose index is another backend's" fail "the index uv's --torch-backend cu126 uses" \
+    cu126-x86_64.txt 's/^# backend: cpu$/# backend: cu126/; s/^# cuda: none$/# cuda: 12.6/; s#/whl/cpu#/whl/cu130#g'
+rm -f "$MLV/locks/"*; cp "$MLV/good.txt" "$MLV/locks/cpu-x86_64.txt"
+pending_out="$(bash tools/ml-lock.sh --verify --dir "$MLV" 2>&1)"
+[[ $? == 0 && "$pending_out" == *'pending: cpu-aarch64.txt'* && "$pending_out" == *'pending: cu130-x86_64.txt'* ]] \
+    && ok "a declared backend without a lock is reported as pending" || bad "pending report: $pending_out"
+bash tools/ml-lock.sh --verify --require-all --dir "$MLV" >/dev/null 2>&1 \
+    && bad "--require-all accepted a declared backend without a lock" \
+    || ok "--require-all fails while a declared backend has no lock"
+
+# Generation, with a stand-in uv that records its arguments and returns a
+# canned resolution instead of resolving anything.
+MLG="$TMP/ml-generate"; mkdir -p "$MLG/profile" "$MLG/bin"
+cp profiles/ml/requirements.in "$MLG/profile/"
+printf '%s\n' 'cpu none x86_64 https://download.pytorch.org/whl/cpu' > "$MLG/profile/backends.txt"
+ml_fixture_lock "$MLG/good.txt" cpu x86_64 none https://download.pytorch.org/whl/cpu
+sed '/^# [a-z-]*: /d; /^# ml profile lock/d' "$MLG/good.txt" > "$MLG/body.txt"
+pinned_uv="$(grep -oE 'UV_VERSION="\$\{UV_VERSION:-[^}]+' lib/bootstrap/config.sh | sed 's/.*:-//')"
+cat > "$MLG/bin/uv" <<'FAKEUV'
+#!/usr/bin/env bash
+[[ "$1" == --version ]] && { echo "uv $FAKE_UV_VERSION"; exit 0; }
+printf '%s\n' "$@" > "$FAKE_UV_ARGS"
+if [[ "$1 $2" == "pip install" ]]; then
+    [[ "${FAKE_UV_FAIL:-0}" != 1 ]] || { echo "error: simulated hash mismatch" >&2; exit 1; }
+    target=""; lock=""; platform=""
+    while (( $# )); do
+        case "$1" in --target) target="$2"; shift ;; -r) lock="$2"; shift ;; --python-platform) platform="$2"; shift ;; esac
+        shift
+    done
+    python3 - "$target" "$lock" "${FAKE_WHEEL_PLATFORM:-manylinux_2_28_${platform%%-*}}" "${FAKE_WHEEL_SKIP:-}" <<'PY'
+import os, re, sys
+target, lock, platform, skip = sys.argv[1:5]
+for name, version in re.findall(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)", open(lock).read()):
+    if name == skip:
+        continue
+    info = os.path.join(target, f"{name.replace('-', '_')}-{version}.dist-info")
+    os.makedirs(info)
+    open(os.path.join(info, "METADATA"), "w").write(f"Name: {name}\nVersion: {version}\n")
+    tag = "py3-none-any" if name == "psutil" else f"cp312-cp312-{platform}"
+    open(os.path.join(info, "WHEEL"), "w").write(f"Wheel-Version: 1.0\nTag: {tag}\n")
+PY
+    exit 0
+fi
+while (( $# )); do [[ "$1" == --output-file ]] && cp "$FAKE_UV_BODY" "$2"; shift; done
+FAKEUV
+chmod 0755 "$MLG/bin/uv"
+ml_generate() { FAKE_UV_VERSION="$1" FAKE_UV_BODY="$2" FAKE_UV_ARGS="$MLG/args" SB_UV="$MLG/bin/uv" \
+    bash tools/ml-lock.sh --dir "$MLG/profile" >"$MLG/out" 2>&1; }
+if ml_generate "$pinned_uv" "$MLG/body.txt" && [[ -f "$MLG/profile/locks/cpu-x86_64.txt" ]]; then
+    ok "ml-lock writes a lock from a resolution that verifies"
+    gen_args="$(tr '\n' ' ' < "$MLG/args")"
+    gen_missing=0
+    for expected in 'pip compile requirements.in' '--python-version 3.12' '--python-platform x86_64-manylinux_2_39' \
+        '--torch-backend cpu' '--default-index https://pypi.org/simple' \
+        '--generate-hashes' '--emit-index-url' '--emit-index-annotation' '--no-build' '--no-config'; do
+        [[ " $gen_args" == *" $expected "* ]] || { bad "ml-lock did not pass '$expected' to uv"; gen_missing=1; }
+    done
+    [[ " $gen_args" != *" --index "* && " $gen_args" != *" --extra-index-url "* ]] \
+        || { bad "ml-lock passed uv an index besides PyPI and the torch backend"; gen_missing=1; }
+    (( gen_missing == 0 )) && ok "ml-lock resolves for Python 3.12 with hashes, torch from the official backend index, without builds"
+    [[ "$(sed -n '2,6p' "$MLG/profile/locks/cpu-x86_64.txt")" == \
+        $'# backend: cpu\n# arch: x86_64\n# python: 3.12\n# cuda: none\n# torch-index: https://download.pytorch.org/whl/cpu' ]] \
+        && grep -qx "# resolver: uv $pinned_uv" "$MLG/profile/locks/cpu-x86_64.txt" \
+        && ok "a generated lock records its backend, architecture, Python, CUDA, index and resolver" \
+        || bad "generated lock header"
+else
+    bad "ml-lock generation with a verifying resolution: $(cat "$MLG/out")"
+fi
+rm -rf "$MLG/profile/locks"
+ml_generate 0.0.1 "$MLG/body.txt"
+[[ $? != 0 && ! -e "$MLG/profile/locks/cpu-x86_64.txt" ]] && grep -q "uv $pinned_uv is pinned" "$MLG/out" \
+    && ok "ml-lock refuses a uv other than the pinned one" || bad "ml-lock ran with an unpinned uv"
+sed '/^torch==/,/# from/s#\# from https://download.pytorch.org/whl/cpu#\# from https://pypi.org/simple#' \
+    "$MLG/body.txt" > "$MLG/pypi-torch.txt"
+ml_generate "$pinned_uv" "$MLG/pypi-torch.txt"
+[[ $? != 0 && -z "$(ls -A "$MLG/profile/locks" 2>/dev/null)" ]] \
+    && ok "ml-lock writes nothing when the resolution takes torch from PyPI" \
+    || bad "ml-lock wrote a lock that fails verification"
+cp "$MLG/profile/backends.txt" "$MLG/backends.good"
+printf '%s\n' 'cpu none x86_64 https://download.pytorch.org/whl/cu130' > "$MLG/profile/backends.txt"
+: > "$MLG/args"
+ml_generate "$pinned_uv" "$MLG/body.txt"
+[[ $? != 0 && ! -s "$MLG/args" && -z "$(ls -A "$MLG/profile/locks" 2>/dev/null)" ]] \
+    && grep -q 'cpu must use https://download.pytorch.org/whl/cpu' "$MLG/out" \
+    && ok "ml-lock refuses a backends.txt index that is not the backend's own" \
+    || bad "ml-lock with a mismatched index: $(cat "$MLG/out")"
+cp "$MLG/backends.good" "$MLG/profile/backends.txt"
+
+# --check-artifacts, with the stand-in uv "installing" one wheel record per pin.
+mkdir -p "$MLG/profile/locks"; cp "$MLG/good.txt" "$MLG/profile/locks/cpu-x86_64.txt"
+ml_artifacts() { env FAKE_UV_VERSION="$pinned_uv" FAKE_UV_ARGS="$MLG/args" SB_UV="$MLG/bin/uv" "$@" \
+    bash tools/ml-lock.sh --check-artifacts --dir "$MLG/profile" >"$MLG/out" 2>&1; }
+if ml_artifacts; then
+    art_args="$(tr '\n' ' ' < "$MLG/args")"
+    art_missing=0
+    for expected in 'pip install --target' '--python-version 3.12' '--python-platform x86_64-manylinux_2_39' \
+        '--torch-backend cpu' '--require-hashes' '--no-deps' '--no-build' '--no-config' '--no-cache'; do
+        [[ " $art_args" == *" $expected "* ]] || { bad "--check-artifacts did not pass '$expected' to uv"; art_missing=1; }
+    done
+    (( art_missing == 0 )) && grep -q "${#ML_PINS[@]} artifacts for x86_64 downloaded, matched their SHA-256" "$MLG/out" \
+        && ok "--check-artifacts downloads every pin afresh for the lock's architecture, hashes required" \
+        || bad "--check-artifacts report: $(cat "$MLG/out")"
+else
+    bad "--check-artifacts on a good lock: $(cat "$MLG/out")"
+fi
+ml_artifacts FAKE_WHEEL_PLATFORM=manylinux_2_28_aarch64
+[[ $? != 0 ]] && grep -q 'wheel platform manylinux_2_28_aarch64 is not x86_64' "$MLG/out" \
+    && ok "--check-artifacts rejects a wheel built for another architecture" || bad "--check-artifacts arch: $(cat "$MLG/out")"
+ml_artifacts FAKE_WHEEL_SKIP=scipy
+[[ $? != 0 ]] && grep -q 'scipy: pinned, but no wheel was installed' "$MLG/out" \
+    && ok "--check-artifacts rejects a pin that installed no wheel" || bad "--check-artifacts missing wheel: $(cat "$MLG/out")"
+ml_artifacts FAKE_UV_FAIL=1
+[[ $? != 0 ]] && grep -q 'an artifact is missing for x86_64 or does not match its SHA-256' "$MLG/out" \
+    && ok "--check-artifacts fails when a download or hash check fails" || bad "--check-artifacts uv failure: $(cat "$MLG/out")"
+
+section "ML profile: backend selection"
+# Every case runs --dry-run through server-profile, the entry point a plan uses,
+# against synthetic locks, a stand-in nvidia-smi and an empty or fake /sys.
+MLS="$TMP/ml-select"; mkdir -p "$MLS/locks" "$MLS/bin" "$MLS/sys-empty" "$MLS/sys-gpu/bus/pci/devices/0000:01:00.0"
+printf '0x10de\n' > "$MLS/sys-gpu/bus/pci/devices/0000:01:00.0/vendor"
+printf '0x030200\n' > "$MLS/sys-gpu/bus/pci/devices/0000:01:00.0/class"
+ML_PY312="$(command -v python3.12 || { [[ -x /usr/bin/python3.12 ]] && echo /usr/bin/python3.12; } || true)"
+printf '#!/bin/sh\necho "uv 0.0.0"\n' > "$MLS/bin/uv"; chmod 0755 "$MLS/bin/uv"
+printf '#!/bin/sh\ncase "$*" in *version_info*) echo 3.12.9 ;; *) exit 1 ;; esac\n' > "$MLS/python3.12"
+printf '#!/bin/sh\ncase "$*" in *version_info*) echo 3.11.9 ;; *) exit 1 ;; esac\n' > "$MLS/python3.11"
+chmod 0755 "$MLS/python3.12" "$MLS/python3.11"
+ml_fixture_lock "$MLS/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
+ml_fixture_lock "$MLS/locks/cu126-$ML_ARCH.txt" cu126 "$ML_ARCH" 12.6 https://download.pytorch.org/whl/cu126
+ml_fixture_lock "$MLS/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
+fake_smi() {  # directory, CUDA version (or "broken")
+    mkdir -p "$1"
+    if [[ "$2" == broken ]]; then
+        printf '#!/bin/sh\necho "NVIDIA-SMI has failed because it could not communicate with the NVIDIA driver." >&2\nexit 9\n' > "$1/nvidia-smi"
+    else
+        printf '#!/bin/sh\nif [ "$1" = -L ]; then echo "GPU 0: Fake GPU (UUID: GPU-0)"; exit 0; fi\n' > "$1/nvidia-smi"
+        printf 'echo "| NVIDIA-SMI 999.99   Driver Version: 999.99   CUDA Version: %s |"\n' "$2" >> "$1/nvidia-smi"
+    fi
+    chmod 0755 "$1/nvidia-smi"
+}
+fake_smi "$MLS/smi-13.0" 13.0; fake_smi "$MLS/smi-12.8" 12.8; fake_smi "$MLS/smi-12.4" 12.4; fake_smi "$MLS/smi-broken" broken
+ml_select() {  # label, expect (backend name or "fail"), fragment, env assignments..., -- args
+    local label="$1" expect="$2" fragment="$3" out code
+    local -a assignments=()
+    shift 3
+    while (( $# )) && [[ "$1" != -- ]]; do assignments+=("$1"); shift; done
+    shift
+    out="$(env PATH="$MLS/bin:/usr/bin:/bin" WORKSPACE_ROOT="$MLS/ws" ML_LOCK_DIR="$MLS/locks" \
+        ML_SYSFS_ROOT="$MLS/sys-empty" ML_NVIDIA_SMI="$MLS/absent/nvidia-smi" ML_PYTHON="$MLS/python3.12" ML_UV="$MLS/bin/uv" ML_MIN_FREE_GB=0 \
+        "${assignments[@]}" ./server-profile install ml --dry-run "$@" 2>&1)"; code=$?
+    if [[ "$expect" == fail ]]; then
+        [[ "$code" != 0 && "$out" == *"$fragment"* && "$out" != *'plan: '* ]] \
+            && ok "backend selection: $label" || bad "backend selection: $label (exit $code): $out"
+    else
+        [[ "$code" == 0 && "$out" == *"plan: install backend $expect from $expect-$ML_ARCH.txt"* \
+            && "$out" == *"$fragment"* ]] \
+            && ok "backend selection: $label" || bad "backend selection: $label (exit $code): $out"
+    fi
+}
+ml_select "no GPU selects cpu" cpu 'auto: no NVIDIA GPU detected' -- --backend auto
+ml_select "auto is the default" cpu 'auto: no NVIDIA GPU detected' --
+ml_select "a CUDA 13.0 driver selects the newest locked CUDA backend" cu130 'CUDA 13.0' \
+    ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" -- --backend auto
+ml_select "a CUDA 12.8 driver selects the newest backend it supports" cu126 'CUDA 12.8' \
+    ML_NVIDIA_SMI="$MLS/smi-12.8/nvidia-smi" --
+ml_select "a driver too old for every CUDA lock fails instead of choosing CPU" fail \
+    'does not fall back to CPU' ML_NVIDIA_SMI="$MLS/smi-12.4/nvidia-smi" --
+ml_select "NVIDIA hardware without nvidia-smi fails instead of choosing CPU" fail \
+    'does not fall back to CPU' ML_SYSFS_ROOT="$MLS/sys-gpu" --
+ml_select "a failing nvidia-smi fails instead of choosing CPU" fail 'does not fall back to CPU' \
+    ML_NVIDIA_SMI="$MLS/smi-broken/nvidia-smi" --
+ml_select "cpu by name on an NVIDIA host proceeds with a warning" cpu 'WARN  backend: the CPU backend was requested' \
+    ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" -- --backend cpu
+ml_select "a CUDA backend newer than the driver fails" fail 'needs CUDA 13.0, but the driver supports CUDA 12.8' \
+    ML_NVIDIA_SMI="$MLS/smi-12.8/nvidia-smi" -- --backend cu130
+ml_select "a CUDA backend by name without a GPU proceeds with a warning" cu130 'GPU checks will be skipped' \
+    -- --backend cu130
+ml_select "a backend without a lock fails and names the locked ones" fail \
+    "backend 'cu999' has no lock for $ML_ARCH; locked backends for $ML_ARCH: cpu cu126 cu130" -- --backend cu999
+ml_select "a backend name that is a path fails" fail 'invalid backend name' -- --backend ../cpu
+ml_select "a Python other than 3.12 fails preflight" fail 'is not a Python 3.12 interpreter' \
+    ML_PYTHON="$MLS/python3.11" --
+ml_select "a missing uv fails preflight" fail 'uv: not found' ML_UV="$MLS/absent/uv" --
+ml_select "too little disk space fails preflight" fail 'needs 999999' ML_MIN_FREE_GB=999999 --
+mkdir -p "$MLS/only-cuda"; cp "$MLS/locks/cu130-$ML_ARCH.txt" "$MLS/only-cuda/"
+ml_select "no GPU and no CPU lock fails" fail "backend 'cpu' has no lock" ML_LOCK_DIR="$MLS/only-cuda" --
+mkdir -p "$MLS/only-cpu"; cp "$MLS/locks/cpu-$ML_ARCH.txt" "$MLS/only-cpu/"
+ml_select "an NVIDIA host with only a CPU lock fails instead of choosing CPU" fail 'locked backends for' \
+    ML_LOCK_DIR="$MLS/only-cpu" ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" --
+[[ ! -e "$MLS/ws" ]] && ok "no dry run or failed selection created a workspace, state or environment" \
+    || bad "backend selection left files behind"
+mkdir -p "$MLS/ws/venvs/ml-workbench"
+ml_select "an ml-workbench directory the profile did not create is refused" fail 'was not created by this profile' --
+rm -rf "$MLS/ws"
+# A directory the run cannot write stops it before anything is built. Root
+# writes everywhere, so as root the case runs as nobody, like the dry-run test.
+mkdir -p "$MLS/ro-ws" "$MLS/ro-bin"; chmod 0777 "$MLS/ro-ws"; chmod 0555 "$MLS/ro-bin"
+ro_run=(env PATH="$MLS/bin:/usr/bin:/bin" WORKSPACE_ROOT="$MLS/ro-ws" ML_LOCK_DIR="$MLS/locks" \
+    ML_SYSFS_ROOT="$MLS/sys-empty" ML_NVIDIA_SMI="$MLS/absent/nvidia-smi" ML_PYTHON="$MLS/python3.12" \
+    ML_UV="$MLS/bin/uv" ML_MIN_FREE_GB=0 ML_BIN_DIR="$MLS/ro-bin" ./server-profile install ml)
+if (( EUID != 0 )); then
+    ro_out="$("${ro_run[@]}" 2>&1)"; ro_code=$?
+elif command -v setpriv >/dev/null 2>&1; then
+    chmod a+rx "$TMP"; chmod -R a+rX "$MLS"
+    ro_out="$(setpriv --reuid=65534 --regid=65534 --clear-groups "${ro_run[@]}" 2>&1)"; ro_code=$?
+fi
+if [[ -n "${ro_code:-}" ]]; then
+    [[ "$ro_code" != 0 && "$ro_out" == *"cannot write $MLS/ro-bin"* && -z "$(ls -A "$MLS/ro-ws")" ]] \
+        && ok "an unwritable command directory stops the run before anything is built" \
+        || bad "unwritable command directory (exit $ro_code): $ro_out"
+else
+    skip "unwritable command directory (root without setpriv)"
+fi
+if [[ -z "$(bash -c 'source profiles/ml/lib.sh; ML_LOCK_DIR="$1"; ml_load_config; ml_locked_backends x86_64; ml_locked_backends aarch64' _ "$MLS/absent")" ]]; then
+    ok "without a lock, no backend is offered"
+else
+    bad "a missing lock directory reports locked backends"
+fi
+
+section "ML profile: install, repeat, reconfigure and rollback"
+# A stand-in uv builds "environments" whose packages are small modules written
+# from the lock, run by the real Python 3.12 with its site directory disabled,
+# so nothing on the host leaks in and nothing is downloaded.
+MLI="$TMP/ml-install"; mkdir -p "$MLI/bin" "$MLI/locks" "$MLI/templates/torch" \
+    "$MLI/templates/torchvision/transforms" "$MLI/templates/jupyter_client"
+if [[ -z "$ML_PY312" ]]; then
+    skip "ml install lifecycle and commands (no python3.12 on this host)"
+else
+cat > "$MLI/templates/torch/__init__.py" <<'PY'
+# Stand-in torch: only the API profiles/ml/check.py calls.
+import os
+float32, uint8 = "float32", "uint8"
+
+
+class _Version:
+    cuda = os.environ.get("FAKE_TORCH_BUILD_CUDA") or None
+
+
+version = _Version()
+
+
+class Tensor:
+    def __init__(self, data, shape):
+        self._data, self.shape = list(data), tuple(shape)
+
+    def reshape(self, *shape):
+        return Tensor(self._data, shape)
+
+    def to(self, device):
+        return self
+
+    def cpu(self):
+        return self
+
+    @property
+    def T(self):
+        rows, cols = self.shape
+        return Tensor([self._data[i * cols + j] for j in range(cols) for i in range(rows)], (cols, rows))
+
+    def __matmul__(self, other):
+        rows, inner = self.shape
+        cols = other.shape[1]
+        return Tensor([float(sum(self._data[i * inner + t] * other._data[t * cols + j] for t in range(inner)))
+                       for i in range(rows) for j in range(cols)], (rows, cols))
+
+    def tolist(self):
+        def build(data, shape):
+            if len(shape) == 1:
+                return list(data)
+            step = len(data) // shape[0]
+            return [build(data[i * step:(i + 1) * step], shape[1:]) for i in range(shape[0])]
+        return build(self._data, self.shape)
+
+
+def arange(n, dtype=None):
+    return Tensor([float(i) if dtype == float32 else i for i in range(n)], (n,))
+
+
+def empty(n, dtype=None, device=None):
+    return Tensor([], (n,))
+
+
+def device(kind, index=None):
+    return (kind, index)
+
+
+def manual_seed(seed):
+    return None
+
+
+def tensor(rows):
+    return Tensor([value for row in rows for value in row], (len(rows), len(rows[0])))
+
+
+def allclose(first, second):
+    return first.shape == second.shape and first._data == second._data
+
+
+class no_grad:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class cuda:
+    @staticmethod
+    def is_available():
+        return int(os.environ.get("FAKE_TORCH_CUDA_DEVICES", "0")) > 0
+
+    @staticmethod
+    def device_count():
+        return int(os.environ.get("FAKE_TORCH_CUDA_DEVICES", "0"))
+
+    @staticmethod
+    def get_arch_list():
+        return os.environ.get("FAKE_TORCH_ARCH_LIST", "sm_80,sm_90").split(",")
+
+    @staticmethod
+    def get_device_capability(index):
+        major, minor = os.environ.get("FAKE_TORCH_CAPABILITY", "8.6").split(".")
+        return int(major), int(minor)
+
+    @staticmethod
+    def get_device_name(index):
+        return "Fake GPU"
+
+    @staticmethod
+    def synchronize(device=None):
+        return None
+PY
+cat > "$MLI/templates/torchvision/transforms/functional.py" <<'PY'
+import torch
+
+
+def hflip(image):
+    channels, height, width = image.shape
+    data = image._data
+    return torch.Tensor([data[c * height * width + h * width + (width - 1 - w)]
+                         for c in range(channels) for h in range(height) for w in range(width)], image.shape)
+PY
+: > "$MLI/templates/torchvision/transforms/__init__.py"
+cat > "$MLI/templates/jupyter_client/kernelspec.py" <<'PY'
+class KernelSpecManager:
+    def find_kernel_specs(self):
+        return {"python3": "/fake/share/jupyter/kernels/python3"}
+PY
+# Stand-ins for the language stack: just the calls check.py makes, working on
+# the files and strings it passes them.
+mkdir -p "$MLI/templates/tokenizers" "$MLI/templates/transformers" "$MLI/templates/sentencepiece" \
+    "$MLI/templates/sacremoses" "$MLI/templates/datasets" "$MLI/templates/spacy" "$MLI/templates/huggingface_hub"
+cat > "$MLI/templates/tokenizers/__init__.py" <<'PY'
+import json
+from . import models, pre_tokenizers, trainers
+
+
+class Tokenizer:
+    def __init__(self, model):
+        self.model, self.pre_tokenizer, self.vocab = model, None, {}
+
+    def train_from_iterator(self, lines, trainer):
+        self.vocab = {token: index for index, token in enumerate(trainer.special_tokens)}
+        for line in lines:
+            for word in line.split():
+                self.vocab.setdefault(word, len(self.vocab))
+
+    def save(self, path):
+        with open(path, "w") as handle:
+            json.dump({"vocab": self.vocab}, handle)
+PY
+printf 'class WordLevel:\n    def __init__(self, unk_token=None):\n        self.unk_token = unk_token\n' \
+    > "$MLI/templates/tokenizers/models.py"
+printf 'class Whitespace:\n    pass\n' > "$MLI/templates/tokenizers/pre_tokenizers.py"
+printf 'class WordLevelTrainer:\n    def __init__(self, special_tokens=()):\n        self.special_tokens = list(special_tokens)\n' \
+    > "$MLI/templates/tokenizers/trainers.py"
+cat > "$MLI/templates/transformers/__init__.py" <<'PY'
+import json
+import os
+
+import torch
+
+
+class PreTrainedTokenizerFast:
+    def __init__(self, tokenizer_file, unk_token="[UNK]", pad_token=None):
+        with open(tokenizer_file) as handle:
+            self.vocab = json.load(handle)["vocab"]
+        self.unk_token_id = self.vocab[unk_token]
+        self.words = {index: word for word, index in self.vocab.items()}
+
+    def encode(self, text, add_special_tokens=True):
+        return [self.vocab.get(word, self.unk_token_id) for word in text.split()]
+
+    def decode(self, ids):
+        return " ".join(self.words[index] for index in ids)
+
+
+class BertConfig:
+    def __init__(self, **values):
+        self.hidden_size, self.num_hidden_layers = 768, 12
+        self.__dict__.update(values)
+
+    def save_pretrained(self, path):
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "config.json"), "w") as handle:
+            json.dump(self.__dict__, handle)
+
+
+class AutoConfig:
+    @staticmethod
+    def from_pretrained(path, local_files_only=False):
+        assert local_files_only, "the checks must never reach the Hub"
+        with open(os.path.join(path, "config.json")) as handle:
+            return BertConfig(**json.load(handle))
+
+
+class _Output:
+    def __init__(self, hidden):
+        self.last_hidden_state = hidden
+
+
+class BertModel:
+    def __init__(self, config):
+        self.config = config
+
+    def eval(self):
+        return self
+
+    def __call__(self, input_ids):
+        tokens, width = input_ids.shape[1], self.config.hidden_size
+        return _Output(torch.Tensor([0.5] * (tokens * width), (1, tokens, width)))
+
+    def save_pretrained(self, path):
+        self.config.save_pretrained(path)
+        with open(os.path.join(path, "model.safetensors"), "wb") as handle:
+            handle.write(b"stand-in weights")
+
+
+class AutoModel:
+    @staticmethod
+    def from_pretrained(path, local_files_only=False):
+        return BertModel(AutoConfig.from_pretrained(path, local_files_only=local_files_only))
+PY
+cat > "$MLI/templates/sentencepiece/__init__.py" <<'PY'
+import json
+
+
+class SentencePieceTrainer:
+    @staticmethod
+    def train(sentence_iterator, model_writer, **options):
+        model_writer.write(json.dumps(sorted({w for line in sentence_iterator for w in line.split()})).encode())
+
+
+class SentencePieceProcessor:
+    def __init__(self, model_proto):
+        self.pieces = json.loads(model_proto)
+
+    def encode(self, text):
+        return [self.pieces.index(word) for word in text.split()]
+
+    def decode(self, ids):
+        return " ".join(self.pieces[index] for index in ids)
+
+    def get_piece_size(self):
+        return len(self.pieces)
+PY
+cat > "$MLI/templates/sacremoses/__init__.py" <<'PY'
+import re
+
+
+class MosesTokenizer:
+    def __init__(self, lang):
+        self.lang = lang
+
+    def tokenize(self, text):
+        return re.findall(r"\w+|[^\w\s]", text)
+PY
+cat > "$MLI/templates/datasets/__init__.py" <<'PY'
+class Dataset:
+    def __init__(self, columns):
+        self._columns = columns
+
+    @classmethod
+    def from_dict(cls, columns):
+        return cls({name: list(values) for name, values in columns.items()})
+
+    def map(self, function):
+        rows = [dict(zip(self._columns, values)) for values in zip(*self._columns.values())]
+        added = [function(row) for row in rows]
+        columns = dict(self._columns)
+        for name in added[0]:
+            columns[name] = [row[name] for row in added]
+        return Dataset(columns)
+
+    def __getitem__(self, name):
+        return self._columns[name]
+PY
+cat > "$MLI/templates/spacy/__init__.py" <<'PY'
+import re
+from . import util
+
+
+class _Token:
+    def __init__(self, text):
+        self.text = text
+
+
+def blank(lang):
+    return lambda text: [_Token(piece) for piece in re.findall(r"\w+|[^\w\s]", text)]
+PY
+printf 'import os\n\n\ndef get_installed_models():\n    return [m for m in os.environ.get("FAKE_SPACY_MODELS", "").split(",") if m]\n' \
+    > "$MLI/templates/spacy/util.py"
+printf 'import os\nHF_HUB_OFFLINE = os.environ.get("HF_HUB_OFFLINE") == "1"\n' > "$MLI/templates/huggingface_hub/constants.py"
+: > "$MLI/templates/huggingface_hub/__init__.py"
+cat > "$MLI/build-site.py" <<'PY'
+# Writes one importable module and one dist-info per pin of a lock.
+import os, re, shutil, sys
+lock, site, bindir, templates = sys.argv[1:5]
+IMPORT = {"scikit-learn": "sklearn", "pillow": "PIL", "opencv-python-headless": "cv2",
+          "jupyter-client": "jupyter_client"}
+pins = []
+for line in open(lock):
+    match = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)", line)
+    if match:
+        pins.append((match.group(1).lower(), match.group(2)))
+for name, version in pins:
+    module = IMPORT.get(name, re.sub(r"[-.]", "_", name))
+    package = os.path.join(site, module)
+    if os.path.isdir(os.path.join(templates, module)):
+        shutil.copytree(os.path.join(templates, module), package)
+    os.makedirs(package, exist_ok=True)
+    init = os.path.join(package, "__init__.py")
+    body = open(init).read() if os.path.exists(init) else ""
+    if module == "torch" and os.environ.get("FAKE_UV_BREAK_TORCH") == "1":
+        body = "raise ImportError('simulated broken native library')\n"
+    if module == "ipywidgets":
+        body += ("import os\nopen(os.environ['FAKE_ENV_RECORD'], 'w').write("
+                 "' '.join(k + '=' + os.environ.get(k, '') for k in ('HF_HUB_OFFLINE', 'HF_DATASETS_OFFLINE', "
+                 "'TRANSFORMERS_OFFLINE'))) if os.environ.get('FAKE_ENV_RECORD') else None\n")
+    with open(init, "w") as handle:
+        handle.write(f"__version__ = {version!r}\n" + body)
+    info = os.path.join(site, f"{name.replace('-', '_')}-{version}.dist-info")
+    os.makedirs(info, exist_ok=True)
+    with open(os.path.join(info, "METADATA"), "w") as handle:
+        handle.write(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
+    if name == "jupyterlab":
+        with open(os.path.join(bindir, "jupyter"), "w") as handle:
+            handle.write('#!/bin/sh\nprintf "%s\\n" "$@" > "${FAKE_JUPYTER_ARGS:-' + site + '/.jupyter-started}"\n')
+        os.chmod(os.path.join(bindir, "jupyter"), 0o755)
+with open(os.path.join(site, ".pins"), "w") as handle:
+    handle.write("".join(f"{name}=={version}\n" for name, version in pins))
+PY
+cat > "$MLI/bin/uv" <<'FAKEUV'
+#!/usr/bin/env bash
+# Stand-in uv: records each call, builds from the lock, never touches a network.
+set -e
+printf '%s\n' "$*" >> "$FAKE_UV_LOG"
+printf 'env UV_EXTRA_INDEX_URL=%s UV_INDEX_STRATEGY=%s UV_TORCH_BACKEND=%s\n' "${UV_EXTRA_INDEX_URL-unset}" \
+    "${UV_INDEX_STRATEGY-unset}" "${UV_TORCH_BACKEND-unset}" >> "$FAKE_UV_LOG"
+case "$1" in
+    --version) echo "uv 0.0.0"; exit 0 ;;
+    venv)
+        dir="${*: -1}"
+        mkdir -p "$dir/bin" "$dir/lib/site"
+        printf '#!/bin/sh\nPYTHONPATH="%s/lib/site" exec "%s" -S "$@"\n' "$dir" "$FAKE_UV_PYTHON" > "$dir/bin/python"
+        chmod 0755 "$dir/bin/python"; exit 0 ;;
+    pip)
+        sub="$2"; shift 2; python=""; lock=""
+        while (( $# )); do case "$1" in --python) python="$2"; shift 2 ;; --torch-backend) shift 2 ;; --*) shift ;; *) lock="$1"; shift ;; esac; done
+        site="$(dirname -- "$python")/../lib/site"
+        case "$sub" in
+            freeze) cat -- "$site/.pins" 2>/dev/null; exit 0 ;;
+            sync)
+                [[ "${FAKE_UV_SYNC_FAIL:-0}" != 1 ]] || { echo "error: simulated download failure" >&2; exit 1; }
+                rm -rf -- "$site"; mkdir -p -- "$site"
+                "$FAKE_UV_PYTHON" "$FAKE_UV_BUILDER" "$lock" "$site" "$(dirname -- "$python")" "$FAKE_UV_TEMPLATES"
+                exit 0 ;;
+        esac ;;
+esac
+echo "fake uv: unsupported: $*" >&2; exit 2
+FAKEUV
+chmod 0755 "$MLI/bin/uv"
+ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
+ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
+MLW="$MLI/ws"
+ml_env() {  # run with the stand-ins and this test's workspace
+    env PATH="$MLI/bin:$PATH" WORKSPACE_ROOT="$MLW" ML_LOCK_DIR="$MLI/locks" ML_SYSFS_ROOT="$MLS/sys-empty" \
+        ML_NVIDIA_SMI="$MLS/absent/nvidia-smi" \
+        ML_PYTHON="$ML_PY312" ML_UV="$MLI/bin/uv" ML_BIN_DIR="$MLI/usr-bin" ML_MIN_FREE_GB=0 \
+        FAKE_UV_LOG="$MLI/uv.log" FAKE_UV_PYTHON="$ML_PY312" FAKE_UV_BUILDER="$MLI/build-site.py" \
+        FAKE_UV_TEMPLATES="$MLI/templates" "$@"
+}
+ml_install() {  # [NAME=VALUE...] [installer arguments...]
+    local -a assignments=()
+    while [[ "${1:-}" =~ ^[A-Z_]+= ]]; do assignments+=("$1"); shift; done
+    ml_env "${assignments[@]}" ./server-profile install ml "$@" >"$MLI/out" 2>&1
+}
+ML_STATE="$MLW/.setup-state/profiles/ml"
+ML_LINK="$MLW/venvs/ml-workbench"
+declared_version="$(tr -d '[:space:]' < VERSION)"
+
+ml_env ./profiles/ml/bin/ml-status >"$MLI/status" 2>&1
+[[ $? == 1 ]] && grep -q 'not installed' "$MLI/status" \
+    && ok "ml-status reports a profile that is not installed, and exits 1" || bad "ml-status before install"
+
+: > "$MLI/uv.log"
+if ml_install UV_EXTRA_INDEX_URL=https://mirror.invalid/simple UV_INDEX_STRATEGY=unsafe-best-match UV_TORCH_BACKEND=cu999 \
+    --backend auto; then ok "first install succeeds"; else bad "first install: $(cat "$MLI/out")"; fi
+first_target="$(readlink -- "$ML_LINK" 2>/dev/null)"
+[[ -L "$ML_LINK" && "$first_target" == "$MLW/venvs/.ml-workbench/cpu-"* && -x "$ML_LINK/bin/python" ]] \
+    && ok "the environment is reached at venvs/ml-workbench, a link to one built environment" \
+    || bad "environment layout: $first_target"
+grep -q -- "^venv --python $ML_PY312 --no-python-downloads" "$MLI/uv.log" \
+    && grep -q -- '^pip sync .*--require-hashes --no-build .*--torch-backend cpu '"$MLI/locks/cpu-$ML_ARCH.txt"'$' "$MLI/uv.log" \
+    && ok "the environment is built from Python 3.12 and synced from the lock with hashes required, torch routed by backend" \
+    || bad "install commands: $(cat "$MLI/uv.log")"
+[[ "$(grep '^env ' "$MLI/uv.log" | sort -u)" == 'env UV_EXTRA_INDEX_URL=unset UV_INDEX_STRATEGY=unset UV_TORCH_BACKEND=unset' ]] \
+    && ok "the caller's uv index, strategy and backend settings never reach the build" \
+    || bad "uv saw the caller's index settings: $(grep '^env ' "$MLI/uv.log" | sort -u)"
+state_ok=1
+[[ "$(cat "$ML_STATE/repository-version")" == "$declared_version" ]] || { bad "state: repository-version"; state_ok=0; }
+[[ "$(cat "$ML_STATE/backend")" == cpu && "$(cat "$ML_STATE/cuda")" == none ]] || { bad "state: backend"; state_ok=0; }
+[[ "$(cat "$ML_STATE/lock")" == "cpu-$ML_ARCH.txt" ]] || { bad "state: lock name"; state_ok=0; }
+[[ "$(cat "$ML_STATE/lock-sha256")" == "$(sha256sum "$MLI/locks/cpu-$ML_ARCH.txt" | cut -c1-64)" ]] \
+    || { bad "state: lock digest"; state_ok=0; }
+[[ "$(cat "$ML_STATE/environment")" == "$first_target" ]] || { bad "state: environment"; state_ok=0; }
+[[ "$(sed 's/==.*//' "$ML_STATE/core-versions" | tr '\n' ' ')" == 'python torch torchvision numpy ' ]] \
+    && grep -qx 'torch==2.14.0+cpu' "$ML_STATE/core-versions" && grep -qx 'numpy==2.3.1' "$ML_STATE/core-versions" \
+    && grep -qx 'python==3.12.[0-9]*' "$ML_STATE/core-versions" \
+    || { bad "state: core versions: $(tr '\n' ' ' < "$ML_STATE/core-versions")"; state_ok=0; }
+(( state_ok )) && ok "state records repository version, backend, lock digest, environment and core versions"
+owner_ok=1
+while IFS= read -r -d '' file; do
+    [[ "$(stat -c '%u' "$file")" == "$(id -u)" ]] || owner_ok=0
+    (( ( 8#$(stat -c '%a' "$file") & 8#022 ) == 0 )) || owner_ok=0
+done < <(find "$ML_STATE" -print0)
+[[ "$ML_STATE" == "$MLW/.setup-state/profiles/ml" && ! -e "$MLW/.setup-state/bundles" ]] || owner_ok=0
+(( owner_ok )) && ok "profile state is owned by the installing user, not group or world writable, and apart from bundle state" \
+    || bad "profile state ownership or modes"
+links_ok=1
+for command in ml-env ml-status ml-doctor ml-preflight ml-jupyter; do
+    [[ "$(readlink -- "$MLI/usr-bin/$command")" == "$ROOT/profiles/ml/bin/$command" ]] || links_ok=0
+done
+(( links_ok )) && ok "the five ml commands are linked once the profile is installed" || bad "ml command links"
+[[ ! -e "$ML_LINK/lib/site/.jupyter-started" ]] && ok "installation starts no Jupyter server" \
+    || bad "Jupyter ran during installation"
+
+: > "$MLI/uv.log"; first_installed_at="$(cat "$ML_STATE/installed-at")"
+if ml_install --backend auto && grep -q 'nothing to rebuild' "$MLI/out" \
+    && [[ "$(readlink -- "$ML_LINK")" == "$first_target" && "$(cat "$ML_STATE/installed-at")" == "$first_installed_at" ]] \
+    && ! grep -qE '^(venv|pip sync)' "$MLI/uv.log"; then
+    ok "an identical reinstall keeps the same environment and builds nothing"
+else
+    bad "identical reinstall: $(cat "$MLI/out")"
+fi
+ml_env ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && grep -q 'plan: keep backend cpu' "$MLI/out" \
+    && ok "a dry run on an installed host reports that it would keep the environment" || bad "dry run after install"
+
+: > "$MLI/uv.log"
+if ! ml_install --backend cu130 && grep -q 'rerun with --reconfigure' "$MLI/out" \
+    && [[ "$(readlink -- "$ML_LINK")" == "$first_target" && "$(cat "$ML_STATE/backend")" == cpu ]] \
+    && ! grep -q '^venv' "$MLI/uv.log"; then
+    ok "a backend change without --reconfigure is refused and changes nothing"
+else
+    bad "unrequested backend change: $(cat "$MLI/out")"
+fi
+if ml_install --backend cu130 --reconfigure && [[ "$(cat "$ML_STATE/backend")" == cu130 ]]; then
+    second_target="$(readlink -- "$ML_LINK")"
+    [[ "$second_target" == "$MLW/venvs/.ml-workbench/cu130-"* && ! -e "$first_target" \
+        && "$(ls "$MLW/venvs/.ml-workbench")" == "$(basename -- "$second_target")" ]] \
+        && ok "--reconfigure switches the backend and removes the replaced environment" \
+        || bad "reconfigure layout: $(ls "$MLW/venvs/.ml-workbench")"
+else
+    bad "reconfigure: $(cat "$MLI/out")"
+fi
+
+# A failed upgrade: the shipped lock changes, and the new build fails at the
+# download and then at verification. Neither may touch what is installed.
+second_target="$(readlink -- "$ML_LINK")"; state_before="$(cat "$ML_STATE"/* | sha256sum)"
+ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130 \
+    +cu130 tqdm=4.67.1
+for failure in FAKE_UV_SYNC_FAIL=1 FAKE_UV_BREAK_TORCH=1; do
+    if ! ml_install "$failure" --backend cu130 && grep -q 'previous environment is unchanged' "$MLI/out" \
+        && [[ "$(readlink -- "$ML_LINK")" == "$second_target" && "$(cat "$ML_STATE"/* | sha256sum)" == "$state_before" \
+            && "$(ls "$MLW/venvs/.ml-workbench")" == "$(basename -- "$second_target")" ]] \
+        && [[ "$(ml_env ./profiles/ml/bin/ml-env python -c 'import torch; print(torch.__version__)')" == 2.14.0+cu130 ]]; then
+        ok "a failed upgrade ($failure) leaves the previous environment, state and commands usable"
+    else
+        bad "failed upgrade ($failure): $(cat "$MLI/out")"
+    fi
+done
+# A failure after the switch, while the state or the command links are written:
+# the link, the state and the commands go back to what they were. Stand-in mv
+# and ln fail just those writes; everything else passes through.
+MLF="$MLI/fail-after-switch"; mkdir -p "$MLF/mv" "$MLF/ln" "$MLF/kill"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in */profiles/ml/core-versions) echo "mv: simulated failure" >&2; exit 1 ;; esac; done\nexec mv "$@"\n' \
+    | sed "s#exec mv#exec $(command -v mv)#" > "$MLF/mv/mv"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in */usr-bin/ml-*|*/bin-first/ml-*) echo "ln: simulated failure" >&2; exit 1 ;; esac; done\nexec ln "$@"\n' \
+    | sed "s#exec ln#exec $(command -v ln)#" > "$MLF/ln/ln"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in */profiles/ml/core-versions) kill -KILL "$PPID"; exit 1 ;; esac; done\nexec mv "$@"\n' \
+    | sed "s#exec mv#exec $(command -v mv)#" > "$MLF/kill/mv"
+chmod 0755 "$MLF/mv/mv" "$MLF/ln/ln" "$MLF/kill/mv"
+command_links() { for command in ml-env ml-status ml-doctor ml-preflight ml-jupyter; do readlink -- "$MLI/usr-bin/$command"; done; }
+links_before="$(command_links)"
+for failure in "mv --backend cu130" "ln --backend cpu --reconfigure"; do
+    read -r shim args <<< "$failure"
+    # shellcheck disable=SC2086  # $args is a fixed list of installer options
+    if ! ml_install PATH="$MLF/$shim:$MLI/bin:$PATH" $args \
+        && grep -q 'failed after the switch; the previous environment, its state and commands were restored' "$MLI/out" \
+        && [[ "$(readlink -- "$ML_LINK")" == "$second_target" && "$(cat "$ML_STATE"/* | sha256sum)" == "$state_before" \
+            && "$(ls -A "$MLW/venvs/.ml-workbench")" == "$(basename -- "$second_target")" \
+            && "$(command_links)" == "$links_before" \
+            && -z "$(find "$MLW/venvs" -mindepth 1 -maxdepth 1 ! -name ml-workbench ! -name .ml-workbench)" \
+            && -z "$(find "$ML_STATE" -mindepth 1 -maxdepth 1 -name '.*')" ]] \
+        && [[ "$(ml_env ./profiles/ml/bin/ml-env python -c 'import torch; print(torch.__version__)')" == 2.14.0+cu130 ]]; then
+        ok "a failure after the switch ($shim fails, install $args) restores the previous environment, state and commands"
+    else
+        bad "failure after the switch ($shim ${args}): $(cat "$MLI/out"); link $(readlink -- "$ML_LINK")"
+    fi
+done
+# First install: after a failure nothing is left installed.
+MLW1="$MLI/ws-first"
+if ! ml_install PATH="$MLF/mv:$MLI/bin:$PATH" WORKSPACE_ROOT="$MLW1" ML_BIN_DIR="$MLI/bin-first" --backend cpu \
+    && grep -q 'failed after the switch; the new environment, its state and commands were removed' "$MLI/out" \
+    && [[ ! -e "$MLW1/venvs/ml-workbench" && ! -L "$MLW1/venvs/ml-workbench" && -z "$(ls -A "$MLW1/venvs/.ml-workbench")" \
+        && ! -e "$MLW1/.setup-state/profiles/ml" && -z "$(ls -A "$MLI/bin-first" 2>/dev/null)" ]] \
+    && ! ml_env WORKSPACE_ROOT="$MLW1" ./profiles/ml/bin/ml-status >/dev/null 2>&1; then
+    ok "a failure after the switch on a first install leaves no environment, state or command"
+else
+    bad "first install failing after the switch: $(cat "$MLI/out"); $(find "$MLW1" "$MLI/bin-first" -mindepth 1 2>/dev/null)"
+fi
+ml_env ./profiles/ml/bin/ml-status >"$MLI/status" 2>&1
+grep -q 'differs from this release' "$MLI/status" \
+    && ok "ml-status says when the shipped lock differs from the installed one" || bad "ml-status lock drift"
+# A run killed after the switch cannot restore anything itself. The state then
+# still names the previous environment, so the next run rebuilds rather than
+# keeping, and clears what the killed run left. Its own temporary files stay
+# in this suite's directory.
+mkdir -p "$MLF/tmp"
+ml_install TMPDIR="$MLF/tmp" PATH="$MLF/kill:$MLI/bin:$PATH" --backend cu130
+killed_link="$(readlink -- "$ML_LINK")"
+if [[ "$killed_link" != "$second_target" && "$(cat "$ML_STATE/environment")" == "$second_target" ]] \
+    && ls -d "$MLW/.setup-state/profiles/".ml-state-previous.* >/dev/null 2>&1 \
+    && ! ml_env ./profiles/ml/bin/ml-status >/dev/null 2>&1; then
+    ok "a run killed after the switch leaves the link and the recorded environment disagreeing, which ml-status reports"
+else
+    bad "killed run: link $killed_link, recorded $(cat "$ML_STATE/environment")"
+fi
+if ml_install --backend cu130 && ! grep -q 'nothing to rebuild' "$MLI/out" && grep -qx 'tqdm==4.67.1' "$ML_STATE/packages" \
+    && [[ "$(readlink -- "$ML_LINK")" != "$second_target" && "$(readlink -f -- "$ML_LINK")" == "$(cat "$ML_STATE/environment")" ]] \
+    && ! ls -d "$MLW/.setup-state/profiles/".ml-state-previous.* "$ML_STATE"/.state.* "$ML_LINK".switch.* >/dev/null 2>&1 \
+    && [[ "$(ls -A "$MLW/venvs/.ml-workbench" | wc -l)" == 1 ]]; then
+    ok "once the failure is gone, the same command upgrades to the new lock and clears what a killed run left"
+else
+    bad "upgrade after a failure: $(cat "$MLI/out")"
+fi
+forced_from="$(readlink -- "$ML_LINK")"
+ml_install --backend cu130 --force && [[ "$(readlink -- "$ML_LINK")" != "$forced_from" && ! -e "$forced_from" ]] \
+    && ok "--force rebuilds an up-to-date environment" || bad "--force: $(cat "$MLI/out")"
+
+section "ML profile: commands"
+ml_env ./profiles/ml/bin/ml-status >"$MLI/status" 2>&1
+[[ $? == 0 ]] && grep -q '^backend: *cu130 (CUDA 13.0)' "$MLI/status" && grep -q 'matches the lock this release ships' "$MLI/status" \
+    && grep -q '^torch: *2.14.0+cu130' "$MLI/status" \
+    && ok "ml-status reports the recorded backend, lock and core versions" || bad "ml-status: $(cat "$MLI/status")"
+[[ "$(ml_env ./profiles/ml/bin/ml-env sh -c 'printf "%s %s" "$VIRTUAL_ENV" "${PATH%%:*}"')" == "$ML_LINK $ML_LINK/bin" ]] \
+    && ok "ml-env runs a command with the environment active" || bad "ml-env"
+ml_env ./profiles/ml/bin/ml-preflight >"$MLI/out" 2>&1 && grep -q 'PASS  backend: cpu' "$MLI/out" \
+    && ok "ml-preflight reports what an installation would use" || bad "ml-preflight: $(cat "$MLI/out")"
+
+# A CPU install for the diagnostics below.
+ml_install --backend cpu --reconfigure || bad "reinstall cpu for diagnostics: $(cat "$MLI/out")"
+HF_TEST_HOME="$MLI/hf-home"; mkdir -p "$HF_TEST_HOME"
+ml_doctor() { ml_env HF_HOME="$HF_TEST_HOME" HF_HUB_OFFLINE=0 FAKE_ENV_RECORD="$MLI/env-record" "$@" \
+    ./profiles/ml/bin/ml-doctor >"$MLI/doctor" 2>&1; }
+if ml_doctor; then
+    all_imports=1
+    for pin in "${ML_PINS[@]}"; do
+        [[ "${pin%%=*}" == jupyter-client ]] && continue
+        grep -q "^PASS  import ${pin%%=*}: " "$MLI/doctor" || all_imports=0
+    done
+    (( all_imports )) && grep -q '^PASS  cpu tensor: ' "$MLI/doctor" && grep -q '^PASS  vision: ' "$MLI/doctor" \
+        && grep -q '^PASS  notebook kernel: ' "$MLI/doctor" \
+        && grep -q '^N/A   gpu: CPU backend on a host with no NVIDIA GPU' "$MLI/doctor" \
+        && grep -q 'ml-doctor: [0-9]* passed, 0 failed, 0 skipped, 1 not applicable' "$MLI/doctor" \
+        && ok "ml-doctor passes imports, a CPU tensor, a vision transform and kernel discovery; GPU is not applicable" \
+        || bad "ml-doctor on a CPU host: $(cat "$MLI/doctor")"
+else
+    bad "ml-doctor failed on a healthy CPU environment: $(cat "$MLI/doctor")"
+fi
+[[ "$(cat "$MLI/env-record" 2>/dev/null)" == 'HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1' \
+    && -z "$(ls -A "$HF_TEST_HOME")" ]] \
+    && ok "diagnostics force model and dataset downloads off and leave the cache empty" \
+    || bad "diagnostics offline guard: $(cat "$MLI/env-record" 2>/dev/null)"
+ml_env ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" ./profiles/ml/bin/ml-doctor 2>&1 \
+    | grep -q '^SKIP  gpu: CPU backend installed; the NVIDIA GPU is not used or checked' \
+    && ok "ml-doctor reports the GPU as skipped for a CPU backend on an NVIDIA host" || bad "ml-doctor skip on CPU backend"
+ml_env HF_HOME="$HF_TEST_HOME" ./profiles/ml/bin/ml-doctor --json >"$MLI/doctor" 2>/dev/null && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["summary"]["fail"] == 0 and d["checks"]' "$MLI/doctor" \
+    && ok "ml-doctor --json emits the same checks as JSON" || bad "ml-doctor --json"
+ml_doctor
+language_ok=1
+for check in 'language tokenizer' 'language model files' sentencepiece sacremoses datasets spacy 'hub offline' torchtext; do
+    grep -q "^PASS  $check: " "$MLI/doctor" || language_ok=0
+done
+(( language_ok )) && ok "ml-doctor runs the language smoke checks on files it creates, and they pass" \
+    || bad "ml-doctor language checks: $(grep -E 'language|sentencepiece|sacremoses|datasets|spacy|hub|torchtext' "$MLI/doctor")"
+mkdir -p "$ML_LINK/lib/site/torchtext"; : > "$ML_LINK/lib/site/torchtext/__init__.py"
+ml_doctor; tt_code=$?
+rm -rf "$ML_LINK/lib/site/torchtext"
+[[ "$tt_code" == 1 ]] && grep -q '^FAIL  torchtext: .*not part of the default profile' "$MLI/doctor" \
+    && ok "ml-doctor fails when torchtext is present in the environment" || bad "torchtext detection (exit $tt_code)"
+ml_doctor FAKE_SPACY_MODELS=en_core_web_sm; spacy_code=$?
+[[ "$spacy_code" == 1 ]] && grep -q '^FAIL  spacy: .*a spaCy language model is installed: en_core_web_sm' "$MLI/doctor" \
+    && ok "ml-doctor fails when a spaCy language model is installed" || bad "spaCy model detection (exit $spacy_code)"
+
+ml_install --backend cu130 --reconfigure || bad "reinstall cu130 for diagnostics: $(cat "$MLI/out")"
+gpu_case() {  # label, expected status line, exit (0|1), env assignments...
+    local label="$1" line="$2" want="$3"
+    shift 3
+    ml_doctor FAKE_TORCH_BUILD_CUDA=13.0 "$@"
+    local code=$?
+    grep -q -- "$line" "$MLI/doctor" && [[ "$code" == "$want" ]] \
+        && ok "ml-doctor: $label" || bad "ml-doctor: $label (exit $code): $(grep -iE 'gpu|build' "$MLI/doctor")"
+}
+gpu_case "a CUDA backend with no GPU on the host is skipped, not passed" \
+    '^SKIP  gpu: no NVIDIA GPU on this host' 0
+gpu_case "a working GPU passes an allocation and a matrix product" \
+    '^PASS  gpu 0: Fake GPU (sm_86): allocation and 2x3 matrix product match the CPU result' 0 \
+    ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" FAKE_TORCH_CUDA_DEVICES=1
+gpu_case "a GPU torch cannot use fails" '^FAIL  gpu: torch cannot use the GPU' 1 \
+    ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" FAKE_TORCH_CUDA_DEVICES=0
+gpu_case "a device the build has no code for fails" '^FAIL  gpu 0: .*compute capability 7.5 is not in this build' 1 \
+    ML_NVIDIA_SMI="$MLS/smi-13.0/nvidia-smi" FAKE_TORCH_CUDA_DEVICES=1 FAKE_TORCH_CAPABILITY=7.5
+gpu_case "a CPU build of torch under a CUDA backend fails" '^FAIL  torch build: RuntimeError: backend expects CUDA 13.0' 1 \
+    FAKE_TORCH_BUILD_CUDA=
+
+JUPYTER_ARGS="$MLI/jupyter-args"
+ml_env FAKE_JUPYTER_ARGS="$JUPYTER_ARGS" ./profiles/ml/bin/ml-jupyter >"$MLI/out" 2>&1
+[[ "$(head -n 4 "$JUPYTER_ARGS" | tr '\n' ' ')" == 'lab --no-browser --ip=127.0.0.1 --port=8888 ' ]] \
+    && ! grep -q WARNING "$MLI/out" \
+    && ok "ml-jupyter runs JupyterLab on 127.0.0.1 without a browser by default" \
+    || bad "ml-jupyter defaults: $(tr '\n' ' ' < "$JUPYTER_ARGS")"
+ml_env FAKE_JUPYTER_ARGS="$JUPYTER_ARGS" ./profiles/ml/bin/ml-jupyter --ip 0.0.0.0 --port 9999 >"$MLI/out" 2>&1
+grep -q 'WARNING: Jupyter will listen on 0.0.0.0' "$MLI/out" && [[ "$(tail -n 4 "$JUPYTER_ARGS" | tr '\n' ' ')" == '--ip 0.0.0.0 --port 9999 ' ]] \
+    && ok "an explicit non-loopback address is passed through with a warning" || bad "ml-jupyter override"
+ml_env FAKE_JUPYTER_ARGS="$JUPYTER_ARGS" ML_JUPYTER_IP=0.0.0.0 ./profiles/ml/bin/ml-jupyter >"$MLI/out" 2>&1
+grep -q 'WARNING: Jupyter will listen on 0.0.0.0' "$MLI/out" && grep -qx -- '--ip=0.0.0.0' "$JUPYTER_ARGS" \
+    && ok "ML_JUPYTER_IP changes the address, with the same warning" || bad "ML_JUPYTER_IP"
+fi
+
+section "ML profile: the foundation stays lightweight"
+# The bootstrap copies profile files and installs the server-profile command,
+# and nothing else: no environment, state or ml command exists until a plan or
+# a person enables the profile.
+grep -qE 'ml-(env|status|doctor|preflight|jupyter)|ml-workbench|profiles/ml' \
+    server-bootstrap.sh lib/*.sh lib/bootstrap/*.sh \
+    && bad "foundation code names the ml profile's environment, state or commands" \
+    || ok "no foundation module creates the ml environment, its state or its commands"
+grep -q 'find "$source_root/profiles" -type f' lib/bootstrap/runtime.sh \
+    && grep -q 'ln -sfn "$destination/server-profile" /usr/local/bin/server-profile' lib/bootstrap/runtime.sh \
+    && ok "the runtime installs the profile files and server-profile, not an environment" \
+    || bad "runtime installation of profile files"
+BW="$TMP/bundle-vs-profile"; mkdir -p "$BW"
+if DEMO_MARK="$BW/mark" STATE_ROOT="$BW/ws/.setup-state" WORKSPACE_ROOT="$BW/ws" ./server-bundle-install \
+    --name ml --version 1.0.0 --archive "$FIX/demo-1.0.0.tar.gz" --sha256-file "$FIX/demo.sha256" >/dev/null 2>&1 \
+    && [[ -f "$BW/ws/.setup-state/bundles/ml/version" && ! -e "$BW/ws/.setup-state/profiles" && ! -e "$BW/ws/venvs" ]]; then
+    ok "a bundle, even one named ml, neither creates nor records the ml profile"
+else
+    bad "bundle installation touched the ml profile's paths"
+fi
+
 section "Runtime installation of the new files"
-for entry in 'server-secrets" "$stage/server-secrets' \
+for entry in 'server-secrets" "$stage/server-secrets' 'server-profile" "$stage/server-profile' \
     'lib/secrets-load.sh" "$stage/lib/secrets-load.sh' \
     'examples/secrets.env.example" "$stage/examples/secrets.env.example' \
     'examples/pi-models.example.json" "$stage/examples/pi-models.example.json'; do
@@ -2929,6 +4004,8 @@ for entry in 'server-secrets" "$stage/server-secrets' \
 done
 grep -q 'ln -sfn "$destination/server-secrets" /usr/local/bin/server-secrets' lib/bootstrap/runtime.sh \
     && ok "server-secrets is linked into PATH" || bad "server-secrets link"
+grep -q 'ln -sfn "$destination/server-profile" /usr/local/bin/server-profile' lib/bootstrap/runtime.sh \
+    && ok "server-profile is linked into PATH" || bad "server-profile link"
 grep -q 'STEP=secrets; bootstrap_secrets' server-bootstrap.sh \
     && grep -q 'STEP=pi-config; bootstrap_pi_config' server-bootstrap.sh \
     && ok "the entrypoint runs the new steps" || bad "entrypoint wiring"

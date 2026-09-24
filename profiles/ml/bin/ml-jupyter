@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Start JupyterLab from the ml-workbench environment, in the foreground, bound
+# to 127.0.0.1 unless told otherwise. Reach it from your machine through SSH:
+#
+#   ssh -N -L 8888:127.0.0.1:8888 root@<host>     then open the printed URL
+#
+#   ml-jupyter [JUPYTER_ARGS...]
+#
+# ML_JUPYTER_IP and ML_JUPYTER_PORT change the defaults; arguments are passed
+# to jupyter lab after them, so an explicit --ip or --port wins.
+set -Eeuo pipefail
+
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+# shellcheck source=../lib.sh
+source "$(dirname -- "$SELF")/../lib.sh"
+ml_load_config
+
+case "${1:-}" in
+    -h|--help) sed -n '2,11p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+ml_require_installed
+
+ip="${ML_JUPYTER_IP:-127.0.0.1}"
+port="${ML_JUPYTER_PORT:-8888}"
+# The address Jupyter will actually use: the last one given wins.
+argv=("$@")
+for (( i = 0; i < ${#argv[@]}; i++ )); do
+    case "${argv[i]}" in
+        --ip=*|--ServerApp.ip=*) ip="${argv[i]#*=}" ;;
+        --ip|--ServerApp.ip) ip="${argv[i + 1]:-$ip}" ;;
+    esac
+done
+case "$ip" in
+    127.0.0.1|localhost|::1) ;;
+    *) echo "WARNING: Jupyter will listen on $ip, reachable beyond this host; keep its token secret" >&2 ;;
+esac
+args=(lab --no-browser "--ip=${ML_JUPYTER_IP:-127.0.0.1}" "--port=$port")
+(( EUID != 0 )) || args+=(--allow-root)
+export VIRTUAL_ENV="$ML_ENV" PATH="$ML_ENV/bin:$PATH"
+exec "$ML_ENV/bin/jupyter" "${args[@]}" "$@"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One-command local provisioning: bootstrap first, acceptance second, bundles in plan order.
+# One-command local provisioning: bootstrap first, acceptance second, then any
+# enabled built-in profiles, then bundles in plan order.
 set -Eeuo pipefail
 
 PLAN="${PROVISION_PLAN:-./provision-plan.sh}"
@@ -14,6 +15,7 @@ The plan is a Bash data file that calls:
   register_bootstrap ARCHIVE SHA256_FILE [BOOTSTRAP_SCRIPT]
   register_bundle NAME VERSION ARCHIVE SHA256_FILE [INSTALLER] [INSTALLER_ARGS...]
   register_remote_bundle NAME VERSION HTTPS_URL SHA256 [INSTALLER] [INSTALLER_ARGS...]
+  enable_profile NAME [--backend BACKEND] [--reconfigure]
 USAGE
 }
 while (($#)); do
@@ -33,6 +35,7 @@ BOOTSTRAP_ARCHIVE=""; BOOTSTRAP_SHA_FILE=""; BOOTSTRAP_SCRIPT=server-bootstrap.s
 BUNDLE_NAMES=(); BUNDLE_VERSIONS=(); BUNDLE_ARCHIVES=(); BUNDLE_SHA_FILES=(); BUNDLE_INSTALLERS=()
 # Set only at the index of a remote entry: its pinned, lowercased SHA-256.
 BUNDLE_SHA256S=()
+PROFILE_NAMES=()
 
 resolve_plan_path() { [[ "$1" == /* ]] && realpath -m -- "$1" || realpath -m -- "$PLAN_DIR/$1"; }
 register_bootstrap() {
@@ -83,6 +86,35 @@ register_remote_bundle() {
     args_ref=("$@")
 }
 
+# A profile ships inside the bootstrap archive, so enabling one names no file,
+# URL or checksum of its own. Options are checked here, while the plan is read;
+# whether the archive carries the profile is checked right after extraction,
+# before the foundation is installed.
+enable_profile() {
+    (( $# >= 1 )) || { echo "ERROR: enable_profile needs a profile name" >&2; return 2; }
+    local name="$1" index="${#PROFILE_NAMES[@]}" existing
+    [[ "$name" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "ERROR: enable_profile: invalid profile name: $name" >&2; return 2; }
+    for existing in "${PROFILE_NAMES[@]}"; do
+        [[ "$existing" != "$name" ]] || { echo "ERROR: enable_profile $name: enabled twice" >&2; return 2; }
+    done
+    shift
+    local -a options=()
+    while (( $# )); do
+        case "$1" in
+            --backend)
+                [[ "${2:-}" =~ ^[a-z0-9]+$ ]] \
+                    || { echo "ERROR: enable_profile $name: --backend needs a backend name such as auto or cpu" >&2; return 2; }
+                options+=(--backend "$2"); shift 2 ;;
+            --reconfigure) options+=(--reconfigure); shift ;;
+            *) echo "ERROR: enable_profile $name: unknown option: $1" >&2; return 2 ;;
+        esac
+    done
+    PROFILE_NAMES+=("$name")
+    declare -g -a "PROFILE_ARGS_$index=()"
+    local -n options_ref="PROFILE_ARGS_$index"
+    options_ref=("${options[@]}")
+}
+
 # shellcheck source=/dev/null
 source "$PLAN"
 [[ -n "$BOOTSTRAP_ARCHIVE" ]] || { echo "ERROR: plan did not register a bootstrap" >&2; exit 1; }
@@ -105,6 +137,13 @@ if (( DRY_RUN )); then
             printf '  %d. %s %s <- %s\n' "$((i+1))" "${BUNDLE_NAMES[i]}" "${BUNDLE_VERSIONS[i]}" "${BUNDLE_ARCHIVES[i]}"
         fi
     done
+    if (( ${#PROFILE_NAMES[@]} )); then
+        printf 'Profiles: %d\n' "${#PROFILE_NAMES[@]}"
+        for i in "${!PROFILE_NAMES[@]}"; do
+            declare -n options_ref="PROFILE_ARGS_$i"
+            printf '  %d. %s\n' "$((i+1))" "${PROFILE_NAMES[i]}${options_ref[*]:+ ${options_ref[*]}}"
+        done
+    fi
     exit 0
 fi
 
@@ -156,6 +195,7 @@ ACCEPT_POLICY="${ACCEPT_POLICY:-reject-stop}"
 printf 'Provision plan: %s\n' "$PLAN"
 printf 'Bootstrap: %s\n' "$BOOTSTRAP_ARCHIVE"
 printf 'Bundles: %d\n' "${#BUNDLE_NAMES[@]}"
+(( ${#PROFILE_NAMES[@]} == 0 )) || printf 'Profiles: %s\n' "${PROFILE_NAMES[*]}"
 
 (( EUID == 0 )) || { echo "ERROR: run as root" >&2; exit 1; }
 STEP=verify-bootstrap
@@ -165,6 +205,10 @@ TEMP_DIR="$(mktemp -d)"
 extract_bootstrap "$BOOTSTRAP_ARCHIVE" "$TEMP_DIR"
 mapfile -d '' bootstrap_matches < <(find "$TEMP_DIR" -type f -name "$BOOTSTRAP_SCRIPT" -print0)
 (( ${#bootstrap_matches[@]} == 1 )) || { echo "ERROR: expected one $BOOTSTRAP_SCRIPT, found ${#bootstrap_matches[@]}" >&2; exit 1; }
+for name in "${PROFILE_NAMES[@]}"; do
+    [[ -f "$(dirname -- "${bootstrap_matches[0]}")/profiles/$name/install.sh" ]] \
+        || { echo "ERROR: this bootstrap archive has no '$name' profile; nothing was installed" >&2; exit 1; }
+done
 
 echo "==> Installing server foundation"
 STEP=bootstrap
@@ -181,6 +225,20 @@ if [[ "$ACCEPT_POLICY" != off ]]; then
     [[ "$ACCEPT_POLICY" != reject-stop || "$result" != 1 ]] || { echo "ERROR: server rejected; workloads were not installed" >&2; exit 1; }
     [[ "$ACCEPT_POLICY" != warn-stop || "$result" == 0 ]] || { echo "ERROR: acceptance was not clean; workloads were not installed" >&2; exit 1; }
 fi
+
+# Built-in profiles run after acceptance and before bundles, which may build on them.
+PROFILES_INSTALLED=0
+if (( ${#PROFILE_NAMES[@]} )); then
+    command -v server-profile >/dev/null 2>&1 || { echo "ERROR: bootstrap did not install server-profile" >&2; exit 1; }
+fi
+for i in "${!PROFILE_NAMES[@]}"; do
+    name="${PROFILE_NAMES[i]}"
+    declare -n options_ref="PROFILE_ARGS_$i"
+    STEP="profile:$name"
+    echo "==> Enabling profile $name"
+    server-profile install "$name" "${options_ref[@]}"
+    PROFILES_INSTALLED=$((PROFILES_INSTALLED + 1))
+done
 
 INSTALLED=0
 for i in "${!BUNDLE_NAMES[@]}"; do
@@ -206,6 +264,7 @@ STEP=finalize
     echo "STATUS: OK"
     echo "bootstrap: installed"
     echo "acceptance: $ACCEPTANCE"
+    echo "profiles_installed: $PROFILES_INSTALLED"
     echo "bundles_installed: $INSTALLED"
     echo "archives_deleted: $DELETE_ARCHIVES_AFTER_SUCCESS"
     echo "plan: $PLAN"

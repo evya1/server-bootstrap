@@ -120,14 +120,15 @@ when the declared specification requires a GPU.
 | Re-check the host against its declared specification | `server-accept` |
 | Install or repair the VS Code extension list | `server-vscode-extensions` |
 | Paste, inspect or edit your API keys | `server-secrets` |
+| Add the optional ML environment to a host that has the foundation | `server-profile install ml` |
 | Preview a plan without touching anything | `server-provision --plan … --dry-run` |
 
 > [!WARNING]
 > **Never execute a `provision-plan*.sh` file directly.** A plan is a data file,
-> not a program: it only calls `register_bootstrap`, `register_bundle`, and
-> `register_remote_bundle`, which exist for as long as `server-provision.sh` is
-> reading it. Always pass it with `--plan`. Running one on its own exits with
-> that reminder.
+> not a program: it only calls `register_bootstrap`, `register_bundle`,
+> `register_remote_bundle`, and `enable_profile`, which exist for as long as
+> `server-provision.sh` is reading it. Always pass it with `--plan`. Running
+> one on its own exits with that reminder.
 
 `server-bootstrap.sh` inside the archive is the inner foundation installer.
 `server-provision.sh` verifies the archive, unpacks it, runs that script, runs the
@@ -281,6 +282,7 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 | `server-accept` | Check CPU, RAM, disk, and any GPU against the required specification |
 | `server-vscode-extensions` | Install or repair the Remote-SSH extension manifest |
 | `server-secrets` | Store and inspect the API keys every login shell loads |
+| `server-profile` | Install an optional profile built into the release, such as `ml` |
 
 The release also ships `server-provision.sh` as a standalone file, for the first
 run before the bootstrap has installed any commands.
@@ -348,6 +350,7 @@ The old single-add-on environment variables remain supported by
 | --- | --- |
 | [QUICKSTART](docs/QUICKSTART.md) | First installation and reruns |
 | [PROVISIONING](docs/PROVISIONING.md) | Plan format, ordering, deletion, policies |
+| [ML-PROFILE](docs/ML-PROFILE.md) | The optional PyTorch, vision, and Jupyter environment |
 | [CONFIGURATION](docs/CONFIGURATION.md) | Bootstrap and acceptance variables |
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | Modules and responsibility boundaries |
 | [BUNDLE-CONTRACT](docs/BUNDLE-CONTRACT.md) | Requirements for future toolkit archives |
