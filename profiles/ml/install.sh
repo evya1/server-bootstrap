@@ -83,7 +83,7 @@ env_matches_lock() {
     [[ -L "$ML_ENV" && -x "$ML_ENV/bin/python" ]] || return 1
     [[ "$(readlink -f -- "$ML_ENV")" == "$INSTALLED_ENV" ]] || return 1
     uv="$(ml_uv)" || return 1
-    freeze="$("$uv" pip freeze --python "$ML_ENV/bin/python" 2>/dev/null)" || return 1
+    freeze="$(ml_uv_run "$uv" pip freeze --python "$ML_ENV/bin/python" 2>/dev/null)" || return 1
     [[ "$(ml_pins <<< "$freeze")" == "$(ml_pins "$ML_LOCK")" ]]
 }
 
@@ -214,17 +214,19 @@ cleanup_failed_build() {
 trap cleanup_failed_build EXIT
 
 sb_log "building backend $ML_BACKEND from $(basename -- "$ML_LOCK") into $NEW_ENV"
-"$UV" venv --python "$ML_PYTHON" --no-python-downloads --no-config "$NEW_ENV"
-# uv retries transient network errors itself; a hash mismatch is final.
-"$UV" pip sync --python "$NEW_ENV/bin/python" --require-hashes --no-build \
-    --strict --no-config "$ML_LOCK"
+ml_uv_run "$UV" venv --python "$ML_PYTHON" --no-python-downloads --no-config "$NEW_ENV"
+# The lock names PyPI; --torch-backend takes the PyTorch packages from the
+# backend's official index, as when the lock was resolved. uv retries transient
+# network errors itself; a hash mismatch is final.
+ml_uv_run "$UV" pip sync --python "$NEW_ENV/bin/python" --require-hashes --no-build \
+    --strict --no-config --torch-backend "$ML_BACKEND" "$ML_LOCK"
 
 # Verify before switching: the interpreter, the locked versions of the core
 # packages, and one small tensor operation.
 core_versions="$NEW_ENV.core-versions"; packages="$NEW_ENV.packages"
 trap 'cleanup_failed_build; rm -f -- "$core_versions" "$packages"' EXIT
 "$NEW_ENV/bin/python" "$ML_PROFILE_DIR/check.py" verify --lock "$ML_LOCK" > "$core_versions"
-"$UV" pip freeze --python "$NEW_ENV/bin/python" > "$packages"
+ml_uv_run "$UV" pip freeze --python "$NEW_ENV/bin/python" > "$packages"
 [[ "$(ml_pins "$packages")" == "$(ml_pins "$ML_LOCK")" ]] \
     || { sb_warn "the built environment does not match the lock exactly"; exit 1; }
 

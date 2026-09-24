@@ -6,7 +6,12 @@
 # cuda is the CUDA version a backend's PyTorch build targets: none for CPU. On
 # an NVIDIA host, `--backend auto` picks the locked row with the highest cuda
 # that is not above the CUDA version the driver reports in nvidia-smi's header.
-# Add a CUDA row only together with its lock, and validate it on real hardware.
+# Add a CUDA row only together with its lock, and validate it on real hardware
+# for every architecture the row lists.
+#
+# index is https://download.pytorch.org/whl/<backend>: uv's --torch-backend
+# takes the PyTorch packages (torch, torchvision, and triton for CUDA) from it,
+# both when locking and when installing.
 #
 # backend  cuda  architectures   index
 cpu        none  x86_64,aarch64  https://download.pytorch.org/whl/cpu

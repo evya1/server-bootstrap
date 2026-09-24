@@ -57,6 +57,13 @@ ml_uv() {
     fi
 }
 
+# Runs uv without the caller's index settings: the lock and --torch-backend
+# alone decide where each artifact comes from.
+ml_uv_run() {  # uv binary, arguments...
+    env -u UV_INDEX -u UV_DEFAULT_INDEX -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL \
+        -u UV_FIND_LINKS -u UV_NO_INDEX -u UV_INDEX_STRATEGY -u UV_TORCH_BACKEND "$@"
+}
+
 ml_python_version() {  # interpreter -> X.Y.Z
     "$1" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null
 }
@@ -247,7 +254,7 @@ ml_preflight() {
     fi
 
     if uv="$(ml_uv)" && [[ -n "$uv" && -x "$uv" ]]; then
-        ml_line PASS "uv: $uv ($("$uv" --version 2>/dev/null | awk 'NR == 1 { print $2 }'))"
+        ml_line PASS "uv: $uv ($(ml_uv_run "$uv" --version 2>/dev/null | awk 'NR == 1 { print $2 }'))"
     else
         ml_line FAIL "uv: not found; the bootstrap installs it unless INSTALL_UV=0"
         failed=1

@@ -7,14 +7,21 @@
 #                                  profiles/ml/locks/<backend>-<arch>.txt
 #   tools/ml-lock.sh --verify [--require-all]
 #                                  check every committed lock, offline
+#   tools/ml-lock.sh --check-artifacts [--backend NAME] [--arch x86_64|aarch64]
+#                                  download, into a temporary directory, the
+#                                  artifact each committed lock selects for its
+#                                  architecture, check its SHA-256 and its wheel
+#                                  tags; installs nothing
 #
 #   --dir DIR    operate on another profile directory (tests)
 #
-# Generation needs the pinned uv (lib/bootstrap/config.sh) and HTTPS access to
-# https://pypi.org and the backend's https://download.pytorch.org index. torch
-# and torchvision come from that official PyTorch index, everything else from
-# PyPI, and every artifact is recorded with its SHA-256. Nothing here runs in
-# CI or in the test suite with network access.
+# Generation and --check-artifacts need the pinned uv (lib/bootstrap/config.sh)
+# and HTTPS access to https://pypi.org and https://download.pytorch.org. uv's
+# --torch-backend routes the PyTorch packages (torch, torchvision, and triton
+# for CUDA) to the backend's official index,
+# https://download.pytorch.org/whl/<backend>, and everything else to PyPI; the
+# installer routes them the same way. Every artifact is recorded with its
+# SHA-256. Nothing here runs in CI or in the test suite with network access.
 #
 # --verify reports a declared backend and architecture without a lock as
 # pending and still exits 0, unless --require-all is given. Any committed lock
@@ -30,11 +37,12 @@ die() { printf 'ml-lock: %s\n' "$1" >&2; exit "${2:-1}"; }
 while (( $# )); do
     case "$1" in
         --verify) MODE=verify; shift ;;
+        --check-artifacts) MODE=artifacts; shift ;;
         --require-all) REQUIRE_ALL=1; shift ;;
         --backend) ONLY_BACKEND="${2:?--backend needs a name}"; shift 2 ;;
         --arch) ONLY_ARCH="${2:?--arch needs x86_64 or aarch64}"; shift 2 ;;
         --dir) PROFILE_DIR="$(cd -- "${2:?--dir needs a directory}" && pwd -P)"; shift 2 ;;
-        -h|--help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $1" 2 ;;
     esac
 done
@@ -52,6 +60,7 @@ import sys
 profile = pathlib.Path(os.environ["SB_ML_PROFILE_DIR"])
 require_all = os.environ["SB_ML_REQUIRE_ALL"] == "1"
 OFFICIAL = re.compile(r"^https://download\.pytorch\.org/whl/[a-z0-9]+$")
+TORCH_INDEX = "https://download.pytorch.org/whl"
 PYPI = "https://pypi.org/simple"
 HASH = re.compile(r"^--hash=sha256:[0-9a-f]{64}$")
 REQ = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9.+!_-]+)(?: \\)?$")
@@ -119,12 +128,21 @@ def check(path):
         bad("header cuda/torch-index disagree with backends.txt")
     if not OFFICIAL.match(index):
         bad(f"torch index is not an official https://download.pytorch.org/whl/ index: {index}")
-    if f"--index-url {PYPI}" not in lines or f"--extra-index-url {index}" not in lines:
-        bad("does not name PyPI and the backend's PyTorch index explicitly")
+    elif index != f"{TORCH_INDEX}/{backend}":
+        bad(f"torch index is not {TORCH_INDEX}/{backend}, the index uv's --torch-backend {backend} uses")
+    # PyPI is the only index a lock names. Another index line would reroute
+    # packages at install time, where uv's --torch-backend sends the PyTorch
+    # packages to the backend's index.
+    if f"--index-url {PYPI}" not in lines:
+        bad("does not name PyPI as its index")
 
     blocks, current = {}, None
     for number, line in enumerate(lines, 1):
-        if not line or line.startswith("#") or line in (f"--index-url {PYPI}", f"--extra-index-url {index}"):
+        if not line or line.startswith("#") or line == f"--index-url {PYPI}":
+            continue
+        if line.startswith("-"):
+            bad(f"line {number}: option not allowed in a lock: {line}")
+            current = None
             continue
         if line[0].isspace():
             text = line.strip().rstrip("\\").strip()
@@ -193,7 +211,7 @@ if [[ "$MODE" == verify ]]; then
     exit
 fi
 
-# --- Generation ------------------------------------------------------------------
+# --- Online modes: the pinned uv, and nothing from the caller that picks an index
 # shellcheck source=../lib/bootstrap/config.sh
 source "$ROOT/lib/bootstrap/config.sh"
 bootstrap_load_config
@@ -203,12 +221,80 @@ uv_version="$("$UV_BIN" --version 2>/dev/null | awk 'NR == 1 { print $2 }')"
 [[ "$uv_version" == "$UV_VERSION" ]] \
     || die "uv $UV_VERSION is pinned; $UV_BIN is ${uv_version:-unknown}"
 
+# The result depends on the command line and the indexes alone: no uv
+# configuration file, and no index, strategy or backend from the environment.
+uv_clean() {
+    env -u UV_INDEX -u UV_DEFAULT_INDEX -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL \
+        -u UV_FIND_LINKS -u UV_NO_INDEX -u UV_INDEX_STRATEGY -u UV_CONSTRAINT -u UV_OVERRIDE \
+        -u UV_TORCH_BACKEND "$UV_BIN" "$@"
+}
+
 cd "$PROFILE_DIR"
+
+if [[ "$MODE" == artifacts ]]; then
+    verify_locks >/dev/null || die "a committed lock fails verification; run tools/ml-lock.sh --verify"
+    checked=0
+    for lock in locks/*.txt; do
+        [[ -f "$lock" ]] || continue
+        stem="$(basename -- "$lock" .txt)"; backend="${stem%-*}"; arch="${stem##*-}"
+        [[ -z "$ONLY_BACKEND" || "$backend" == "$ONLY_BACKEND" ]] || continue
+        [[ -z "$ONLY_ARCH" || "$arch" == "$ONLY_ARCH" ]] || continue
+        target="$(mktemp -d)"
+        echo "==> downloading every artifact $lock selects for $arch"
+        # Routed as the installer routes it, downloaded afresh, refused unless
+        # its SHA-256 is in the lock, and unpacked into a scratch directory.
+        # Nothing is run.
+        if ! uv_clean pip install --target "$target" --python-version 3.12 \
+            --python-platform "$arch-manylinux_2_39" --torch-backend "$backend" \
+            --require-hashes --no-deps --no-build --no-config --no-cache --quiet -r "$lock"; then
+            rm -rf -- "$target"
+            die "$lock: an artifact is missing for $arch or does not match its SHA-256"
+        fi
+        # Every pin arrived as one wheel, built for this architecture or for any.
+        if ! python3 - "$target" "$arch" "$lock" <<'PY'
+import pathlib
+import re
+import sys
+
+target, arch, lock = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+norm = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+pins = {norm(m.group(1)) for m in re.finditer(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]*)==", pathlib.Path(lock).read_text())}
+seen, problems = set(), []
+for wheel in target.glob("*.dist-info/WHEEL"):
+    meta = (wheel.parent / "METADATA").read_text(errors="replace")
+    name = norm(re.search(r"(?m)^Name: *(\S+)", meta).group(1))
+    seen.add(name)
+    platforms = {tag.split("-")[-1] for tag in re.findall(r"(?m)^Tag: *(\S+)", wheel.read_text())}
+    if not platforms or not all(p == "any" or p.endswith("_" + arch) for p in platforms):
+        problems.append(f"{name}: wheel platform {', '.join(sorted(platforms)) or 'unknown'} is not {arch}")
+for name in sorted(pins - seen):
+    problems.append(f"{name}: pinned, but no wheel was installed")
+for problem in problems:
+    print(f"ml-lock: {lock}: {problem}", file=sys.stderr)
+if problems:
+    sys.exit(1)
+print(f"   {len(seen)} artifacts for {arch} downloaded, matched their SHA-256, and carry {arch} or pure-Python wheel tags")
+PY
+        then
+            rm -rf -- "$target"
+            die "$lock: the downloaded artifacts do not all fit $arch"
+        fi
+        rm -rf -- "$target"
+        checked=$((checked + 1))
+    done
+    (( checked > 0 )) || die "no committed lock matched"
+    exit 0
+fi
+
+# --- Generation ------------------------------------------------------------------
 mkdir -p locks
 written=0
 while read -r backend cuda arches index; do
     [[ -n "$backend" && "$backend" != \#* ]] || continue
     [[ -z "$ONLY_BACKEND" || "$backend" == "$ONLY_BACKEND" ]] || continue
+    # uv's --torch-backend derives the index from the backend's name.
+    [[ "$index" == "https://download.pytorch.org/whl/$backend" ]] \
+        || die "backends.txt: $backend must use https://download.pytorch.org/whl/$backend, not $index"
     IFS=, read -r -a arch_list <<< "$arches"
     for arch in "${arch_list[@]}"; do
         [[ -z "$ONLY_ARCH" || "$arch" == "$ONLY_ARCH" ]] || continue
@@ -216,14 +302,10 @@ while read -r backend cuda arches index; do
         # Staged under its final name, so the validator sees exactly what lands.
         body="$(mktemp)"; stage_dir="$(mktemp -d -p locks .staging.XXXXXX)"
         staged="$stage_dir/$backend-$arch.txt"
-        echo "==> resolving $target from $index"
-        # Resolution depends on this command line and the indexes alone: no uv
-        # configuration file and no index from the caller's environment.
-        env -u UV_INDEX -u UV_DEFAULT_INDEX -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL \
-            -u UV_FIND_LINKS -u UV_NO_INDEX -u UV_INDEX_STRATEGY -u UV_CONSTRAINT -u UV_OVERRIDE \
-            "$UV_BIN" pip compile requirements.in \
+        echo "==> resolving $target: PyTorch packages from $index, everything else from PyPI"
+        uv_clean pip compile requirements.in \
             --python-version 3.12 --python-platform "$arch-manylinux_2_39" \
-            --index "$index" --default-index https://pypi.org/simple \
+            --torch-backend "$backend" --default-index https://pypi.org/simple \
             --generate-hashes --emit-index-url --emit-index-annotation --no-build --no-config \
             --custom-compile-command "tools/ml-lock.sh --backend $backend --arch $arch" \
             --quiet --output-file "$body"

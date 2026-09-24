@@ -42,11 +42,17 @@ profiles/ml/locks/<backend>-<x86_64|aarch64>.txt
 ```
 
 A lock pins every package to an exact version and records a SHA-256 for each
-of its artifacts. `torch` and `torchvision` come from the backend's official
-PyTorch index, `https://download.pytorch.org/whl/<backend>`; everything else
-comes from PyPI. The installer runs `uv pip sync --require-hashes --no-build`,
-so an artifact whose hash is not in the lock is refused and nothing is built
-from source.
+of its artifacts. The PyTorch packages (`torch`, `torchvision`, and `triton`
+for CUDA) come from the backend's official PyTorch index,
+`https://download.pytorch.org/whl/<backend>`; everything else, including
+NVIDIA's CUDA libraries, comes from PyPI. uv's `--torch-backend <backend>`
+does this routing, both when the lock is resolved and when it is installed, so
+the lock itself names only PyPI. The PyTorch index also carries old copies of
+some PyPI packages, such as `requests` and `certifi`; they are never used. The
+installer runs `uv pip sync --require-hashes --no-build --torch-backend
+<backend>`, so an artifact whose hash is not in the lock is refused and nothing
+is built from source. uv index settings in the caller's environment, such as
+`UV_EXTRA_INDEX_URL`, are ignored.
 
 A backend is offered only once its lock is committed. `backends.txt` declares
 the backends that may be locked. `tools/ml-lock.sh --verify` checks every
@@ -149,13 +155,25 @@ above as they do for the foundation.
 tools/ml-lock.sh                     # every backend and architecture in backends.txt
 tools/ml-lock.sh --backend cpu --arch x86_64
 tools/ml-lock.sh --verify            # offline; --require-all also fails on a pending backend
+tools/ml-lock.sh --check-artifacts   # online; downloads each lock's artifacts for its architecture
 ```
 
-Generation needs the pinned uv and HTTPS access to `pypi.org` and
-`download.pytorch.org`. It resolves `requirements.in` for Python 3.12 on
-`manylinux_2_39`, which Ubuntu 24.04 satisfies. A lock that fails verification
-is not written. To add a CUDA backend, add its row to `backends.txt`, generate
-its locks, and validate it on a real NVIDIA host before listing it.
+Generation and `--check-artifacts` need the pinned uv (set `SB_UV` to its path
+if it is not first on `PATH`) and HTTPS access to `pypi.org` and
+`download.pytorch.org`. Generation resolves `requirements.in` for Python 3.12
+on `manylinux_2_39`, which Ubuntu 24.04 satisfies. A lock that fails
+verification is not written. A lock records the hashes of every file of each
+pinned version, for all platforms, so `--verify` cannot tell whether an
+architecture is covered. `--check-artifacts` answers that: it downloads, into a
+scratch directory, the file each pin selects for the lock's architecture,
+routed as the installer routes it, and fails unless every one matches a hash
+in the lock and carries that architecture's or a pure-Python wheel tag.
+Nothing is installed or run.
+
+A `backends.txt` index must be `https://download.pytorch.org/whl/<backend>`,
+the index uv's `--torch-backend` uses. To add a CUDA backend, add its row,
+generate its locks, run `--check-artifacts`, and validate it with a real
+install and `ml-doctor` on an NVIDIA host for each architecture it lists.
 
 ## Language tooling
 
