@@ -15,3 +15,4 @@
 #
 # backend  cuda  architectures   index
 cpu        none  x86_64,aarch64  https://download.pytorch.org/whl/cpu
+cu130      13.0  x86_64          https://download.pytorch.org/whl/cu130

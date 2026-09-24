@@ -39,47 +39,57 @@
 
 [#58]: https://github.com/evya1/server-bootstrap/issues/58
 
-- **An optional, built-in `ml` profile: installer, commands and lock tooling,
-  with no backend locked yet.** A provision plan can declare
+- **An optional, built-in `ml` profile, locked for CPU on x86-64 and ARM64
+  and for CUDA 13.0 on x86-64.** A provision plan can declare
   `enable_profile "ml" --backend auto`, and a host that has the foundation can
   run `server-profile install ml`. The profile builds one Python 3.12
-  environment at `/workspace/venvs/ml-workbench` from a frozen lock. The lock
-  pins every package with a SHA-256 and takes `torch` and `torchvision` from
-  the backend's official `https://download.pytorch.org/whl/<backend>` index.
-  It installs with `uv pip sync --require-hashes --no-build`. Each build
-  happens beside the active environment, is verified, and is switched in with
-  one rename. A failure leaves the previous environment, its commands and the
-  recorded state unchanged, and a repeat run rebuilds nothing.
-  `--backend auto` never falls back to CPU on a host with NVIDIA hardware,
-  and changing backend needs `--reconfigure`. State under
-  `/workspace/.setup-state/profiles/ml` records the repository version,
+  environment at `/workspace/venvs/ml-workbench` from a frozen lock:
+  `profiles/ml/locks/cpu-x86_64.txt`, `cpu-aarch64.txt` and
+  `cu130-x86_64.txt`, for `torch` 2.14.0 and `torchvision` 0.29.0. Each lock
+  pins every package with a SHA-256. uv's `--torch-backend` takes the PyTorch
+  packages from the backend's official
+  `https://download.pytorch.org/whl/<backend>` index and everything else from
+  PyPI, both when locking and when installing, so the PyTorch index's old
+  copies of packages such as `requests`, `urllib3` and `certifi` are never
+  used. It installs with `uv pip sync --require-hashes --no-build` and ignores
+  uv index settings in the caller's environment. Each build happens beside the
+  active environment, is verified, and is switched in with one rename. A
+  failure before the switch leaves the previous environment, its commands and
+  the recorded state unchanged. A failure after it, while the state or the
+  command links are written, switches back and restores them, and a failed
+  first install leaves nothing installed. A repeat run rebuilds nothing.
+  `--backend auto` chooses `cpu` without an NVIDIA GPU and `cu130` with a
+  driver that reports CUDA 13.0 or newer, and never falls back to CPU on a
+  host with NVIDIA hardware. Changing backend needs `--reconfigure`. State
+  under `/workspace/.setup-state/profiles/ml` records the repository version,
   backend, lock digest and core package versions. `ml-env`, `ml-status`,
   `ml-doctor`, `ml-preflight` and `ml-jupyter` are linked only once the
   profile is installed. `ml-jupyter` binds to `127.0.0.1`, and nothing starts
   it. The foundation itself only copies the profile files and installs
-  `server-profile`. `tools/ml-lock.sh` generates the locks and verifies them
-  offline. No lock is committed yet. `backends.txt` declares the CPU backend
-  for x86-64 and ARM64, but until those locks are generated no backend is
-  offered and the profile installs nothing. No CUDA backend is declared.
-  ([#54][])
+  `server-profile`. `tools/ml-lock.sh` generates the locks, verifies them
+  offline, and with `--check-artifacts` downloads each lock's files for its
+  architecture and checks their hashes and wheel tags. Validated by a real
+  CPU install on x86-64 and a real `cu130` install on a GeForce RTX 3060 with
+  driver 595.91.07. The ARM64 lock's artifacts were downloaded and verified,
+  but it has not been run on ARM64 hardware, and the `cu130` build has not
+  been run on Hopper or Blackwell GPUs. ([#54][])
 
 [#54]: https://github.com/evya1/server-bootstrap/issues/54
 
-- **Language and transformer tooling in the `ml` profile, with its locks still
-  pending.** `profiles/ml/requirements.in` now names `transformers`,
-  `datasets`, `tokenizers`, `sentencepiece`, `accelerate`, `safetensors`,
-  `huggingface-hub`, `evaluate`, `sacremoses` and the `spacy` library. The
-  existing lock verifier requires every lock to pin each of them with a
-  SHA-256. `spacy` is provisional: it stays only if it resolves cleanly in
-  every lock without changing the locked PyTorch build. `ml-doctor` adds a
+- **Language and transformer tooling in the `ml` profile.** Every lock pins
+  `transformers` 5.17.0, `datasets` 5.0.1, `tokenizers` 0.23.2,
+  `sentencepiece` 0.2.2, `accelerate` 1.15.0, `safetensors` 0.8.0,
+  `huggingface-hub` 1.33.0, `evaluate` 0.4.6, `sacremoses` 0.2.0 and the
+  `spacy` 3.8.16 library, each with a SHA-256; the lock verifier requires
+  them. `spacy` resolves in every lock without changing the PyTorch build, so
+  it stays; no spaCy language model is included. `ml-doctor` adds a
   local-only smoke test on files it creates in a temporary directory: a
   tokenizer and configuration round trip through `transformers`, random
   one-layer weights saved as safetensors and reloaded, SentencePiece, Moses,
   an in-memory dataset, and a blank spaCy pipeline. It also fails if
   `torchtext` or a spaCy language model is installed. Nothing downloads a
   model, tokenizer or dataset. `docs/ML-PROFILE.md` documents the cache
-  locations and the `torchtext` compatibility boundary. No lock containing
-  these packages exists yet. ([#55][])
+  locations and the `torchtext` compatibility boundary. ([#55][])
 
 [#55]: https://github.com/evya1/server-bootstrap/issues/55
 

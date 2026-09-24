@@ -57,6 +57,18 @@ is built from source. uv index settings in the caller's environment, such as
 A backend is offered only once its lock is committed. `backends.txt` declares
 the backends that may be locked. `tools/ml-lock.sh --verify` checks every
 committed lock offline and lists any declared backend that has no lock yet.
+These locks are committed, for `torch` 2.14.0 and `torchvision` 0.29.0 on
+Python 3.12:
+
+| Backend | Architectures | Needs | Validated on |
+| --- | --- | --- | --- |
+| `cpu` | x86-64, ARM64 | nothing | x86-64: installed and diagnosed. ARM64: every artifact downloaded and hash-checked; not run on ARM64 hardware |
+| `cu130` | x86-64 | an NVIDIA driver that reports CUDA 13.0 or newer; a GPU of compute capability 7.5 or newer | GeForce RTX 3060 (compute capability 8.6), driver 595.91.07 |
+
+The `cu130` build also carries code for Hopper and Blackwell GPUs (`sm_90`,
+`sm_100`, `sm_120`). It has not been run on them, and passing on the RTX 3060
+says nothing about those GPUs; run `ml-doctor` on such a host before relying
+on it. No CUDA backend is locked for ARM64.
 
 `--backend auto` chooses:
 
