@@ -261,7 +261,8 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 - The bootstrap never installs or replaces the NVIDIA driver.
 - Release archives are byte-reproducible and verified twice on every build.
 - Release staging trees and every extracted archive are secret-scanned, and
-  `release/dist` is scanned again immediately before upload.
+  `release/dist` is scanned again immediately before upload. It must then hold
+  exactly the expected assets, each verified, or nothing is published.
 - Security fixes are additive: published history is never rewritten, so the
   complete history stays available to the scanner. See [SECURITY.md](SECURITY.md).
 

@@ -40,6 +40,9 @@ jobs:
           CANDIDATE_TAG: ${{ github.ref_name }}
         run: bash tools/release-preflight.sh --tag "$CANDIDATE_TAG"
 
+      # The globs below are only as narrow as release/dist: the preflight's
+      # last step, release/release-assets.sh verify, fails unless that
+      # directory holds exactly the expected, verified assets.
       - name: Publish assets
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:

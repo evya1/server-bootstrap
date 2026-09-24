@@ -1000,6 +1000,7 @@ checks the candidate tag|tools/check-release-tag.sh
 resolves the pinned scanner|tools/gitleaks.sh" path
 runs the reproducible build|release/build-release.sh
 scans the artifacts before upload|scan-artifacts release/dist
+verifies the exact release assets last|release/release-assets.sh" verify release/dist
 PREFLIGHT
 (( preflight_drift == 0 )) && ok "the release preflight still runs every pre-publication gate"
 
@@ -3991,6 +3992,173 @@ if DEMO_MARK="$BW/mark" STATE_ROOT="$BW/ws/.setup-state" WORKSPACE_ROOT="$BW/ws"
     ok "a bundle, even one named ml, neither creates nor records the ml profile"
 else
     bad "bundle installation touched the ml profile's paths"
+fi
+
+section "Release assets: the ml profile ships in the main archives"
+# The profile, its commands and its locks are part of the one release, never an
+# artifact of their own. release/release-assets.sh is the single definition of
+# what release/dist holds; the build ends with its verify, and the preflight
+# runs it again as the last step before release.yml uploads by glob.
+RA_VERSION="$(tr -d '[:space:]' < VERSION)"
+if ra_required="$(bash release/release-assets.sh required 2>&1)"; then
+    ra_locks="$(grep -c '^profiles/ml/locks/' <<< "$ra_required")"
+    [[ "$ra_locks" == "$(awk '!/^#/ && NF { n += split($3, a, ",") } END { print n }' profiles/ml/backends.txt)" ]] \
+        && ok "every file the ml profile needs and all $ra_locks declared locks are in the tracked release set" \
+        || bad "release-assets required lists $ra_locks locks, backends.txt declares others"
+else
+    bad "release-assets required: $ra_required"
+fi
+ra_fx="$(release_build_fixture)"
+sed -i '/  profiles\/ml\/locks\/cu130-x86_64.txt$/d' "$ra_fx/checksums/SHA256SUMS"
+bash release/release-assets.sh --root "$ra_fx" required >/dev/null 2>"$TMP/ra-required.err" \
+    && bad "release-assets required accepted a release set without a declared lock" \
+    || { grep -q 'not in the release set: profiles/ml/locks/cu130-x86_64.txt' "$TMP/ra-required.err" \
+        && ok "a release set missing a declared lock is refused" || bad "missing lock: $(cat "$TMP/ra-required.err")"; }
+# The build itself refuses to package a declared backend without its lock.
+rm -f "$ra_fx/profiles/ml/locks/cu130-x86_64.txt"
+ra_out="$(release_build "$ra_fx")" && ra_rc=0 || ra_rc=$?
+(( ra_rc != 0 )) && grep -qF 'cu130-x86_64.txt is declared in backends.txt but not locked yet' <<< "$ra_out" \
+    && [[ ! -e "$ra_fx/release/dist/server-bootstrap-$RA_VERSION.tar.gz" ]] \
+    && ok "the release build stops before packaging when a declared lock is missing" \
+    || bad "the build packaged a release without a declared lock (rc=$ra_rc)"
+
+# One real build (scans off, suite skipped, as above) for everything below.
+ra_fx="$(release_build_fixture)"
+ra_out="$(release_build "$ra_fx")" && ra_rc=0 || ra_rc=$?
+RA_DIST="$ra_fx/release/dist"
+if (( ra_rc != 0 )); then
+    bad "fixture release build: $(tail -5 <<< "$ra_out")"
+else
+    grep -qF "release-assets: dist holds exactly the $(bash release/release-assets.sh built | wc -l) built files; $(bash release/release-assets.sh upload | wc -l) are published." <<< "$ra_out" \
+        && ok "the build ends by verifying release/dist holds exactly the release assets" \
+        || bad "the build did not verify its assets: $(tail -3 <<< "$ra_out")"
+    # Each main archive, listed with its own tool, carries every required file.
+    ra_missing=""
+    ra_list() {  # archive -> member paths without the top-level directory
+        case "$1" in
+            *.tar.gz) tar -tzf "$1" ;; *.tar) tar -tf "$1" ;; *.zip) unzip -Z1 "$1" ;;
+        esac | sed 's|^[^/]*/||'
+    }
+    for ra_archive in "server-bootstrap-$RA_VERSION.tar" "server-bootstrap-$RA_VERSION.tar.gz" \
+        "server-bootstrap-$RA_VERSION.zip" "server-bootstrap-$RA_VERSION-source.zip"; do
+        ra_members="$(ra_list "$RA_DIST/$ra_archive")"
+        while IFS= read -r ra_file; do
+            grep -qxF -- "$ra_file" <<< "$ra_members" || ra_missing+=" $ra_archive:$ra_file"
+        done <<< "$ra_required"
+    done
+    [[ -z "$ra_missing" ]] \
+        && ok "each of the four main archives carries the ml profile, its commands and its locks" \
+        || bad "archives miss:$ra_missing"
+    # The reproducibility gate compared archives carrying the profile.
+    [[ "$(ra_list "$tz_a/release/dist/server-bootstrap-$RA_VERSION.tar.gz" | grep -c '^profiles/ml/locks/')" == "$ra_locks" ]] \
+        && ok "the archives the reproducibility gate compared carry the ml profile and its locks" \
+        || bad "the reproducibility fixtures did not include the ml locks"
+    # The manifest's lock digests are those of the shipped locks.
+    ra_manifest="$RA_DIST/server-bootstrap-$RA_VERSION-release-manifest.json"
+    if python3 - "$ra_manifest" "$RA_DIST/server-bootstrap-$RA_VERSION.tar.gz" "$RA_VERSION" <<'PY'
+import hashlib, json, pathlib, sys, tarfile
+manifest, archive, version = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+entries = manifest["profiles"]["ml"]["backends"]
+assert entries, "no backends"
+with tarfile.open(archive) as tar:
+    for entry in entries:
+        member = tar.extractfile(f"server-bootstrap-{version}/{entry['lock']}").read()
+        tracked = pathlib.Path(entry["lock"]).read_bytes()
+        assert entry["lock_sha256"] == hashlib.sha256(member).hexdigest() == hashlib.sha256(tracked).hexdigest(), entry
+rows = set()
+for line in open("profiles/ml/backends.txt"):
+    fields = line.split("#")[0].split()
+    if fields:
+        rows |= {(fields[0], arch) for arch in fields[2].split(",")}
+assert {(e["backend"], e["arch"]) for e in entries} == rows, "backends differ from backends.txt"
+assert "server-profile" in manifest["entrypoints"]
+assert manifest["tests"] == "skipped" and manifest["release_scan"] == "skipped" and manifest["reproducible"] is True
+PY
+    then
+        ok "the release manifest records every shipped lock's sha256, matching the archive and the tree"
+    else
+        bad "release manifest profiles do not match the shipped locks"
+    fi
+    # Each standalone file is the tracked file, byte for byte, as in each archive.
+    ra_standalone=""
+    ra_tgz="$(mktemp -d "$TMP/ra-x.XXXXXX")"; ra_zip="$(mktemp -d "$TMP/ra-x.XXXXXX")"
+    tar -xzf "$RA_DIST/server-bootstrap-$RA_VERSION.tar.gz" -C "$ra_tgz"
+    unzip -q "$RA_DIST/server-bootstrap-$RA_VERSION.zip" -d "$ra_zip"
+    while IFS=$'\t' read -r ra_name ra_path _; do
+        cmp -s "$RA_DIST/$ra_name" "$ra_path" \
+            && cmp -s "$RA_DIST/$ra_name" "$ra_tgz/server-bootstrap-$RA_VERSION/$ra_path" \
+            && cmp -s "$RA_DIST/$ra_name" "$ra_zip/server-bootstrap-$RA_VERSION/$ra_path" \
+            || ra_standalone+=" $ra_name"
+    done < <(bash release/release-assets.sh standalone)
+    [[ -z "$ra_standalone" ]] \
+        && ok "every standalone file is byte-identical to its tracked copy and to the copy inside each archive" \
+        || bad "standalone files differ from their tracked or archived copies:$ra_standalone"
+    # No separately versioned ML artifact is built or published: the only
+    # published name that mentions ml is a plan file.
+    [[ -z "$(bash release/release-assets.sh built | grep -i ml | grep -vx 'provision-plan\.ml\.example\.sh')" ]] \
+        && ok "no ML archive, sidecar or manifest of its own is built or published" \
+        || bad "the release asset list names an ML artifact of its own"
+
+    # Every upload glob in release.yml matches published assets only, and
+    # together they publish every one. A glob is broader than the list: the
+    # tar.gz pattern also matches a separate server-bootstrap-ml-*.tar.gz, which
+    # is why release/dist itself must be exact.
+    ra_globs="$(grep -vE '^[[:space:]]*#' .github/workflows/release.yml \
+        | awk '/files: \|/{f=1; next} f && /^[[:space:]]+release\/dist\//{print $1; next} f{f=0}' | sed 's|^release/dist/||')"
+    ra_upload="$(bash release/release-assets.sh upload | LC_ALL=C sort)"
+    ra_matched=""; ra_glob_drift=0
+    while IFS= read -r ra_name; do
+        ra_hit=0
+        while IFS= read -r ra_glob; do
+            # shellcheck disable=SC2053  # the right-hand side is a glob on purpose
+            [[ -n "$ra_glob" && "$ra_name" == $ra_glob ]] && ra_hit=1
+        done <<< "$ra_globs"
+        if (( ra_hit )); then
+            ra_matched+="$ra_name"$'\n'
+            grep -qxF -- "$ra_name" <<< "$ra_upload" || { bad "release.yml would upload $ra_name, which is not published"; ra_glob_drift=1; }
+        fi
+    done < <(bash release/release-assets.sh built)
+    [[ "$(LC_ALL=C sort <<< "${ra_matched%$'\n'}")" == "$ra_upload" ]] \
+        || { bad "release.yml's globs do not cover exactly the published assets"; ra_glob_drift=1; }
+    # shellcheck disable=SC2053
+    grep -qx 'server-bootstrap-\*.tar.gz' <<< "$ra_globs" && [[ "server-bootstrap-ml-1.0.0.tar.gz" == server-bootstrap-*.tar.gz ]] \
+        || { bad "the glob this gate exists for has changed; revisit the fixture below"; ra_glob_drift=1; }
+    (( ra_glob_drift == 0 )) && ok "release.yml's upload globs match the published assets and nothing else release/dist holds"
+
+    # Rejection fixtures: a copy of the verified dist, one defect each.
+    ra_reject() {  # label, expected finding, then a shell mutation run inside the copy
+        local label="$1" finding="$2" copy out
+        copy="$(mktemp -d "$TMP/ra-dist.XXXXXX")"
+        cp -a "$RA_DIST/." "$copy/"
+        ( cd "$copy" && eval "$3" )
+        out="$(bash release/release-assets.sh --root "$ra_fx" verify "$copy" 2>&1)" \
+            && { bad "release-assets accepted $label"; return; }
+        grep -qF -- "$finding" <<< "$out" && ok "release-assets rejects $label" \
+            || bad "release-assets rejected $label, but not with '$finding': $out"
+    }
+    bash release/release-assets.sh --root "$ra_fx" verify "$RA_DIST" >/dev/null \
+        && ok "release-assets accepts the verified dist" || bad "release-assets rejects a clean build"
+    ra_reject "a separate ML archive the upload glob would publish" \
+        "unexpected file, not a release asset: server-bootstrap-ml-1.0.0.tar.gz" \
+        'printf x > server-bootstrap-ml-1.0.0.tar.gz; sha256sum server-bootstrap-ml-1.0.0.tar.gz > server-bootstrap-ml-1.0.0.tar.gz.sha256'
+    ra_reject "an unverified asset whose sidecar does not match" \
+        "server-bootstrap-$RA_VERSION.tar.gz.sha256 does not record the sha256" \
+        "printf '%064d  server-bootstrap-$RA_VERSION.tar.gz\n' 0 > server-bootstrap-$RA_VERSION.tar.gz.sha256"
+    ra_reject "an archive changed after the manifest was written" \
+        "zip_sha256 does not match server-bootstrap-$RA_VERSION.zip" \
+        "printf TAMPER >> server-bootstrap-$RA_VERSION.zip"
+    ra_reject "a standalone example that differs from the tracked file" \
+        "provision-plan.example.sh is not byte-identical to examples/provision-plan.example.sh" \
+        "printf 'register_bundle other 1.0.0 ./o.tar.gz ./o.sha256\n' >> provision-plan.example.sh"
+    ra_reject "a manifest lock digest that is not the shipped lock's" \
+        "profiles do not match the backends and locks" \
+        "sed -i 's/\"lock_sha256\": \"[0-9a-f]*\"/\"lock_sha256\": \"$(printf '%064d' 0)\"/' server-bootstrap-$RA_VERSION-release-manifest.json"
+    ra_reject "a missing published asset" "missing release asset: provision-plan.whisper.example.sh" \
+        "rm provision-plan.whisper.example.sh"
+    ra_reject "an asset that is a symlink" "not a regular file: provision-plan.example.sh" \
+        "rm provision-plan.example.sh; ln -s ../../examples/provision-plan.example.sh provision-plan.example.sh"
+    ra_reject "a source zip carrying a file outside the release" "not part of the release: ml-extra/model.bin" \
+        "python3 -c 'import zipfile,sys; z = zipfile.ZipFile(sys.argv[1], \"a\"); z.writestr(\"server-bootstrap/ml-extra/model.bin\", b\"x\"); z.close()' server-bootstrap-$RA_VERSION-source.zip"
 fi
 
 section "Runtime installation of the new files"

@@ -4,6 +4,28 @@
 
 ### Added
 
+- **The `ml` profile is covered by the main release gates.** It ships only
+  inside the existing archives: every archive carries the profile, its
+  commands and every lock `backends.txt` declares, and the build stops before
+  packaging if a declared lock is missing (`tools/ml-lock.sh --verify
+  --require-all`). The release manifest adds `server-profile` to its
+  entrypoints and a `profiles` object listing each locked backend,
+  architecture, CUDA version, PyTorch index and lock SHA-256, taken from the
+  shipped files. The new `release/release-assets.sh` defines the published
+  assets once. The build ends with its `verify`, and the release preflight
+  runs it again after the final artifact scan. It fails unless `release/dist`
+  holds exactly the expected files. Each sidecar and the manifest must match
+  the archives. The tar, tar.gz, zip and source zip must each hold exactly the
+  release file set, byte for byte. The standalone copies must be identical to
+  their tracked files, and the manifest's lock digests must be those of the
+  shipped locks. `release.yml` uploads by glob, and
+  `server-bootstrap-*.tar.gz` would also match a separate
+  `server-bootstrap-ml-*.tar.gz`. The exact check is what keeps such a file,
+  or any unverified one, from being published. No separate ML archive,
+  sidecar or release is built. ([#56][])
+
+[#56]: https://github.com/evya1/server-bootstrap/issues/56
+
 - **`AGENTS.md`** — repository rules for coding agents: supported scope, entry
   points, security boundaries, release invariants, the validation commands, and
   the actions that need owner approval. It links to the existing guides rather
