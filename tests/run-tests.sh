@@ -4161,6 +4161,164 @@ PY
         "python3 -c 'import zipfile,sys; z = zipfile.ZipFile(sys.argv[1], \"a\"); z.writestr(\"server-bootstrap/ml-extra/model.bin\", b\"x\"); z.close()' server-bootstrap-$RA_VERSION-source.zip"
 fi
 
+section "ML example plan"
+# examples/provision-plan.ml.example.sh installs one main release and enables
+# the ml profile inside it. It is data: the checks below read and run it only
+# through server-provision.sh.
+ML_EXAMPLE=examples/provision-plan.ml.example.sh
+ml_plan_body="$(grep -vE '^[[:space:]]*(#|$)' "$ML_EXAMPLE")"
+ml_example_drift=0
+[[ "$(grep -c '^register_bootstrap' <<< "$ml_plan_body")" == 1 ]] \
+    || { bad "the ml example must register exactly one bootstrap"; ml_example_drift=1; }
+grep -qE 'https?://|register_bundle|register_remote_bundle|[0-9a-fA-F]{64}' <<< "$ml_plan_body" \
+    && { bad "the ml example names a URL, a bundle or a checksum of its own"; ml_example_drift=1; }
+[[ "$(grep -oE '[A-Za-z0-9._-]+\.(tar\.gz|tgz|zip|sha256|whl)' <<< "$ml_plan_body" | LC_ALL=C sort -u | tr '\n' ' ')" \
+    == "server-bootstrap-$RA_VERSION.tar.gz server-bootstrap-$RA_VERSION.tar.gz.sha256 " ]] \
+    || { bad "the ml example names an archive other than server-bootstrap-$RA_VERSION.tar.gz"; ml_example_drift=1; }
+grep -qE '(ML|PROFILE)_?[A-Z_]*VERSION|--version' <<< "$ml_plan_body" \
+    && { bad "the ml example carries a profile version of its own"; ml_example_drift=1; }
+[[ "$(grep -E '^enable_profile' <<< "$ml_plan_body")" == 'enable_profile "ml" --backend auto' ]] \
+    || { bad "the ml example does not enable ml with --backend auto"; ml_example_drift=1; }
+grep -qx 'export DELETE_ARCHIVES_AFTER_SUCCESS=0' <<< "$ml_plan_body" \
+    || { bad "the ml example deletes its archive, so repeating it would fail"; ml_example_drift=1; }
+grep -qF 'enable_profile "ml" --backend cpu --reconfigure' "$ML_EXAMPLE" \
+    && grep -qF -- '--reconfigure' docs/ML-PROFILE.md \
+    || { bad "the ml example or its guide does not document --reconfigure for a backend change"; ml_example_drift=1; }
+(( ml_example_drift == 0 )) \
+    && ok "the ml example installs one main release and its ml profile, with no ML URL, version, archive or checksum"
+bash release/release-assets.sh standalone | grep -qxF $'provision-plan.ml.example.sh\texamples/provision-plan.ml.example.sh\t0644' \
+    && bash release/release-assets.sh required | grep -qxF "$ML_EXAMPLE" \
+    && grep -qxF '            release/dist/provision-plan.ml.example.sh' .github/workflows/release.yml \
+    && ok "the ml example is published beside the archives and required inside each of them" \
+    || bad "the ml example is not published, uploaded and required in the archives"
+grep -qE '^[[:space:]]*enable_profile' examples/provision-plan.example.sh \
+    && bad "the foundation-only example enables a profile" \
+    || ok "the minimal example plan still installs the foundation without the ml profile"
+
+# A dry run with every network client replaced by a recorder that fails.
+MLX="$TMP/ml-example"; mkdir -p "$MLX/plan" "$MLX/nonet"
+cp "$ML_EXAMPLE" "$MLX/plan/"
+for ml_client in curl wget git uv pip pip3 python3 nc ssh; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 1\n' "$ml_client" "$MLX" > "$MLX/nonet/$ml_client"
+    chmod 0755 "$MLX/nonet/$ml_client"
+done
+mlx_out="$(PATH="$MLX/nonet:/usr/bin:/bin" WORKSPACE_ROOT="$MLX/ws" \
+    ./server-provision.sh --plan "$MLX/plan/provision-plan.ml.example.sh" --dry-run 2>&1)"; mlx_code=$?
+mlx_expected="$(printf '%s\n' "Provision plan: $MLX/plan/provision-plan.ml.example.sh" \
+    "Bootstrap: $MLX/plan/server-bootstrap-$RA_VERSION.tar.gz" 'Bundles: 0' 'Profiles: 1' '  1. ml --backend auto')"
+[[ "$mlx_code" == 0 && "$mlx_out" == "$mlx_expected" && ! -e "$MLX/calls" && ! -e "$MLX/ws" ]] \
+    && ok "the ml example dry-runs with no network client, selecting server-bootstrap-$RA_VERSION.tar.gz and ml --backend auto" \
+    || bad "ml example dry run (exit $mlx_code): $mlx_out $(cat "$MLX/calls" 2>/dev/null)"
+grep -qF 'ssh -N -L 8888:127.0.0.1:8888' docs/ML-PROFILE.md && grep -qF "ip=\"\${ML_JUPYTER_IP:-127.0.0.1}\"" profiles/ml/bin/ml-jupyter \
+    && ok "ml-jupyter defaults to 127.0.0.1 and the guide documents SSH forwarding" \
+    || bad "ml-jupyter's loopback default or the SSH forwarding note is gone"
+
+# The example, end to end through server-provision.sh, the real server-profile
+# and the real installer, from a stand-in foundation archive: stand-in uv,
+# Python site and locks from the ML profile sections above, no network.
+if (( EUID != 0 )); then
+    skip "ml example lifecycle through server-provision.sh (needs root, as provisioning does)"
+elif [[ -z "$ML_PY312" ]]; then
+    skip "ml example lifecycle through server-provision.sh (no python3.12 on this host)"
+else
+    MLP="$(cd "$MLX" && pwd -P)/lifecycle"; mkdir -p "$MLP/plan" "$MLP/tmp"
+    mlp_archive() {  # build the stand-in server-bootstrap-VERSION.tar.gz from the fixture locks
+        local stage="$MLP/src/server-bootstrap-$RA_VERSION"
+        rm -rf "$MLP/src"; mkdir -p "$stage/lib" "$stage/profiles"
+        cp -a server-profile VERSION "$stage/"; cp lib/core.sh "$stage/lib/"
+        cp -a profiles/ml "$stage/profiles/"; rm -rf "$stage/profiles/ml/locks"
+        cp -a "$MLI/locks" "$stage/profiles/ml/locks"
+        cat > "$stage/server-bootstrap.sh" <<'FAKEBOOT'
+#!/usr/bin/env bash
+# Stand-in foundation: installs this archive's runtime files and server-profile
+# as the real runtime step does, and logging stand-ins for the rest.
+set -e
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+printf 'bootstrap\n' >> "$PROVISION_ORDER_LOG"
+rm -rf "$ML_TEST_RUNTIME"; cp -a "$here" "$ML_TEST_RUNTIME"
+ln -sfn "$ML_TEST_RUNTIME/server-profile" "$PROVISION_FAKE_BIN/server-profile"
+for command in server-accept server-bundle-install; do
+    printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$PROVISION_ORDER_LOG"\n' "$command" > "$PROVISION_FAKE_BIN/$command"
+    chmod 0755 "$PROVISION_FAKE_BIN/$command"
+done
+FAKEBOOT
+        chmod 0755 "$stage/server-bootstrap.sh"
+        tar -czf "$MLP/plan/server-bootstrap-$RA_VERSION.tar.gz" -C "$MLP/src" "server-bootstrap-$RA_VERSION"
+        ( cd "$MLP/plan" && sha256sum "server-bootstrap-$RA_VERSION.tar.gz" > "server-bootstrap-$RA_VERSION.tar.gz.sha256" )
+    }
+    mlp_plan() {  # the example, with its enable_profile line as given, behind this test's environment
+        sed "s|^enable_profile \"ml\" --backend auto\$|$1|" "$ML_EXAMPLE" > "$MLP/plan/provision-plan.ml.example.sh"
+        cat > "$MLP/plan/plan.sh" <<PLAN
+export WORKSPACE_ROOT="$MLP/ws" TMPDIR="$MLP/tmp" PROVISION_FAKE_BIN="$MLP/bin"
+export PROVISION_ORDER_LOG="$MLP/order.log" ML_TEST_RUNTIME="$MLP/runtime"
+export PATH="$MLP/bin:$MLI/bin:\$PATH"
+export ML_UV="$MLI/bin/uv" ML_PYTHON="$ML_PY312" ML_BIN_DIR="$MLP/usr-bin" ML_MIN_FREE_GB=0
+export ML_SYSFS_ROOT="$MLS/sys-empty" ML_NVIDIA_SMI="$MLS/absent/nvidia-smi"
+export FAKE_UV_LOG="$MLP/uv.log" FAKE_UV_PYTHON="$ML_PY312" FAKE_UV_BUILDER="$MLI/build-site.py"
+export FAKE_UV_TEMPLATES="$MLI/templates"
+source "\$PLAN_DIR/provision-plan.ml.example.sh"
+PLAN
+    }
+    mlp_run() {  # [NAME=VALUE...] -> runs the plan, output in $MLP/out
+        : > "$MLP/uv.log"; : > "$MLP/order.log"
+        env "$@" ./server-provision.sh --plan "$MLP/plan/plan.sh" > "$MLP/out" 2>&1
+    }
+    MLP_LINK="$MLP/ws/venvs/ml-workbench"; MLP_STATE="$MLP/ws/.setup-state/profiles/ml"
+    mkdir -p "$MLP/bin"
+    ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
+    ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
+    mlp_archive
+    mlp_plan 'enable_profile "ml" --backend auto'
+    if mlp_run && [[ "$(cat "$MLP/order.log")" == $'bootstrap\nserver-accept' ]] \
+        && grep -qx 'profiles_installed: 1' "$MLP/ws/startup-logs/latest-provision-summary.txt" \
+        && [[ "$(cat "$MLP_STATE/backend")" == cpu && -x "$MLP_LINK/bin/python" ]] \
+        && grep -q '^pip sync .*--torch-backend cpu ' "$MLP/uv.log" \
+        && [[ -f "$MLP/plan/server-bootstrap-$RA_VERSION.tar.gz" ]]; then
+        ok "the ml example installs the foundation and the ml profile (cpu without a GPU) and keeps the verified archive"
+    else
+        bad "ml example first run: $(tail -5 "$MLP/out")"
+    fi
+    mlp_target="$(readlink -- "$MLP_LINK")"; mlp_state="$(cat "$MLP_STATE"/* | sha256sum)"
+    if mlp_run && grep -q 'nothing to rebuild' "$MLP/out" && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log" \
+        && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE"/* | sha256sum)" == "$mlp_state" ]]; then
+        ok "repeating the ml example rebuilds nothing and downloads nothing for the environment"
+    else
+        bad "ml example repeat: $(tail -5 "$MLP/out")"
+    fi
+    mlp_plan 'enable_profile "ml" --backend cu130'
+    if ! mlp_run && grep -q 'rerun with --reconfigure' "$MLP/out" \
+        && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE/backend")" == cpu ]]; then
+        ok "a backend change in the ml example without --reconfigure stops and changes nothing"
+    else
+        bad "ml example backend change without --reconfigure: $(tail -5 "$MLP/out")"
+    fi
+    mlp_plan 'enable_profile "ml" --backend cu130 --reconfigure'
+    if mlp_run && [[ "$(cat "$MLP_STATE/backend")" == cu130 && "$(readlink -- "$MLP_LINK")" != "$mlp_target" ]]; then
+        ok "the documented --reconfigure edit changes the backend through the ml example"
+    else
+        bad "ml example reconfigure: $(tail -5 "$MLP/out")"
+    fi
+    # A new release whose lock changed, and a download that fails: the run
+    # fails, and the installed environment, its state and commands are kept.
+    mlp_target="$(readlink -- "$MLP_LINK")"; mlp_state="$(cat "$MLP_STATE"/* | sha256sum)"
+    ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130 \
+        +cu130 tqdm=4.67.1
+    mlp_archive
+    if ! mlp_run FAKE_UV_SYNC_FAIL=1 && grep -q 'previous environment is unchanged' "$MLP/out" \
+        && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE"/* | sha256sum)" == "$mlp_state" ]] \
+        && [[ "$(readlink -- "$MLP/usr-bin/ml-env")" == "$MLP/runtime/profiles/ml/bin/ml-env" ]]; then
+        ok "a failed update through the ml example keeps the previous environment, state and commands"
+    else
+        bad "ml example failed update: $(tail -5 "$MLP/out")"
+    fi
+    if mlp_run && grep -qx 'tqdm==4.67.1' "$MLP_STATE/packages" && [[ "$(readlink -- "$MLP_LINK")" != "$mlp_target" ]]; then
+        ok "rerunning the same ml example after the failure installs the update"
+    else
+        bad "ml example update after failure: $(tail -5 "$MLP/out")"
+    fi
+    ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
+fi
+
 section "Runtime installation of the new files"
 for entry in 'server-secrets" "$stage/server-secrets' 'server-profile" "$stage/server-profile' \
     'lib/secrets-load.sh" "$stage/lib/secrets-load.sh' \
@@ -4189,12 +4347,16 @@ grep -q "BOOTSTRAP_VERSION=\"$declared\"" lib/bootstrap/config.sh \
     || { bad "BOOTSTRAP_VERSION does not match VERSION ($declared)"; version_drift=1; }
 grep -qF "V=$declared" README.md \
     || { bad "README download snippet does not pin V=$declared"; version_drift=1; }
+grep -qF "V=$declared" docs/ML-PROFILE.md \
+    || { bad "the ML one-command snippet does not pin V=$declared"; version_drift=1; }
+grep -E '^V=' README.md docs/ML-PROFILE.md | grep -vF "V=$declared" \
+    && { bad "a download snippet pins another version than $declared"; version_drift=1; }
 while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
     bad "stale version string: $hit"
     version_drift=1
 done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
-    README.md config.example.env checksums/*.txt docs/PROVISIONING.md examples/*.sh 2>/dev/null \
+    README.md config.example.env checksums/*.txt docs/PROVISIONING.md docs/ML-PROFILE.md examples/*.sh 2>/dev/null \
     | grep -vF "server-bootstrap $declared" \
     | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"

@@ -34,6 +34,11 @@ chmod +x server-provision.sh
 
 That is the whole installation — roughly five minutes, most of it `apt`.
 
+For the optional ML environment as well, download
+`provision-plan.ml.example.sh` in place of `provision-plan.example.sh` and pass
+it to `--plan`. It installs the same release and enables the `ml` profile that
+ships inside it; see [ML-PROFILE](docs/ML-PROFILE.md#one-command-install).
+
 > [!NOTE]
 > Fresh hosts and containers often provide a root shell and ship without `sudo`.
 > Prefix the last command with `sudo` only if you are not root.
@@ -115,6 +120,7 @@ when the declared specification requires a GPU.
 | Goal | Command |
 | --- | --- |
 | Provision a fresh server end to end | `./server-provision.sh --plan ./provision-plan.example.sh` |
+| Provision a fresh server with the ML environment | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
 | Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check the host against its declared specification | `server-accept` |

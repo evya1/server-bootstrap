@@ -93,7 +93,9 @@ enable_profile "ml" --backend auto
   `server-profile install NAME [options]`. A repeat run leaves an up-to-date
   profile as it is.
 
-See [ML-PROFILE](ML-PROFILE.md) for the `ml` profile.
+`examples/provision-plan.ml.example.sh`, also published beside each release,
+installs the foundation and enables the `ml` profile. See
+[ML-PROFILE](ML-PROFILE.md#one-command-install).
 
 ## Archive deletion
 

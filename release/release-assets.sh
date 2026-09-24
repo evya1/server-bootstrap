@@ -4,7 +4,7 @@
 #   release/release-assets.sh built         every file the build leaves in release/dist
 #   release/release-assets.sh upload        the files a release publishes
 #   release/release-assets.sh standalone    first-run copies: dist name, tracked path, mode
-#   release/release-assets.sh required      release files the ml profile needs
+#   release/release-assets.sh required      release files the ml profile and its example need
 #   release/release-assets.sh profiles      the release manifest's "profiles" object, as JSON
 #   release/release-assets.sh verify [DIR]  check DIR (default release/dist), exactly
 #
@@ -84,6 +84,7 @@ STANDALONE = (
     ("server-provision.sh", "server-provision.sh", 0o755),
     ("provision-plan.example.sh", "examples/provision-plan.example.sh", 0o644),
     ("provision-plan.whisper.example.sh", "examples/provision-plan.whisper.example.sh", 0o644),
+    ("provision-plan.ml.example.sh", "examples/provision-plan.ml.example.sh", 0o644),
 )
 ARCHIVES = (f"{BASE}.tar", f"{BASE}.tar.gz", f"{BASE}.zip", f"{BASE}-source.zip")
 SIDECARS = {f"{BASE}.tar.sha256": f"{BASE}.tar", f"{BASE}.tar.gz.sha256": f"{BASE}.tar.gz",
@@ -94,12 +95,13 @@ UPLOAD = (f"{BASE}.tar.gz", f"{BASE}.tar.gz.sha256", f"{BASE}.zip", f"{BASE}.zip
 # The uncompressed tar and its sidecar are built, hashed and scanned, but only
 # the tar.gz is published.
 BUILT = UPLOAD + (f"{BASE}.tar", f"{BASE}.tar.sha256")
-# What the ml profile needs at runtime. The locks are added from backends.txt.
+# What the ml profile needs at runtime, and the example that enables it. The
+# locks are added from backends.txt.
 PROFILE_FILES = (
     "server-profile", "profiles/ml/install.sh", "profiles/ml/lib.sh", "profiles/ml/check.py",
     "profiles/ml/backends.txt", "profiles/ml/requirements.in", "profiles/ml/bin/ml-env",
     "profiles/ml/bin/ml-status", "profiles/ml/bin/ml-doctor", "profiles/ml/bin/ml-preflight",
-    "profiles/ml/bin/ml-jupyter",
+    "profiles/ml/bin/ml-jupyter", "examples/provision-plan.ml.example.sh",
 )
 TEST_STATES = ("passed", "skipped")
 SCAN_STATES = ("passed", "skipped")

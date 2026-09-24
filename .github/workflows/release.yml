@@ -58,3 +58,4 @@ jobs:
             release/dist/server-provision.sh
             release/dist/provision-plan.example.sh
             release/dist/provision-plan.whisper.example.sh
+            release/dist/provision-plan.ml.example.sh

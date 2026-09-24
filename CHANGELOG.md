@@ -26,6 +26,24 @@
 
 [#56]: https://github.com/evya1/server-bootstrap/issues/56
 
+- **A one-command ML provision example.**
+  `examples/provision-plan.ml.example.sh`, also published beside each release
+  as `provision-plan.ml.example.sh`, installs the foundation from the one
+  checksum-pinned release it names and enables its built-in `ml` profile with
+  `--backend auto`. It carries no ML URL, version, archive or checksum. It
+  keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so the same
+  command can be repeated; a repeat rebuilds no environment. Changing backend
+  is an edit to its `enable_profile` line with `--reconfigure`, and without it
+  the run stops and changes nothing. The README and `docs/ML-PROFILE.md` show
+  the copyable download-and-run block. The suite dry-runs the example with
+  every network client replaced by a failing recorder. As root, it also runs
+  the example through `server-provision.sh`, the real `server-profile` and the
+  real installer from a stand-in foundation archive: a fresh install, an
+  identical repeat, a refused and then explicit backend change, and a failed
+  update that leaves the previous environment in place. ([#57][])
+
+[#57]: https://github.com/evya1/server-bootstrap/issues/57
+
 - **`AGENTS.md`** — repository rules for coding agents: supported scope, entry
   points, security boundaries, release invariants, the validation commands, and
   the actions that need owner approval. It links to the existing guides rather

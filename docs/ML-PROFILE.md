@@ -13,6 +13,42 @@ environment, no profile state, and no `ml-*` command. The profile does not
 touch the system Python, the NVIDIA driver, or a system CUDA installation. It
 downloads no model or dataset and starts no service.
 
+## One-command install
+
+Every release publishes `provision-plan.ml.example.sh` beside the archive, and
+ships it inside the archive as `examples/provision-plan.ml.example.sh`. It
+installs the foundation and enables this profile from the one release it
+names. The profile is part of that archive, so the plan carries no ML URL,
+version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
+
+```bash
+V=2.2.3
+BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
+cd /root
+wget -q --show-progress \
+  "$BASE/server-provision.sh" \
+  "$BASE/provision-plan.ml.example.sh" \
+  "$BASE/server-bootstrap-$V.tar.gz" \
+  "$BASE/server-bootstrap-$V.tar.gz.sha256"
+chmod +x server-provision.sh
+./server-provision.sh --plan ./provision-plan.ml.example.sh --dry-run
+./server-provision.sh --plan ./provision-plan.ml.example.sh
+```
+
+The dry run lists the archive and `ml --backend auto` and changes nothing.
+The real run verifies the archive's SHA-256, installs the foundation, runs
+`server-accept`, then `server-profile install ml --backend auto`.
+
+- The plan keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so
+  the same command can be run again. A repeat finds the environment current and
+  rebuilds nothing.
+- To change backend, edit the plan's `enable_profile` line to name the backend
+  and add `--reconfigure`, for example `enable_profile "ml" --backend cpu
+  --reconfigure`. Without `--reconfigure` a run that would change backend
+  stops and changes nothing.
+- If an update fails, the previous environment, its state and its commands
+  stay as they were; see [Install, repeat, change](#install-repeat-change).
+
 ## Enable it
 
 In a provision plan, after `register_bootstrap`:
