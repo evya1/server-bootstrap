@@ -5,8 +5,9 @@
 # Non-interactive and idempotent. A new environment is built beside the active
 # one, verified, and only then switched in with one rename; any failure before
 # the switch removes the new build and leaves the previous environment, its
-# commands and the recorded state exactly as they were. Nothing is started, and
-# no model or dataset is downloaded.
+# commands and the recorded state exactly as they were. A failure after the
+# switch, while the state and commands are written, switches back and restores
+# them. Nothing is started, and no model or dataset is downloaded.
 set -Eeuo pipefail
 
 SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
@@ -66,6 +67,9 @@ if (( DRY_RUN == 0 )); then
     mkdir -p -- "$STATE_ROOT/profiles"
     exec 8>"$STATE_ROOT/profiles/ml.lock"
     flock -w 1800 8 || { sb_warn "another ml profile installation is running"; exit 1; }
+    # What a killed run could not remove: its copy of the previous state, a
+    # half-written state and a link it had not yet renamed. See the switch.
+    rm -rf -- "$STATE_ROOT/profiles/".ml-state-previous.* "$ML_STATE_DIR"/.state.* "$ML_ENV".switch.*
 fi
 INSTALLED_BACKEND="$(ml_state backend)"
 INSTALLED_SHA="$(ml_state lock-sha256)"
@@ -112,6 +116,9 @@ install_commands() {
     done
 }
 
+ML_STATE_FILES=(repository-version backend cuda arch lock lock-sha256 core-versions packages
+    installed-at environment)
+
 write_state() {  # environment, core-versions file, freeze file
     local tmp file
     mkdir -p -- "$ML_STATE_DIR"
@@ -127,8 +134,9 @@ write_state() {  # environment, core-versions file, freeze file
     cp -- "$3" "$tmp/packages"
     date -u +%Y-%m-%dT%H:%M:%SZ > "$tmp/installed-at"
     chmod 0644 "$tmp"/*
-    for file in repository-version backend cuda arch lock lock-sha256 environment \
-        core-versions packages installed-at; do
+    # environment goes last: until it names the new build, a rerun sees that
+    # the link and the state disagree and rebuilds rather than keeping.
+    for file in "${ML_STATE_FILES[@]}"; do
         mv -f -- "$tmp/$file" "$ML_STATE_DIR/$file"
     done
     rmdir -- "$tmp"
@@ -148,14 +156,60 @@ UV="$(ml_uv)"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$CACHE_ROOT/uv}"
 mkdir -p -- "$ML_ENV_STORE" "$UV_CACHE_DIR"
 NEW_ENV="$ML_ENV_STORE/$ML_BACKEND-${LOCK_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-SWITCHED=0
+SWITCHED=0; COMMITTED=0; PREVIOUS=""; STATE_COPY=""
+declare -A PREVIOUS_COMMANDS=()
+
+# Undo the switch: point the link back at the previous environment (or remove
+# it after a first install), and restore the recorded state and the command
+# links from what was there before.
+restore_previous() {
+    local file command current ok=0
+    if [[ -n "$PREVIOUS" ]]; then
+        ln -sfn -- "$PREVIOUS" "$ML_ENV.switch.$$" && mv -Tf -- "$ML_ENV.switch.$$" "$ML_ENV" || ok=1
+    else
+        rm -f -- "$ML_ENV" "$ML_ENV.switch.$$" || ok=1
+    fi
+    for file in "${ML_STATE_FILES[@]}"; do
+        if [[ -f "$STATE_COPY/$file" ]]; then
+            cp -p -- "$STATE_COPY/$file" "$ML_STATE_DIR/$file" || ok=1
+        else
+            rm -f -- "$ML_STATE_DIR/$file" || ok=1
+        fi
+    done
+    rm -rf -- "$ML_STATE_DIR"/.state.*
+    [[ -n "$PREVIOUS" ]] || rmdir -- "$ML_STATE_DIR" 2>/dev/null || true
+    for command in "${ML_COMMANDS[@]}"; do
+        current="$(readlink -- "$ML_BIN_DIR/$command" 2>/dev/null || true)"
+        if [[ -n "${PREVIOUS_COMMANDS[$command]:-}" ]]; then
+            [[ "$current" == "${PREVIOUS_COMMANDS[$command]}" ]] \
+                || ln -sfn -- "${PREVIOUS_COMMANDS[$command]}" "$ML_BIN_DIR/$command" || ok=1
+        elif [[ "$current" == "$ML_PROFILE_DIR/bin/$command" ]]; then
+            rm -f -- "$ML_BIN_DIR/$command" || ok=1
+        fi
+    done
+    return "$ok"
+}
+
 cleanup_failed_build() {
     local code=$?
     rm -f -- "$preflight_out"
-    if (( SWITCHED == 0 )) && [[ -n "${NEW_ENV:-}" && -d "$NEW_ENV" ]]; then
-        rm -rf -- "$NEW_ENV"
-        (( code == 0 )) || sb_warn "installation failed; the new build was removed and the previous environment is unchanged"
+    if (( SWITCHED == 1 && COMMITTED == 0 )); then
+        if restore_previous; then
+            if [[ -n "$PREVIOUS" ]]; then
+                sb_warn "installation failed after the switch; the previous environment, its state and commands were restored"
+            else
+                sb_warn "installation failed after the switch; the new environment, its state and commands were removed"
+            fi
+        else
+            sb_warn "installation failed after the switch, and restoring the previous environment failed; run: server-profile install ml --force"
+        fi
     fi
+    if (( COMMITTED == 0 )) && [[ -n "${NEW_ENV:-}" && -d "$NEW_ENV" ]]; then
+        rm -rf -- "$NEW_ENV"
+        (( code == 0 || SWITCHED == 1 )) \
+            || sb_warn "installation failed; the new build was removed and the previous environment is unchanged"
+    fi
+    [[ -z "$STATE_COPY" ]] || rm -rf -- "$STATE_COPY"
 }
 trap cleanup_failed_build EXIT
 
@@ -175,20 +229,30 @@ trap 'cleanup_failed_build; rm -f -- "$core_versions" "$packages"' EXIT
     || { sb_warn "the built environment does not match the lock exactly"; exit 1; }
 
 # The switch: one rename of a symlink. Before it nothing the user relies on has
-# changed; after it the new environment is live.
-PREVIOUS=""
+# changed. From it until the state and commands are written, a failure puts
+# back what was there, from what is recorded here.
 [[ ! -L "$ML_ENV" ]] || PREVIOUS="$(readlink -f -- "$ML_ENV")"
+[[ -z "$PREVIOUS" || -d "$PREVIOUS" ]] || PREVIOUS=""
+STATE_COPY="$(mktemp -d "$STATE_ROOT/profiles/.ml-state-previous.XXXXXX")"
+for file in "${ML_STATE_FILES[@]}"; do
+    [[ ! -f "$ML_STATE_DIR/$file" ]] || cp -p -- "$ML_STATE_DIR/$file" "$STATE_COPY/$file"
+done
+for command in "${ML_COMMANDS[@]}"; do
+    PREVIOUS_COMMANDS[$command]="$(readlink -- "$ML_BIN_DIR/$command" 2>/dev/null || true)"
+done
 ln -sfn -- "$NEW_ENV" "$ML_ENV.switch.$$"
-mv -Tf -- "$ML_ENV.switch.$$" "$ML_ENV"
 SWITCHED=1
+mv -Tf -- "$ML_ENV.switch.$$" "$ML_ENV"
 write_state "$NEW_ENV" "$core_versions" "$packages"
 install_commands
+COMMITTED=1
 
 # The store holds only what this profile built: everything but the live
-# environment, including anything an interrupted run left, is removed.
+# environment, including anything an interrupted run left, is removed. The
+# new environment is already live, so a failure here is only reported.
 for old in "$ML_ENV_STORE"/*; do
     [[ -e "$old" && "$old" != "$NEW_ENV" && "$old" != "$NEW_ENV".* ]] || continue
-    rm -rf -- "$old"
+    rm -rf -- "$old" || sb_warn "could not remove $old; remove it by hand"
 done
 [[ -z "$PREVIOUS" || "$PREVIOUS" == "$NEW_ENV" ]] || sb_log "removed the previous environment $PREVIOUS"
 sb_log "ml profile ready: backend $ML_BACKEND ($ACTION), environment $ML_ENV"

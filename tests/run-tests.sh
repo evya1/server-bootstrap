@@ -3739,11 +3739,66 @@ for failure in FAKE_UV_SYNC_FAIL=1 FAKE_UV_BREAK_TORCH=1; do
         bad "failed upgrade ($failure): $(cat "$MLI/out")"
     fi
 done
+# A failure after the switch, while the state or the command links are written:
+# the link, the state and the commands go back to what they were. Stand-in mv
+# and ln fail just those writes; everything else passes through.
+MLF="$MLI/fail-after-switch"; mkdir -p "$MLF/mv" "$MLF/ln" "$MLF/kill"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in */profiles/ml/core-versions) echo "mv: simulated failure" >&2; exit 1 ;; esac; done\nexec mv "$@"\n' \
+    | sed "s#exec mv#exec $(command -v mv)#" > "$MLF/mv/mv"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in */usr-bin/ml-*|*/bin-first/ml-*) echo "ln: simulated failure" >&2; exit 1 ;; esac; done\nexec ln "$@"\n' \
+    | sed "s#exec ln#exec $(command -v ln)#" > "$MLF/ln/ln"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in */profiles/ml/core-versions) kill -KILL "$PPID"; exit 1 ;; esac; done\nexec mv "$@"\n' \
+    | sed "s#exec mv#exec $(command -v mv)#" > "$MLF/kill/mv"
+chmod 0755 "$MLF/mv/mv" "$MLF/ln/ln" "$MLF/kill/mv"
+command_links() { for command in ml-env ml-status ml-doctor ml-preflight ml-jupyter; do readlink -- "$MLI/usr-bin/$command"; done; }
+links_before="$(command_links)"
+for failure in "mv --backend cu130" "ln --backend cpu --reconfigure"; do
+    read -r shim args <<< "$failure"
+    # shellcheck disable=SC2086  # $args is a fixed list of installer options
+    if ! ml_install PATH="$MLF/$shim:$MLI/bin:$PATH" $args \
+        && grep -q 'failed after the switch; the previous environment, its state and commands were restored' "$MLI/out" \
+        && [[ "$(readlink -- "$ML_LINK")" == "$second_target" && "$(cat "$ML_STATE"/* | sha256sum)" == "$state_before" \
+            && "$(ls -A "$MLW/venvs/.ml-workbench")" == "$(basename -- "$second_target")" \
+            && "$(command_links)" == "$links_before" \
+            && -z "$(find "$MLW/venvs" -mindepth 1 -maxdepth 1 ! -name ml-workbench ! -name .ml-workbench)" \
+            && -z "$(find "$ML_STATE" -mindepth 1 -maxdepth 1 -name '.*')" ]] \
+        && [[ "$(ml_env ./profiles/ml/bin/ml-env python -c 'import torch; print(torch.__version__)')" == 2.14.0+cu130 ]]; then
+        ok "a failure after the switch ($shim fails, install $args) restores the previous environment, state and commands"
+    else
+        bad "failure after the switch ($shim ${args}): $(cat "$MLI/out"); link $(readlink -- "$ML_LINK")"
+    fi
+done
+# First install: after a failure nothing is left installed.
+MLW1="$MLI/ws-first"
+if ! ml_install PATH="$MLF/mv:$MLI/bin:$PATH" WORKSPACE_ROOT="$MLW1" ML_BIN_DIR="$MLI/bin-first" --backend cpu \
+    && grep -q 'failed after the switch; the new environment, its state and commands were removed' "$MLI/out" \
+    && [[ ! -e "$MLW1/venvs/ml-workbench" && ! -L "$MLW1/venvs/ml-workbench" && -z "$(ls -A "$MLW1/venvs/.ml-workbench")" \
+        && ! -e "$MLW1/.setup-state/profiles/ml" && -z "$(ls -A "$MLI/bin-first" 2>/dev/null)" ]] \
+    && ! ml_env WORKSPACE_ROOT="$MLW1" ./profiles/ml/bin/ml-status >/dev/null 2>&1; then
+    ok "a failure after the switch on a first install leaves no environment, state or command"
+else
+    bad "first install failing after the switch: $(cat "$MLI/out"); $(find "$MLW1" "$MLI/bin-first" -mindepth 1 2>/dev/null)"
+fi
 ml_env ./profiles/ml/bin/ml-status >"$MLI/status" 2>&1
 grep -q 'differs from this release' "$MLI/status" \
     && ok "ml-status says when the shipped lock differs from the installed one" || bad "ml-status lock drift"
-if ml_install --backend cu130 && grep -qx 'tqdm==4.67.1' "$ML_STATE/packages" && [[ "$(readlink -- "$ML_LINK")" != "$second_target" ]]; then
-    ok "once the failure is gone, the same command upgrades to the new lock"
+# A run killed after the switch cannot restore anything itself. The state then
+# still names the previous environment, so the next run rebuilds rather than
+# keeping, and clears what the killed run left.
+ml_install PATH="$MLF/kill:$MLI/bin:$PATH" --backend cu130
+killed_link="$(readlink -- "$ML_LINK")"
+if [[ "$killed_link" != "$second_target" && "$(cat "$ML_STATE/environment")" == "$second_target" ]] \
+    && ls -d "$MLW/.setup-state/profiles/".ml-state-previous.* >/dev/null 2>&1 \
+    && ! ml_env ./profiles/ml/bin/ml-status >/dev/null 2>&1; then
+    ok "a run killed after the switch leaves the link and the recorded environment disagreeing, which ml-status reports"
+else
+    bad "killed run: link $killed_link, recorded $(cat "$ML_STATE/environment")"
+fi
+if ml_install --backend cu130 && ! grep -q 'nothing to rebuild' "$MLI/out" && grep -qx 'tqdm==4.67.1' "$ML_STATE/packages" \
+    && [[ "$(readlink -- "$ML_LINK")" != "$second_target" && "$(readlink -f -- "$ML_LINK")" == "$(cat "$ML_STATE/environment")" ]] \
+    && ! ls -d "$MLW/.setup-state/profiles/".ml-state-previous.* "$ML_STATE"/.state.* "$ML_LINK".switch.* >/dev/null 2>&1 \
+    && [[ "$(ls -A "$MLW/venvs/.ml-workbench" | wc -l)" == 1 ]]; then
+    ok "once the failure is gone, the same command upgrades to the new lock and clears what a killed run left"
 else
     bad "upgrade after a failure: $(cat "$MLI/out")"
 fi

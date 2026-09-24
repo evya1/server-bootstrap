@@ -76,6 +76,12 @@ A CUDA backend is listed only after it has been validated on real hardware.
   it, in one rename, and the previous build is removed.
 - If any step before the switch fails, the new build is deleted. The previous
   environment, its commands and the recorded state stay as they were.
+- If writing the state or linking the commands fails after the switch, the
+  link is switched back, the recorded state and the command links are restored
+  from a copy taken just before the switch, and the new build is deleted. After
+  a failed first install nothing is left installed. A run killed at that point
+  cannot restore anything itself; the state then still names the previous
+  environment, so `ml-status` reports the mismatch and the next run rebuilds.
 - A repeat run with the same backend and lock, on an intact environment,
   rebuilds nothing. The environment is exactly its lock: if packages were
   added, removed, or changed in it, the next run rebuilds it from the lock.
