@@ -51,10 +51,11 @@ archive and `ml --backend auto` and changes nothing. The real run verifies the
 archive's SHA-256 again, installs the foundation, runs `server-accept`, then
 `server-profile install ml --backend auto`.
 
-- The plan asks `server-accept` for 30 GB free under `/workspace` once the
-  foundation is in place. That is this profile's own minimum for a CUDA
-  backend, which `auto` selects on an NVIDIA host; the CPU backend needs 10 GB
-  (`ML_MIN_FREE_GB` below).
+- The plan leaves free space to this profile: 30 GB for a CUDA backend, which
+  `auto` selects on an NVIDIA host, and 10 GB for CPU (`ML_MIN_FREE_GB`
+  below), checked before any run that builds. `server-accept` checks the
+  plan's `MIN_DISK_GB` on every run, so the plan sets none that a repeat
+  would fail once the install has used the space.
 - The plan keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so
   its last command, `./server-provision.sh --plan
   ./provision-plan.ml.example.sh`, can be run again. A repeat finds the
@@ -154,7 +155,8 @@ A CUDA backend is listed only after it has been validated on real hardware.
   cannot restore anything itself; the state then still names the previous
   environment, so `ml-status` reports the mismatch and the next run rebuilds.
 - A repeat run with the same backend and lock, on an intact environment,
-  rebuilds nothing. The environment is exactly its lock: if packages were
+  rebuilds nothing, and so does not need the free space a build does. The
+  environment is exactly its lock: if packages were
   added, removed, or changed in it, the next run rebuilds it from the lock.
   Keep your own extra packages in a project environment.
 - When a newer release ships a changed lock, the next
@@ -207,7 +209,7 @@ and a non-loopback address prints a warning. Nothing starts Jupyter for you.
 | Variable | Default | Meaning |
 |---|---:|---|
 | `ML_PYTHON` | `/usr/bin/python3.12` | base interpreter; must be Python 3.12 |
-| `ML_MIN_FREE_GB` | `10` CPU, `30` CUDA | free space required on the file system that holds the environments |
+| `ML_MIN_FREE_GB` | `10` CPU, `30` CUDA | free space required, before a run that builds, on the file system that holds the environments |
 | `ML_JUPYTER_IP` | `127.0.0.1` | address `ml-jupyter` listens on |
 | `ML_JUPYTER_PORT` | `8888` | port `ml-jupyter` listens on |
 

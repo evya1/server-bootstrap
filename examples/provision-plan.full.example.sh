@@ -10,16 +10,16 @@ if ! declare -F register_bootstrap >/dev/null 2>&1; then
     exit 2
 fi
 
-# Set these to the host's declared or required specification. server-accept
-# checks free space under /workspace after the foundation is installed and
-# before the ml profile. 30 GB is the profile's own minimum for a CUDA backend,
-# which --backend auto selects on an NVIDIA host: room for the environment, its
-# download cache, and a replacement built beside it during an update. The CPU
-# backend needs 10 GB.
+# Set these to the host's declared or required specification. The ml
+# profile's own free space is not declared here: the profile checks it before
+# any run that builds, 30 GB for a CUDA backend and 10 GB for CPU, and not on a
+# repeat that keeps its environment. server-accept checks MIN_DISK_GB on every
+# run, a repeat included, so a value here would reject a repeat once the first
+# install had used that space. Raise it for the host's own data.
 export MIN_VRAM_MIB=0
 export MIN_CORES=0
 export MIN_RAM_GB=0
-export MIN_DISK_GB=30
+export MIN_DISK_GB=0
 export ACCEPT_POLICY=reject-stop
 
 # Keep the verified archive beside this plan, so the same command can be run

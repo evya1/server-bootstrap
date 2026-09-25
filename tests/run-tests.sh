@@ -3781,6 +3781,42 @@ fi
 ml_env ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && grep -q 'plan: keep backend cpu' "$MLI/out" \
     && ok "a dry run on an installed host reports that it would keep the environment" || bad "dry run after install"
 
+# Free space is what a build needs. A repeat that keeps an environment matching
+# its lock builds nothing, so it must not fail for want of that space; every
+# run that builds still must. ML_MIN_FREE_GB above the free space stands in for
+# a disk the first install used up.
+ML_SHORT=ML_MIN_FREE_GB=999999
+: > "$MLI/uv.log"
+if ml_install "$ML_SHORT" --backend auto && grep -q 'nothing to rebuild' "$MLI/out" \
+    && grep -q 'nothing needs building' "$MLI/out" && [[ "$(readlink -- "$ML_LINK")" == "$first_target" ]] \
+    && ! grep -qE '^(venv|pip sync)' "$MLI/uv.log"; then
+    ok "a repeat that keeps a matching environment succeeds with less free space than a build needs"
+else
+    bad "no-op repeat with too little free space: $(cat "$MLI/out")"
+fi
+ml_env "$ML_SHORT" ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && grep -q 'plan: keep backend cpu' "$MLI/out" \
+    && ok "its dry run reports the keep and succeeds" || bad "no-op dry run with too little free space: $(cat "$MLI/out")"
+ml_short_state="$(cat "$ML_STATE"/* | sha256sum)"
+ml_short_refused() {  # label -> the last run stopped before building and changed nothing
+    if grep -q 'needs 999999' "$MLI/out" && grep -q 'nothing was changed' "$MLI/out" \
+        && [[ "$(readlink -- "$ML_LINK")" == "$first_target" && "$(cat "$ML_STATE"/* | sha256sum)" == "$ml_short_state" ]] \
+        && ! grep -qE '^(venv|pip sync)' "$MLI/uv.log"; then
+        ok "with too little free space, $1 stops before building and changes nothing"
+    else
+        bad "$1 with too little free space: $(cat "$MLI/out")"
+    fi
+}
+: > "$MLI/uv.log"; ml_install "$ML_SHORT" --backend auto --force && bad "--force built on a short disk" || ml_short_refused "--force"
+: > "$MLI/uv.log"; ml_install "$ML_SHORT" --backend cu130 --reconfigure && bad "--reconfigure built on a short disk" \
+    || ml_short_refused "a --reconfigure to cu130"
+ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu +cpu tqdm=4.67.1
+: > "$MLI/uv.log"; ml_install "$ML_SHORT" --backend auto && bad "an update built on a short disk" \
+    || ml_short_refused "an update to a changed lock"
+ml_env "$ML_SHORT" ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && bad "the update's dry run passed on a short disk" \
+    || { grep -q 'needs 999999' "$MLI/out" && ok "the update's dry run fails the disk check too" \
+        || bad "update dry run with too little free space: $(cat "$MLI/out")"; }
+ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
+
 : > "$MLI/uv.log"
 if ! ml_install --backend cu130 && grep -q 'rerun with --reconfigure' "$MLI/out" \
     && [[ "$(readlink -- "$ML_LINK")" == "$first_target" && "$(cat "$ML_STATE/backend")" == cpu ]] \
@@ -4253,7 +4289,7 @@ FAKEBOOT
 export WORKSPACE_ROOT="$MLP/ws" TMPDIR="$MLP/tmp" PROVISION_FAKE_BIN="$MLP/bin"
 export PROVISION_ORDER_LOG="$MLP/order.log" ML_TEST_RUNTIME="$MLP/runtime"
 export PATH="$MLP/bin:$MLI/bin:\$PATH"
-export ML_UV="$MLI/bin/uv" ML_PYTHON="$ML_PY312" ML_BIN_DIR="$MLP/usr-bin" ML_MIN_FREE_GB=0
+export ML_UV="$MLI/bin/uv" ML_PYTHON="$ML_PY312" ML_BIN_DIR="$MLP/usr-bin" ML_MIN_FREE_GB="\${ML_MIN_FREE_GB:-0}"
 export ML_SYSFS_ROOT="$MLS/sys-empty" ML_NVIDIA_SMI="$MLS/absent/nvidia-smi"
 export FAKE_UV_LOG="$MLP/uv.log" FAKE_UV_PYTHON="$ML_PY312" FAKE_UV_BUILDER="$MLI/build-site.py"
 export FAKE_UV_TEMPLATES="$MLI/templates"
@@ -4368,6 +4404,13 @@ done
 [[ -z "$full_unread" && -n "$(full_profiles .)" ]] \
     && ok "configurable installers and profiles are read from the repository: $(wc -l <<< "$FULL_FLAGS") switches; profiles $(full_profiles . | paste -sd' ' -)" \
     || bad "the installer or profile read no longer finds:${full_unread:- any profile}"
+full_undocumented=""
+while IFS= read -r name; do
+    grep -qE "^\| \`$name\` \| \`[01]\` \|" docs/CONFIGURATION.md || full_undocumented+=" $name"
+done <<< "$FULL_FLAGS"
+[[ -z "$full_undocumented" ]] \
+    && ok "docs/CONFIGURATION.md documents every configurable installer with its default" \
+    || bad "docs/CONFIGURATION.md has no row for:$full_undocumented"
 full_gaps="$(full_plan_gaps .)"
 [[ -z "$full_gaps" ]] \
     && ok "the full plan enables every configurable installer and every built-in profile" \
@@ -4417,18 +4460,28 @@ grep -qx 'export DELETE_ARCHIVES_AFTER_SUCCESS=0' <<< "$full_body" \
 (( full_drift == 0 )) \
     && ok "the full plan installs one main release with the shipped package manifest and ml --backend auto, and keeps its archive"
 
-# server-accept checks MIN_DISK_GB against free space once the foundation is
-# installed, and the ml profile is the only workload these two plans add. Their
-# threshold is the profile's own minimum for a CUDA backend, the largest that
-# --backend auto can select, read from the profile rather than restated.
-full_ml_min="$(env -u ML_MIN_FREE_GB bash -c 'source profiles/ml/lib.sh; ml_min_free_gb 13.0')"
-full_disk_drift=""
+
+# server-accept runs on every provision, a repeat included, and checks
+# MIN_DISK_GB against free space at that moment. A plan that asked it for the
+# profile's build space rejected a repeat once the install had used that
+# space. The real server-accept, with each plan's thresholds, on a host with
+# 20 GB free: no disk rejection. The same plan asking for 30 GB is rejected.
+FXA="$TMP/full-accept"; mkdir -p "$FXA/stub" "$FXA/ws"
+printf '#!/bin/sh\nprintf "Avail\\n  20G\\n"\n' > "$FXA/stub/df"; chmod 0755 "$FXA/stub/df"
+full_accept() {  # plan -> server-accept --json with the plan's thresholds and 20 GB free
+    ( eval "$(grep -E '^export (MIN_|REQUIRE_)[A-Z_]*=' "$1")"
+      PATH="$FXA/stub:/usr/bin:/bin" MIN_DISK_MBPS=0 WORKSPACE_ROOT="$FXA/ws" ./server-accept.sh --json 2>/dev/null )
+}
 for plan in "$FULL_EXAMPLE" "$ML_EXAMPLE"; do
-    grep -qx "export MIN_DISK_GB=$full_ml_min" "$plan" || full_disk_drift+=" $plan"
+    sed 's/^export MIN_DISK_GB=.*/export MIN_DISK_GB=30/' "$plan" > "$FXA/asked-30.sh"
+    fxa_asked="$(full_accept "$FXA/asked-30.sh" | grep -o '{[^}]*disk-free[^}]*}')"
+    fxa_plan="$(full_accept "$plan" | grep -o '{[^}]*disk-free[^}]*}')"
+    if [[ "$fxa_asked" == *'"level":"reject"'* && "$fxa_plan" == *'"level":"ok"'* ]]; then
+        ok "server-accept does not reject a repeat of $plan for disk space the ml profile already holds"
+    else
+        bad "server-accept disk check for $plan: ${fxa_plan:-no disk-free finding} (asking for 30 GB: ${fxa_asked:-none})"
+    fi
 done
-[[ -n "$full_ml_min" && -z "$full_disk_drift" ]] \
-    && ok "the full and ml examples ask server-accept for the ml profile's CUDA minimum, $full_ml_min GB free" \
-    || bad "MIN_DISK_GB is not the ml profile's CUDA minimum (${full_ml_min:-unknown} GB) in:$full_disk_drift"
 
 # Dry runs with every network client replaced by the failing recorder above.
 FXP="$TMP/full-example"; mkdir -p "$FXP"
@@ -4676,6 +4729,19 @@ else
             ok "the full plan installs the ml profile through the real installer, and a repeat rebuilds and downloads nothing"
         else
             bad "full plan repeat: $(tail -5 "$MLP/out")"
+        fi
+        if mlp_run ML_MIN_FREE_GB=999999 && grep -q 'nothing to rebuild' "$MLP/out" && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log" \
+            && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" ]]; then
+            ok "a repeat of the full plan succeeds with less free space than a build needs"
+        else
+            bad "full plan repeat with too little free space: $(tail -5 "$MLP/out")"
+        fi
+        rm -rf -- "${MLP:?}/ws" "${MLP:?}/usr-bin" "${MLP:?}/runtime"
+        if ! mlp_run ML_MIN_FREE_GB=999999 && grep -q 'needs 999999' "$MLP/out" \
+            && [[ ! -e "$MLP_LINK" && ! -e "$MLP_STATE" ]] && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log"; then
+            ok "a first install through the full plan with too little free space stops before building"
+        else
+            bad "full plan first install with too little free space: $(tail -5 "$MLP/out")"
         fi
     else
         bad "full plan first run: $(tail -5 "$MLP/out")"

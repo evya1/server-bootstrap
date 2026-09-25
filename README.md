@@ -55,8 +55,8 @@ a CUDA host.
   CUDA 13.0 on one whose driver supports it. On NVIDIA hardware without such a
   driver the `ml` step stops rather than install CPU; see
   [ML-PROFILE](docs/ML-PROFILE.md).
-- The plan asks for 30 GB free under `/workspace` once the foundation is in
-  place, the `ml` profile's minimum for a CUDA backend.
+- The `ml` profile needs 30 GB free for a CUDA backend and 10 GB for CPU,
+  checked before it builds. A repeat that rebuilds nothing does not need it.
 - It keeps the verified archive. To repeat the install, run the last line
   again; an up-to-date `ml` environment is not rebuilt.
 
