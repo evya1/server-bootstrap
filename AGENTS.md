@@ -89,6 +89,9 @@ Never execute one directly.
 - A file published beside the archives is added to `release/release-assets.sh`
   and to the upload list in `.github/workflows/release.yml`. The ML profile
   ships inside the main archives, never as an artifact of its own.
+- A new `INSTALL_*` installer in `lib/bootstrap/config.sh` or a new profile
+  under `profiles/` is enabled in `examples/provision-plan.full.example.sh`,
+  the README's first install path; the suite fails until it is.
 - Release gates live in `tools/release-preflight.sh`; `.github/workflows/release.yml`
   runs only that script.
 - A release tag is exactly `v` plus `VERSION`. A version is spent once tagged: a

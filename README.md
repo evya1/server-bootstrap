@@ -17,7 +17,57 @@ Checks the host against its declared specification, installs a pinned toolchain,
 
 ## Install
 
-Paste this whole block into a fresh Ubuntu server, VM, or container, as root:
+Paste this whole block into a fresh Ubuntu 24.04 server, VM, or container, as
+root. It installs the complete built-in stack: the foundation
+[listed below](#what-the-run-installs), including the ngrok CLI, and the
+optional `ml` environment.
+
+> [!IMPORTANT]
+> No published release ships this block's plan yet. v2.2.3, the latest
+> release, has neither `provision-plan.full.example.sh` nor the `ml` profile,
+> so today the download fails and the block installs nothing. The block names
+> 2.2.3 because that is still this repository's `VERSION`; the release that
+> ships the full plan replaces it. Until then, use the
+> [foundation-only install](#foundation-only-install), which works with v2.2.3.
+
+```bash
+V=2.2.3
+BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
+cd /root
+wget -q --show-progress \
+  "$BASE/server-provision.sh" \
+  "$BASE/provision-plan.full.example.sh" \
+  "$BASE/server-bootstrap-$V.tar.gz" \
+  "$BASE/server-bootstrap-$V.tar.gz.sha256" \
+  && sha256sum -c "server-bootstrap-$V.tar.gz.sha256" \
+  && chmod +x server-provision.sh \
+  && ./server-provision.sh --plan ./provision-plan.full.example.sh
+```
+
+That is the whole installation. Each command runs only if the one before it
+succeeded, so nothing is installed unless all four files downloaded and the
+archive matches its SHA-256. The foundation takes roughly five minutes, most of
+it `apt`; the `ml` environment then adds its own download, several gigabytes on
+a CUDA host.
+
+- The full plan enables every configurable installer and every built-in
+  profile. `ml` uses `--backend auto`: CPU on a host without an NVIDIA GPU,
+  CUDA 13.0 on one whose driver supports it. On NVIDIA hardware without such a
+  driver the `ml` step stops rather than install CPU; see
+  [ML-PROFILE](docs/ML-PROFILE.md).
+- The plan asks for 30 GB free under `/workspace` once the foundation is in
+  place, the `ml` profile's minimum for a CUDA backend.
+- It keeps the verified archive. To repeat the install, run the last line
+  again; an up-to-date `ml` environment is not rebuilt.
+
+> [!NOTE]
+> Fresh hosts and containers often provide a root shell and ship without `sudo`.
+> Put `sudo` before `./server-provision.sh` only if you are not root.
+
+### Foundation-only install
+
+`provision-plan.example.sh` installs the foundation alone, without the `ml`
+profile, and deletes the archive after a successful run. v2.2.3 publishes it:
 
 ```bash
 V=2.2.3
@@ -27,24 +77,15 @@ wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.example.sh" \
   "$BASE/server-bootstrap-$V.tar.gz" \
-  "$BASE/server-bootstrap-$V.tar.gz.sha256"
-chmod +x server-provision.sh
-./server-provision.sh --plan ./provision-plan.example.sh
+  "$BASE/server-bootstrap-$V.tar.gz.sha256" \
+  && sha256sum -c "server-bootstrap-$V.tar.gz.sha256" \
+  && chmod +x server-provision.sh \
+  && ./server-provision.sh --plan ./provision-plan.example.sh
 ```
 
-That is the whole installation — roughly five minutes, most of it `apt`.
+### After the install
 
-The optional ML environment is not part of v2.2.3: that release has neither
-the `ml` profile nor `provision-plan.ml.example.sh`. From the first release
-that ships the profile, download `provision-plan.ml.example.sh` in place of
-`provision-plan.example.sh` and pass it to `--plan`; see
-[ML-PROFILE](docs/ML-PROFILE.md#one-command-install).
-
-> [!NOTE]
-> Fresh hosts and containers often provide a root shell and ship without `sudo`.
-> Prefix the last command with `sudo` only if you are not root.
-
-Then start the new shell and paste your API keys once, into the one file every
+Start the new shell and paste your API keys once, into the one file every
 login shell loads:
 
 ```bash
@@ -88,6 +129,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Python** | uv, plus an isolated base environment |
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
 | **Hardware** | A `server-accept` report: CPU, RAM, disk speed, and — when a GPU is present — PCIe link width, thermals, ECC |
+| **ML** (full plan) | The built-in `ml` profile: one Python 3.12 environment for PyTorch, vision, Jupyter and language tooling, from a frozen lock, plus the `ml-*` commands. No model or dataset |
 
 Every version above is pinned by the release. The two guarantees behind that
 word are different and worth separating: **downloaded binary artifacts** —
@@ -106,7 +148,7 @@ flowchart LR
   B --> C["extract<br/>bundle"]
   C --> D["install<br/>foundation"]
   D --> E["server-accept"]
-  E --> F["workload bundles<br/>in plan order"]
+  E --> F["built-in profiles,<br/>then bundles"]
 ```
 
 Acceptance runs **before** any workload. A rejected host stops provisioning, so
@@ -120,8 +162,9 @@ when the declared specification requires a GPU.
 
 | Goal | Command |
 | --- | --- |
-| Provision a fresh server end to end | `./server-provision.sh --plan ./provision-plan.example.sh` |
-| Provision a fresh server with the ML environment (a release that ships the `ml` profile) | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
+| Provision a fresh server with the complete built-in stack (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.full.example.sh` |
+| Provision a fresh server with the foundation only | `./server-provision.sh --plan ./provision-plan.example.sh` |
+| Provision a fresh server with the foundation and the ML environment (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
 | Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check the host against its declared specification | `server-accept` |
@@ -178,7 +221,9 @@ SKIP_PACKAGES="nmap tcpdump" \
 
 Each subsystem except ngrok can also be switched off individually —
 `INSTALL_GITHUB_CLI=0`, `INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and
-so on. See [CONFIGURATION](docs/CONFIGURATION.md) for the full list.
+so on. See [CONFIGURATION](docs/CONFIGURATION.md) for the full list. The full
+plan exports every one of them as `1`, and a plan's value wins over the
+environment, so to switch one off there, edit its line in the plan.
 
 Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, ngrok, and
 the AI CLIs — are deliberately absent from the manifest. Adding one of them to

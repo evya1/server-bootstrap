@@ -8,10 +8,13 @@ archive.
 
 ## 2. Edit the plan
 
-Start from `examples/provision-plan.example.sh`. Register the bootstrap once,
-then register bundles in the exact installation order you want. For the
-optional ML environment, start from `examples/provision-plan.ml.example.sh`
-instead; see [ML-PROFILE](ML-PROFILE.md#one-command-install).
+For the complete built-in stack, every configurable installer and every
+built-in profile, start from `examples/provision-plan.full.example.sh`; it is
+the plan the README's first install block runs. For the foundation only, start
+from `examples/provision-plan.example.sh`, and for the foundation and the
+optional ML environment, from `examples/provision-plan.ml.example.sh`; see
+[ML-PROFILE](ML-PROFILE.md#one-command-install). Register the bootstrap once,
+then register bundles in the exact installation order you want.
 
 ## 3. Preview
 

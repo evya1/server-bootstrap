@@ -137,10 +137,10 @@ rm -rf "$DIST"; mkdir -p "$DIST"
 # in one list is what stops a new archive being added to the release without
 # being added to the gate -- which is how the source zip ended up outside it.
 #
-# Scope, stated exactly: this list is the four archives, not the nine assets
-# release.yml uploads. The other five -- the two sidecars, the manifest and the
-# two standalone first-run files -- are derived from or describe these, and are
-# deliberately not double-built. See #47.
+# Scope, stated exactly: this list is the four archives, not every asset
+# release.yml uploads (release/release-assets.sh upload). The others -- the
+# sidecars, the manifest and the standalone first-run files -- are derived from
+# or describe these, and are deliberately not double-built. See #47.
 ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" "$NAME-$VERSION-source.zip")
 
 hash_artifacts() {  # directory -> "<name> <sha256>" per line, sorted by name

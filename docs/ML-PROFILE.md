@@ -15,39 +15,50 @@ downloads no model or dataset and starts no service.
 
 ## One-command install
 
-> [!NOTE]
-> v2.2.3, the latest published release, contains neither this profile nor
-> `provision-plan.ml.example.sh`. This page describes the first release that
-> ships the profile and every later one. Set `V` below to such a release.
+> [!IMPORTANT]
+> No published release ships this profile yet. v2.2.3, the latest release,
+> has neither the `ml` profile nor `provision-plan.ml.example.sh`, so today
+> the download below fails and nothing is installed. The block names 2.2.3
+> because that is still this repository's `VERSION`; the release that ships
+> the profile replaces it.
 
-A release with the profile publishes `provision-plan.ml.example.sh` beside
-its archive, and ships it inside the archive as
-`examples/provision-plan.ml.example.sh`. It installs the foundation and
-enables this profile from the one release it names. The profile is part of
-that archive, so the plan carries no ML URL, version, archive, or checksum. On
-a fresh Ubuntu 24.04 host, as root:
+The README's [first install block](../README.md#install) enables this profile
+as part of the complete built-in stack, with
+`provision-plan.full.example.sh`. `provision-plan.ml.example.sh` is the plan
+for the foundation and this profile. A release with the profile publishes
+both beside its archive and ships them inside it, under `examples/`. Each
+installs the foundation and enables this profile from the one release it
+names. The profile is part of that archive, so neither plan carries an ML URL,
+version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
 
 ```bash
-V=<ml-release>   # a release that ships the ml profile, not 2.2.3
+V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.ml.example.sh" \
   "$BASE/server-bootstrap-$V.tar.gz" \
-  "$BASE/server-bootstrap-$V.tar.gz.sha256"
-chmod +x server-provision.sh
-./server-provision.sh --plan ./provision-plan.ml.example.sh --dry-run
-./server-provision.sh --plan ./provision-plan.ml.example.sh
+  "$BASE/server-bootstrap-$V.tar.gz.sha256" \
+  && sha256sum -c "server-bootstrap-$V.tar.gz.sha256" \
+  && chmod +x server-provision.sh \
+  && ./server-provision.sh --plan ./provision-plan.ml.example.sh --dry-run \
+  && ./server-provision.sh --plan ./provision-plan.ml.example.sh
 ```
 
-The dry run lists the archive and `ml --backend auto` and changes nothing.
-The real run verifies the archive's SHA-256, installs the foundation, runs
-`server-accept`, then `server-profile install ml --backend auto`.
+Each command runs only if the one before it succeeded. The dry run lists the
+archive and `ml --backend auto` and changes nothing. The real run verifies the
+archive's SHA-256 again, installs the foundation, runs `server-accept`, then
+`server-profile install ml --backend auto`.
 
+- The plan asks `server-accept` for 30 GB free under `/workspace` once the
+  foundation is in place. That is this profile's own minimum for a CUDA
+  backend, which `auto` selects on an NVIDIA host; the CPU backend needs 10 GB
+  (`ML_MIN_FREE_GB` below).
 - The plan keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so
-  the same command can be run again. A repeat finds the environment current and
-  rebuilds nothing.
+  its last command, `./server-provision.sh --plan
+  ./provision-plan.ml.example.sh`, can be run again. A repeat finds the
+  environment current and rebuilds nothing.
 - To change backend, edit the plan's `enable_profile` line to name the backend
   and add `--reconfigure`, for example `enable_profile "ml" --backend cpu
   --reconfigure`. Without `--reconfigure` a run that would change backend

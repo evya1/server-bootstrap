@@ -56,6 +56,7 @@ jobs:
             release/dist/server-bootstrap-*.zip.sha256
             release/dist/server-bootstrap-*-release-manifest.json
             release/dist/server-provision.sh
+            release/dist/provision-plan.full.example.sh
             release/dist/provision-plan.example.sh
             release/dist/provision-plan.whisper.example.sh
             release/dist/provision-plan.ml.example.sh

@@ -32,7 +32,9 @@
   checksum-pinned release it names and enables its built-in `ml` profile with
   `--backend auto`. It carries no ML URL, version, archive or checksum. It
   keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so the same
-  command can be repeated; a repeat rebuilds no environment. Changing backend
+  command can be repeated; a repeat rebuilds no environment. It asks
+  `server-accept` for 30 GB free once the foundation is installed, the
+  profile's own minimum for a CUDA backend. Changing backend
   is an edit to its `enable_profile` line with `--reconfigure`, and without it
   the run stops and changes nothing. The README and `docs/ML-PROFILE.md` show
   the copyable download-and-run block. The suite dry-runs the example with
@@ -43,6 +45,36 @@
   update that leaves the previous environment in place. ([#57][])
 
 [#57]: https://github.com/evya1/server-bootstrap/issues/57
+
+- **The README's first install path is the complete built-in stack.**
+  `examples/provision-plan.full.example.sh`, also published beside each
+  release as `provision-plan.full.example.sh` and required in every archive,
+  installs the foundation from the one checksum-pinned release it names. It
+  exports every configurable installer as `1` (`INSTALL_ZSH`,
+  `INSTALL_OH_MY_ZSH`, `INSTALL_NODEJS`, `INSTALL_CLAUDE_CODE`,
+  `INSTALL_CODEX`, `INSTALL_PI`, `INSTALL_VSCODE_EXTENSIONS`, `INSTALL_UV`,
+  `INSTALL_GITHUB_CLI`, `INSTALL_BASE_PYTHON_ENV`, `INSTALL_RUNTIME_TOOLS`,
+  `INSTALL_SECRETS_FILE`, `INSTALL_PI_MODELS_TEMPLATE`), keeps the shipped
+  package manifest, and enables every built-in profile:
+  `enable_profile "ml" --backend auto`. The pinned ngrok CLI has no switch;
+  every bootstrap run installs it. The plan keeps its verified archive, so its
+  last command can be repeated, and asks for 30 GB free once the foundation is
+  installed. The README's first Bash block downloads the provisioner, the full
+  plan, the versioned archive and its sidecar, checks the archive with
+  `sha256sum -c`, and runs the plan, each step only if the previous one
+  succeeded. `provision-plan.example.sh` remains as the foundation-only
+  install, after it. The suite reads the installer switches from
+  `lib/bootstrap/config.sh` and the profiles from `profiles/`, and fails when
+  the plan misses one. It checks the README block's commands, order and
+  assets, and the full plan's bytes in the tree, the standalone asset and all
+  four archives. As root, it runs the README block as pasted against the
+  built release with a recording stand-in foundation: every installer is
+  selected over an environment that turned them off, `ml` follows, the last
+  line repeats the install, and a missing plan or a damaged archive stops the
+  block before anything is installed. The `docs/ML-PROFILE.md` download block
+  is valid Bash again. ([#60][])
+
+[#60]: https://github.com/evya1/server-bootstrap/issues/60
 
 - **`AGENTS.md`** — repository rules for coding agents: supported scope, entry
   points, security boundaries, release invariants, the validation commands, and
