@@ -159,9 +159,11 @@ registered bundle in order, and deletes local archives only after success.
 ## Customizing what gets installed
 
 The distribution packages live in [`config/packages.txt`](config/packages.txt),
-not in shell code. `[required]` is installed as one apt batch; `[optional]` is
-best effort, for packages whose availability varies across Ubuntu and Debian
-releases. Edit the file, or adjust it from the environment without touching it:
+not in shell code. `[required]` is installed as one apt batch, and a required
+package that cannot be installed fails the run; `[optional]` is best effort, for
+packages whose availability varies across Ubuntu releases. No apt step changes
+an installed NVIDIA driver or CUDA package. Edit the file, or adjust it from the
+environment without touching it:
 
 ```bash
 EXTRA_PACKAGES="postgresql-client redis-tools" \

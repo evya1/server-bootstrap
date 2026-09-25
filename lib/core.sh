@@ -29,6 +29,43 @@ sb_require_root() {
     (( EUID == 0 )) || sb_die "run as root (use sudo)"
 }
 
+# --- Supported platform ----------------------------------------------------
+# Ubuntu 24.04 on x86-64 or ARM64, with a matching dpkg architecture: a 32-bit
+# userland on a 64-bit kernel would take apt packages for one architecture and
+# checksummed binaries for the other. server-provision.sh is downloaded on its
+# own, so it carries a standalone copy of this check; the test suite runs both
+# over the same hosts.
+
+# sb_os_release_value FILE KEY -> the value, without its quotes
+sb_os_release_value() {
+    sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# sb_platform_problem OS_RELEASE_FILE MACHINE DPKG_ARCH
+# Prints why the host is unsupported; prints nothing when it is supported.
+sb_platform_problem() {
+    local file="$1" machine="$2" dpkg_arch="$3" id version
+    [[ -r "$file" ]] || { echo "cannot read $file (supported: Ubuntu 24.04)"; return; }
+    id="$(sb_os_release_value "$file" ID)"
+    version="$(sb_os_release_value "$file" VERSION_ID)"
+    [[ "$id" == ubuntu && "$version" == 24.04 ]] \
+        || { echo "unsupported operating system: ${id:-unknown} ${version:-unknown} (supported: Ubuntu 24.04)"; return; }
+    case "$machine:$dpkg_arch" in
+        x86_64:amd64|aarch64:arm64) ;;
+        x86_64:*|aarch64:*) echo "dpkg architecture ${dpkg_arch:-unknown} does not match $machine (supported: amd64 on x86_64, arm64 on aarch64)" ;;
+        *) echo "unsupported architecture: ${machine:-unknown} (supported: x86_64, aarch64)" ;;
+    esac
+}
+
+# Runs before anything is created or installed. SB_OS_RELEASE_FILE is a test
+# seam for the suite's fixtures, not a supported setting.
+sb_require_supported_platform() {
+    local problem
+    problem="$(sb_platform_problem "${SB_OS_RELEASE_FILE:-/etc/os-release}" "$(uname -m)" \
+        "$(dpkg --print-architecture 2>/dev/null || true)")"
+    [[ -z "$problem" ]] || sb_die "$problem; nothing was installed or created"
+}
+
 sb_ensure_line() {
     local file="$1" line="$2"
     grep -Fqx "$line" "$file" 2>/dev/null || printf '%s\n' "$line" >> "$file"

@@ -1436,6 +1436,336 @@ done < <(bootstrap_read_package_section config/packages.txt required
 [[ "$(bootstrap_read_package_section config/packages.txt required | wc -l)" -ge 40 ]] \
     && ok "shipped manifest keeps a substantial [required] set" || bad "manifest [required] shrank unexpectedly"
 
+section "Supported platform: rejected before anything is created"
+# Ubuntu 24.04 on x86-64 or ARM64 only. Both entry points must refuse any other
+# host before the workspace, a log, the lock, or apt. Every host here is a
+# fixture, so the result does not depend on the machine running the suite.
+PLAT="$TMP/platform"; mkdir -p "$PLAT/os"
+os_fixture() { printf '%s\n' "${@:2}" > "$PLAT/os/$1"; }
+os_fixture noble 'PRETTY_NAME="Ubuntu 24.04 LTS"' 'NAME="Ubuntu"' 'VERSION_ID="24.04"' 'ID=ubuntu' 'ID_LIKE=debian'
+os_fixture noble-single "ID='ubuntu'" "VERSION_ID='24.04'"
+os_fixture jammy 'ID=ubuntu' 'VERSION_ID="22.04"'
+os_fixture oracular 'ID=ubuntu' 'VERSION_ID="24.10"'
+os_fixture resolute 'ID=ubuntu' 'VERSION_ID="26.04"'
+os_fixture bookworm 'ID=debian' 'VERSION_ID="12"'
+os_fixture mint 'ID=linuxmint' 'ID_LIKE="ubuntu debian"' 'VERSION_ID="22"'
+os_fixture empty ''
+# fixture|machine|dpkg architecture|expected: ok or a fragment of the reason
+PLATFORM_CASES='noble|x86_64|amd64|ok
+noble|aarch64|arm64|ok
+noble-single|x86_64|amd64|ok
+jammy|x86_64|amd64|unsupported operating system: ubuntu 22.04
+oracular|x86_64|amd64|unsupported operating system: ubuntu 24.10
+resolute|aarch64|arm64|unsupported operating system: ubuntu 26.04
+bookworm|x86_64|amd64|unsupported operating system: debian 12
+mint|x86_64|amd64|unsupported operating system: linuxmint 22
+empty|x86_64|amd64|unsupported operating system: unknown unknown
+missing|x86_64|amd64|cannot read
+noble|riscv64|riscv64|unsupported architecture: riscv64
+noble|armv7l|armhf|unsupported architecture: armv7l
+noble|i686|i386|unsupported architecture: i686
+noble|aarch64|armhf|dpkg architecture armhf does not match aarch64
+noble|x86_64|i386|dpkg architecture i386 does not match x86_64
+noble|x86_64||dpkg architecture unknown does not match x86_64'
+
+# The two copies are compared as functions, case by case: the provisioner's is
+# pulled out of server-provision.sh rather than restated here.
+platform_copies="$(bash -c '
+    source lib/core.sh
+    eval "$(sed -n "/^os_release_value() {/,/^}/p; /^platform_problem() {/,/^}/p" server-provision.sh)"
+    declare -F platform_problem >/dev/null || { echo "MISSING provisioner copy"; exit 0; }
+    while IFS="|" read -r fixture machine arch expected; do
+        a="$(sb_platform_problem "$0/$fixture" "$machine" "$arch")"
+        b="$(platform_problem "$0/$fixture" "$machine" "$arch")"
+        [[ "$a" == "$b" ]] || { echo "DIFFER $fixture $machine $arch: [$a] [$b]"; continue; }
+        if [[ "$expected" == ok ]]; then [[ -z "$a" ]] || echo "REJECTED $fixture $machine $arch: $a"
+        else [[ "$a" == *"$expected"* ]] || echo "WRONG $fixture $machine $arch: [$a]"; fi
+    done <<< "$1"
+' "$PLAT/os" "$PLATFORM_CASES")"
+[[ -z "$platform_copies" ]] \
+    && ok "both platform checks accept Ubuntu 24.04 on x86_64/amd64 and aarch64/arm64 and reject every other case alike" \
+    || bad "platform checks: $platform_copies"
+
+# Stubs that record any call a rejected run must never make. flock is the
+# safety net: even a gate that wrongly passed stops at the bootstrap lock.
+mkdir -p "$PLAT/bin"
+for tool in apt-get dpkg-query fuser; do
+    printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" %q "$*" >> "$PLAT_CALLS"\nexit 0\n' "$tool" > "$PLAT/bin/$tool"
+done
+cat > "$PLAT/bin/dpkg" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1" == --print-architecture ]] && { printf '%s\n' "$PLAT_DPKG_ARCH"; exit 0; }
+printf 'dpkg %s\n' "$*" >> "$PLAT_CALLS"
+STUB
+cat > "$PLAT/bin/uname" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1" == -m ]] && { printf '%s\n' "$PLAT_MACHINE"; exit 0; }
+exec /usr/bin/uname "$@"
+STUB
+cat > "$PLAT/bin/flock" <<'STUB'
+#!/usr/bin/env bash
+printf 'flock %s\n' "$*" >> "$PLAT_CALLS"
+exit 1
+STUB
+chmod 0755 "$PLAT/bin/"*
+printf 'register_bootstrap ./absent.tar.gz ./absent.sha256\n' > "$PLAT/plan.sh"
+
+platform_entry() {  # command, fixture, machine, dpkg arch; sets pout, pcode, pdir
+    local -a args=()
+    [[ "$1" != server-provision.sh ]] || args=(--plan "$PLAT/plan.sh")
+    pdir="$(mktemp -d "$TMP/platform-run.XXXXXX")"; mkdir -p "$pdir/tmp"
+    pout="$(PATH="$PLAT/bin:$PATH" PLAT_CALLS="$pdir/calls" PLAT_MACHINE="$3" PLAT_DPKG_ARCH="$4" \
+        SB_OS_RELEASE_FILE="$PLAT/os/$2" WORKSPACE_ROOT="$pdir/ws" TMPDIR="$pdir/tmp" \
+        "$ROOT/$1" "${args[@]}" 2>&1)"; pcode=$?
+}
+for entry in server-bootstrap.sh server-provision.sh; do
+    entry_clean=1
+    while IFS='|' read -r fixture machine arch expected; do
+        [[ "$expected" != ok ]] || continue
+        platform_entry "$entry" "$fixture" "$machine" "$arch"
+        [[ "$pcode" != 0 && "$pout" == *"$expected"*"nothing was installed or created"* \
+            && ! -e "$pdir/ws" && ! -e "$pdir/calls" && -z "$(ls -A "$pdir/tmp")" ]] \
+            || { bad "$entry on $fixture/$machine/$arch (exit $pcode): $pout"; entry_clean=0; }
+    done <<< "$PLATFORM_CASES"
+    (( entry_clean )) && ok "$entry rejects every unsupported host before the workspace, a log, the lock, or apt"
+done
+
+# A supported host gets past the gate. The provisioner then creates its log and
+# stops at the absent archive (or at the root check); the bootstrap stops at
+# the stubbed lock as root, or at its own root check otherwise. Neither reaches apt.
+platform_entry server-provision.sh noble x86_64 amd64
+[[ "$pcode" != 0 && -d "$pdir/ws/startup-logs" && "$pout" != *"nothing was installed or created"* ]] \
+    && ok "server-provision.sh lets Ubuntu 24.04 x86_64 through to its log directory" \
+    || bad "server-provision.sh on a supported host (exit $pcode): $pout"
+platform_entry server-bootstrap.sh noble aarch64 arm64
+if (( EUID == 0 )); then
+    [[ "$pcode" != 0 && "$(cat "$pdir/calls" 2>/dev/null)" == 'flock -w 1800 9' && -d "$pdir/ws/startup-logs" ]] \
+        && ok "server-bootstrap.sh lets Ubuntu 24.04 aarch64 through to its lock, and no further" \
+        || bad "server-bootstrap.sh on a supported host (exit $pcode): $pout"
+else
+    [[ "$pcode" != 0 && "$pout" == *'run as root'* && ! -e "$pdir/calls" ]] \
+        && ok "server-bootstrap.sh lets Ubuntu 24.04 aarch64 through to its root check" \
+        || bad "server-bootstrap.sh on a supported host (exit $pcode): $pout"
+fi
+
+section "APT transactions: required packages and the NVIDIA/CUDA guard"
+# Offline. apt-get, dpkg and dpkg-query are stubs driven by fixture files, so
+# no package is resolved, installed or removed on the machine running this.
+#   sim/WORD         printed by `apt-get -s ...` when WORD is one of its arguments
+#   unavailable/PKG  `apt-get [-s] install ... PKG` fails, as for a missing name
+#   dpkg-status      what dpkg-query reports: "NAME WANT FLAG STATUS" lines
+# Every call lands in calls: "SIM args", "RUN args", or "DPKG args".
+APTX="$TMP/apt"; mkdir -p "$APTX/bin"
+cat > "$APTX/bin/apt-get" <<'STUB'
+#!/usr/bin/env bash
+sim=0; args=()
+for arg in "$@"; do if [[ "$arg" == -s ]]; then sim=1; else args+=("$arg"); fi; done
+printf '%s %s\n' "$( ((sim)) && echo SIM || echo RUN )" "${args[*]}" >> "$APT_FIX/calls"
+for arg in "${args[@]}"; do
+    [[ ! -e "$APT_FIX/unavailable/$arg" ]] || { echo "E: Unable to locate package $arg"; exit 100; }
+done
+if (( sim )); then
+    for arg in "${args[@]}"; do [[ ! -f "$APT_FIX/sim/$arg" ]] || cat -- "$APT_FIX/sim/$arg"; done
+fi
+exit 0
+STUB
+cat > "$APTX/bin/dpkg" <<'STUB'
+#!/usr/bin/env bash
+printf 'DPKG %s\n' "$*" >> "$APT_FIX/calls"
+STUB
+cat > "$APTX/bin/dpkg-query" <<'STUB'
+#!/usr/bin/env bash
+cat -- "$APT_FIX/dpkg-status" 2>/dev/null || true
+STUB
+printf '#!/usr/bin/env bash\nexit 1\n' > "$APTX/bin/fuser"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$APTX/bin/git"
+chmod 0755 "$APTX/bin/"*
+cat > "$APTX/manifest.txt" <<'MANIFEST'
+[required]
+alpha
+bravo
+charlie
+[optional]
+delta
+echo
+MANIFEST
+# Strict mode and an inherited ERR trap, as in server-bootstrap.sh: a helper
+# that lets a command fail even inside $(...) would mark the run FAILED there.
+cat > "$APTX/driver.sh" <<'DRIVER'
+set -Eeuo pipefail
+trap 'echo "ERR trap: line $LINENO: $BASH_COMMAND" >&2' ERR
+source "$REPO/lib/core.sh"
+source "$REPO/lib/bootstrap/packages.sh"
+sleep() { :; }
+bootstrap_packages
+DRIVER
+
+apt_scenario() {  # name; then set up $APT_FIX before apt_run
+    APT_FIX="$APTX/$1"; mkdir -p "$APT_FIX/sim" "$APT_FIX/unavailable" "$APT_FIX/localbin"
+}
+apt_run() {  # [VAR=value...]; sets aout, acode, acalls
+    aout="$(env PATH="$APTX/bin:$PATH" APT_FIX="$APT_FIX" REPO="$ROOT" \
+        PACKAGES_FILE="$APTX/manifest.txt" RUN_APT_UPGRADE=0 \
+        BOOTSTRAP_LOCAL_BIN_DIR="$APT_FIX/localbin" "$@" bash "$APTX/driver.sh" 2>&1)"; acode=$?
+    acalls="$(cat "$APT_FIX/calls" 2>/dev/null)"
+    apt_trap_check
+}
+has_call() { grep -qxF -- "$1" <<< "$acalls"; }
+APT_TRAPPED=""
+# Only a run that succeeds must stay clear of the trap; a failing one sets it off
+# on purpose, which is how the entry point records STATUS: FAILED.
+apt_trap_check() { [[ "$acode" != 0 || "$aout" != *"ERR trap:"* ]] || APT_TRAPPED+="${APT_FIX##*/} "; }
+no_call_matching() { ! grep -qE -- "$1" <<< "$acalls"; }
+INSTALL='install -y --no-install-recommends'
+
+# The parser alone, on one simulated plan that has every shape of line.
+source lib/bootstrap/packages.sh
+parsed="$(bootstrap_apt_protected_changes <<'PLAN' | tr '\n' ' '
+NOTE: This is only a simulation!
+Remv nvidia-driver-550 [550.120-0ubuntu0.24.04.1]
+Remv xserver-xorg-video-nvidia-550 [550.120-0ubuntu0.24.04.1]
+Purg libcudnn9-cuda-12 [9.1.0.70-1]
+Inst libnvidia-compute-550 [550.120-0ubuntu0.24.04.1] (550.127.05-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst libnvidia-gl-550:i386 [550.120-0ubuntu0.24.04.1] (550.127.05-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [i386])
+Inst linux-modules-nvidia-550-generic [6.8.0-45.45] (6.8.0-47.47 Ubuntu:24.04/noble-updates [amd64])
+Inst libnvidia-egl-wayland1 (1:1.1.13-1build1 Ubuntu:24.04/noble [amd64])
+Inst libcurl4t64 [8.5.0-2ubuntu10.3] (8.5.0-2ubuntu10.4 Ubuntu:24.04/noble-updates [amd64])
+Inst nvtop (3.0.2-1 Ubuntu:24.04/noble/universe [amd64])
+Conf libnvidia-egl-wayland1 (1:1.1.13-1build1 Ubuntu:24.04/noble [amd64])
+Conf libnvidia-compute-550 (550.127.05-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Conf nvidia-dkms-550 (550.120-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Conf libcurl4t64 (8.5.0-2ubuntu10.4 Ubuntu:24.04/noble-updates [amd64])
+PLAN
+)"
+[[ "$parsed" == "libcudnn9-cuda-12 libnvidia-compute-550 libnvidia-gl-550 linux-modules-nvidia-550-generic nvidia-dkms-550 nvidia-driver-550 xserver-xorg-video-nvidia-550 " ]] \
+    && ok "a simulated plan's upgrades, removals, purges and pending configures of driver/CUDA packages are found; fresh installs and other packages are not" \
+    || bad "protected-change parser: $parsed"
+guard_names_ok=1
+for name in curl libcurl4t64 nvtop cmake screen; do
+    bootstrap_apt_protected_name "$name" && { bad "not a driver/CUDA package, but protected: $name"; guard_names_ok=0; }
+done
+for name in nvidia-driver-550 nvidia-utils-550 libnvidia-compute-550 cuda-toolkit-12-4 cuda libcudnn9-cuda-12 \
+    cudnn9-cuda-12 libnccl2 libcublas12 libcudart12 nsight-compute xserver-xorg-video-nvidia-550 \
+    linux-modules-nvidia-550-generic linux-signatures-nvidia-6.8.0-45-generic firmware-nvidia-gsp-550; do
+    bootstrap_apt_protected_name "$name" || { bad "driver/CUDA package not protected: $name"; guard_names_ok=0; }
+done
+while IFS= read -r name; do
+    bootstrap_apt_protected_name "$name" && { bad "shipped manifest names a protected package: $name"; guard_names_ok=0; }
+done < <(bootstrap_read_package_section config/packages.txt required
+         bootstrap_read_package_section config/packages.txt optional)
+# server-bootstrap.sh runs with set -E and an ERR trap that records the run as
+# FAILED, and the trap reaches into $(...). Called outside any condition, on a
+# plan whose last line is an ordinary upgrade, the parser must not set it off.
+parser_trap="$(bash -c '
+    set -Eeuo pipefail
+    trap "echo TRAPPED >&2" ERR
+    source lib/core.sh; source lib/bootstrap/packages.sh
+    out="$(printf "Inst libcurl4t64 [1] (2 x [amd64])\n" | bootstrap_apt_protected_changes)"
+    printf "Remv nvidia-driver-550 [1]\nInst zlib1g [1] (2 x [amd64])\n" | bootstrap_apt_protected_changes
+    dpkg-query() { printf "libfoo1 install ok unpacked\n"; }; dpkg() { :; }
+    bootstrap_dpkg_recover
+' 2>&1)"
+[[ "$parser_trap" == "nvidia-driver-550" ]] \
+    && ok "the guard's helpers never set off an inherited ERR trap" \
+    || bad "the guard's helpers set off the ERR trap: $parser_trap"
+(( guard_names_ok )) && ok "the guard covers driver, CUDA and kernel-module package names, and nothing the foundation itself installs"
+
+# Real plans upgrade ordinary libraries too; those lines must pass untouched.
+apt_scenario happy
+for word in -f alpha delta echo; do
+    printf 'Inst libcurl4t64 [8.5.0-2ubuntu10.3] (8.5.0-2ubuntu10.4 Ubuntu:24.04/noble-updates [amd64])\nConf libcurl4t64 (8.5.0-2ubuntu10.4 Ubuntu:24.04/noble-updates [amd64])\n' \
+        > "$APT_FIX/sim/$word"
+done
+apt_run
+[[ "$acode" == 0 && "$acalls" == "DPKG --configure -a
+SIM -f install -y
+RUN -f install -y
+RUN update
+SIM $INSTALL alpha bravo charlie
+RUN $INSTALL alpha bravo charlie
+SIM $INSTALL delta
+RUN $INSTALL delta
+SIM $INSTALL echo
+RUN $INSTALL echo" ]] \
+    && ok "a clean host runs every transaction, each simulated first, in the established order" \
+    || bad "clean-host apt sequence (exit $acode): $acalls"
+
+apt_scenario required-missing; : > "$APT_FIX/unavailable/bravo"; apt_run
+[[ "$acode" != 0 && "$aout" == *"required packages could not be installed: bravo"* ]] \
+    && has_call "RUN $INSTALL alpha" && has_call "RUN $INSTALL charlie" \
+    && no_call_matching '^RUN .*bravo' && no_call_matching '^(SIM|RUN) .*(delta|echo)' \
+    && ok "an uninstallable required package fails the bootstrap, after installing the others and naming it" \
+    || bad "required package failure (exit $acode): $aout"
+
+apt_scenario optional-missing; : > "$APT_FIX/unavailable/delta"; apt_run
+[[ "$acode" == 0 && "$aout" == *"optional package not installed: delta"* ]] \
+    && has_call "RUN $INSTALL alpha bravo charlie" && has_call "RUN $INSTALL echo" && no_call_matching '^RUN .*delta' \
+    && ok "an uninstallable optional package still only warns" \
+    || bad "optional package failure (exit $acode): $aout"
+
+apt_scenario repair-removes-driver
+printf 'Remv nvidia-driver-550 [550.120-0ubuntu0.24.04.1]\nRemv libnvidia-compute-550 [550.120-0ubuntu0.24.04.1]\n' > "$APT_FIX/sim/-f"
+apt_run
+[[ "$acode" == 0 && "$aout" == *"refused apt-get -f install -y"*"libnvidia-compute-550 nvidia-driver-550"* \
+    && "$aout" == *"skipped apt-get -f install"* ]] \
+    && has_call "SIM -f install -y" && ! has_call "RUN -f install -y" && has_call "RUN $INSTALL alpha bravo charlie" \
+    && ok "apt-get -f install is never run when its plan removes the NVIDIA driver" \
+    || bad "fix-broken guard (exit $acode): $aout"
+
+apt_scenario optional-upgrades-driver
+printf 'Inst libnvidia-compute-550 [550.120-0ubuntu0.24.04.1] (550.127.05-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])\n' \
+    > "$APT_FIX/sim/delta"
+apt_run
+[[ "$acode" == 0 && "$aout" == *"refused apt-get $INSTALL delta"* && "$aout" == *"optional package not installed: delta"* ]] \
+    && no_call_matching '^RUN .*delta' && has_call "RUN $INSTALL echo" \
+    && ok "an optional package whose plan upgrades an installed driver library is skipped, not installed" \
+    || bad "optional transaction guard (exit $acode): $aout"
+
+apt_scenario optional-fresh-library
+printf 'Inst libnvidia-egl-wayland1 (1:1.1.13-1build1 Ubuntu:24.04/noble [amd64])\nConf libnvidia-egl-wayland1 (1:1.1.13-1build1 Ubuntu:24.04/noble [amd64])\n' \
+    > "$APT_FIX/sim/delta"
+apt_run
+[[ "$acode" == 0 && "$aout" != *refused* ]] && has_call "RUN $INSTALL delta" \
+    && ok "a plan that only adds a new NVIDIA library, changing nothing installed, is not refused" \
+    || bad "fresh-install false positive (exit $acode): $aout"
+
+apt_scenario required-removes-cuda
+printf 'Remv cuda-toolkit-12-4 [12.4.1-1]\n' > "$APT_FIX/sim/charlie"
+apt_run
+[[ "$acode" != 0 && "$aout" == *"required packages could not be installed: charlie"* ]] \
+    && no_call_matching '^RUN .*charlie' && has_call "RUN $INSTALL alpha" && has_call "RUN $INSTALL bravo" \
+    && ok "a required package whose plan removes a CUDA package fails the bootstrap without running it" \
+    || bad "required transaction guard (exit $acode): $aout"
+
+apt_scenario upgrade-touches-driver
+printf 'Inst nvidia-dkms-550 [550.120-0ubuntu0.24.04.1] (550.127.05-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])\n' \
+    > "$APT_FIX/sim/upgrade"
+apt_run RUN_APT_UPGRADE=1
+[[ "$acode" != 0 && "$aout" == *"RUN_APT_UPGRADE=1: apt-get upgrade failed or was refused"* ]] \
+    && has_call "SIM upgrade -y" && ! has_call "RUN upgrade -y" \
+    && ok "RUN_APT_UPGRADE=1 fails instead of upgrading an installed driver" \
+    || bad "upgrade guard (exit $acode): $aout"
+apt_scenario upgrade-clean; apt_run RUN_APT_UPGRADE=1
+[[ "$acode" == 0 ]] && has_call "RUN upgrade -y" \
+    && ok "RUN_APT_UPGRADE=1 still upgrades when no driver or CUDA package would change" \
+    || bad "clean upgrade (exit $acode): $aout"
+
+apt_scenario dpkg-pending-driver
+printf 'nvidia-dkms-550 install ok half-configured\nlibfoo1 install ok installed\n' > "$APT_FIX/dpkg-status"
+apt_run
+[[ "$acode" == 0 && "$aout" == *"skipped dpkg --configure -a"*"nvidia-dkms-550"* ]] && ! has_call "DPKG --configure -a" \
+    && ok "dpkg --configure -a is skipped while a driver package is left half-configured" \
+    || bad "dpkg recovery guard (exit $acode): $aout"
+apt_scenario dpkg-pending-other
+printf 'libfoo1 install ok unpacked\nnvidia-driver-550 install ok installed\n' > "$APT_FIX/dpkg-status"
+apt_run
+[[ "$acode" == 0 ]] && has_call "DPKG --configure -a" \
+    && ok "dpkg --configure -a still finishes an interrupted run that leaves no driver package pending" \
+    || bad "dpkg recovery (exit $acode): $aout"
+[[ -z "$APT_TRAPPED" ]] \
+    && ok "no scenario sets off the entry point's ERR trap, which would record the run as failed" \
+    || bad "the ERR trap fired in: $APT_TRAPPED"
+
 section "Generic bundle installation"
 FIX="$TMP/fix"; mkdir -p "$FIX/src/demo-1.0.0"
 printf '1.0.0\n' > "$FIX/src/demo-1.0.0/VERSION"

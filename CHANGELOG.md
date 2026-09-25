@@ -124,6 +124,29 @@
 
 [#59]: https://github.com/evya1/server-bootstrap/issues/59
 
+### Fixed
+
+- **Unsupported hosts are refused before anything is created.**
+  `server-provision.sh` and `server-bootstrap.sh` now check for Ubuntu 24.04 on
+  x86-64 or ARM64, with a matching `dpkg` architecture, before they create the
+  workspace, a log file, or a lock, and before apt runs. Previously both went on
+  to install on any release or architecture until something failed part-way. A
+  `--dry-run` preview still works on any host.
+- **A required package that cannot be installed fails the bootstrap.** After a
+  failed `[required]` batch, packages are still retried one by one, but any that
+  remain uninstalled are named and fail the run. They used to be downgraded to a
+  warning, so a run could report `STATUS: OK` without them. `[optional]`
+  packages remain best effort.
+- **The bootstrap no longer changes installed NVIDIA driver or CUDA packages.**
+  `dpkg --configure -a`, `apt-get -f install -y`, every `[required]` and
+  `[optional]` install, and `RUN_APT_UPGRADE=1` are simulated with `apt-get -s`
+  first. A plan that would upgrade, downgrade, reinstall, reconfigure, or remove
+  such a package is not run: the repair steps and optional packages are skipped
+  with a warning, and a required package or the upgrade fails the run.
+  `apt-get -f install` used to run unconditionally with its failure ignored,
+  and could remove a GPU host's driver to resolve dependencies. Nothing is held
+  or otherwise changed on the host.
+
 ## 2.2.3
 
 *Released 2026-09-12.*

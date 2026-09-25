@@ -8,7 +8,7 @@ convenient place to export them.
 | Variable | Default | Meaning |
 |---|---:|---|
 | `WORKSPACE_ROOT` | `/workspace` | workspace root |
-| `RUN_APT_UPGRADE` | `0` | run full apt upgrade |
+| `RUN_APT_UPGRADE` | `0` | run full apt upgrade; fails rather than change an installed NVIDIA driver or CUDA package |
 | `INSTALL_ZSH` | `1` | configure Zsh and set it as root's login shell |
 | `INSTALL_OH_MY_ZSH` | `1` | install and load pinned Oh My Zsh |
 | `INSTALL_NODEJS` | `1` | install checksum-verified Node.js LTS |
@@ -32,10 +32,34 @@ The apt package set lives in `config/packages.txt` rather than in shell code, so
 changing it never means editing a script. The manifest has two sections:
 
 - `[required]` is installed as one apt batch. If the batch fails, each package
-  is retried individually so a single unavailable name cannot block the rest.
+  is retried individually; any that still cannot be installed fails the
+  bootstrap, and the failure names them.
 - `[optional]` is best effort. These are packages whose availability genuinely
-  varies across Ubuntu and Debian releases, so a miss is a warning, never a
-  failure.
+  varies across Ubuntu releases, so a miss is a warning, never a failure.
+
+### NVIDIA driver and CUDA packages
+
+The bootstrap never upgrades, downgrades, reinstalls, reconfigures, or removes
+an NVIDIA driver or CUDA package that is already installed. Before each apt
+transaction it runs the same command with `apt-get -s` and reads the plan; a
+plan that would change such a package is not run. Package names beginning
+`nvidia`, `libnvidia`, `cuda`, `libcuda`, `cudnn`, `libcudnn`, `libnccl`,
+`nsight-`, and the CUDA math and runtime libraries count, as does any name
+containing `-nvidia` (the X driver and the prebuilt kernel modules).
+
+| Transaction | When its plan would change one |
+|---|---|
+| `dpkg --configure -a` (interrupted run) | skipped with a warning while a driver or CUDA package is left unconfigured |
+| `apt-get -f install` (broken dependencies) | skipped with a warning; if the dependencies really are broken, the required install then fails |
+| a `[required]` package | the bootstrap fails and names it |
+| an `[optional]` package | skipped with a warning |
+| `RUN_APT_UPGRADE=1` | the bootstrap fails before upgrading anything |
+
+Installing a new package of this kind is not refused, since it changes nothing
+already installed; a new package that would replace an installed one shows as a
+removal and is refused. Update the driver or CUDA yourself, then rerun the
+bootstrap. The check guards only the bootstrap's own transactions: it does not
+hold packages, and `unattended-upgrades` or another apt run is not affected.
 
 Blank lines, `#` comments, and trailing comments are ignored. Package names are
 validated against Debian's naming rules before they reach the apt command line.
