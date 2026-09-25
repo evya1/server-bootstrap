@@ -4347,10 +4347,11 @@ grep -q "BOOTSTRAP_VERSION=\"$declared\"" lib/bootstrap/config.sh \
     || { bad "BOOTSTRAP_VERSION does not match VERSION ($declared)"; version_drift=1; }
 grep -qF "V=$declared" README.md \
     || { bad "README download snippet does not pin V=$declared"; version_drift=1; }
-grep -qF "V=$declared" docs/ML-PROFILE.md \
-    || { bad "the ML one-command snippet does not pin V=$declared"; version_drift=1; }
-grep -E '^V=' README.md docs/ML-PROFILE.md | grep -vF "V=$declared" \
-    && { bad "a download snippet pins another version than $declared"; version_drift=1; }
+# The ML snippet names a placeholder until the first release that ships the
+# profile sets it to that version; it may never name an older one.
+ml_snippet="$(grep -E '^V=' docs/ML-PROFILE.md)"
+[[ "$ml_snippet" == "V=$declared" || "$ml_snippet" == 'V=<ml-release>   # a release that ships the ml profile, not 2.2.3' ]] \
+    || { bad "the ML one-command snippet pins '$ml_snippet', not V=$declared or its placeholder"; version_drift=1; }
 while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
     bad "stale version string: $hit"
