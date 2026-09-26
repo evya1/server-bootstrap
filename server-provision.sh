@@ -147,6 +147,31 @@ if (( DRY_RUN )); then
     exit 0
 fi
 
+# Ubuntu 24.04 on x86-64 or ARM64 only, checked before the log directory, the
+# lock, or the bootstrap exists. This file is downloaded on its own, so it
+# carries a copy of sb_platform_problem in lib/core.sh; the test suite runs both
+# over the same hosts. SB_OS_RELEASE_FILE is a test seam, not a setting.
+os_release_value() {
+    sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+platform_problem() {
+    local file="$1" machine="$2" dpkg_arch="$3" id version
+    [[ -r "$file" ]] || { echo "cannot read $file (supported: Ubuntu 24.04)"; return; }
+    id="$(os_release_value "$file" ID)"
+    version="$(os_release_value "$file" VERSION_ID)"
+    [[ "$id" == ubuntu && "$version" == 24.04 ]] \
+        || { echo "unsupported operating system: ${id:-unknown} ${version:-unknown} (supported: Ubuntu 24.04)"; return; }
+    case "$machine:$dpkg_arch" in
+        x86_64:amd64|aarch64:arm64) ;;
+        x86_64:*|aarch64:*) echo "dpkg architecture ${dpkg_arch:-unknown} does not match $machine (supported: amd64 on x86_64, arm64 on aarch64)" ;;
+        *) echo "unsupported architecture: ${machine:-unknown} (supported: x86_64, aarch64)" ;;
+    esac
+}
+PLATFORM_PROBLEM="$(platform_problem "${SB_OS_RELEASE_FILE:-/etc/os-release}" "$(uname -m)" \
+    "$(dpkg --print-architecture 2>/dev/null || true)")"
+[[ -z "$PLATFORM_PROBLEM" ]] \
+    || { echo "ERROR: $PLATFORM_PROBLEM; nothing was installed or created" >&2; exit 1; }
+
 mkdir -p "$LOG_ROOT"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_FILE="$LOG_ROOT/provision-$TS.log"

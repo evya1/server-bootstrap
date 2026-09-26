@@ -14,6 +14,8 @@ done
 
 bootstrap_load_config
 SB_LOG_PREFIX=server-bootstrap
+# Before the workspace, the log file, the lock, or apt.
+sb_require_supported_platform
 sb_require_root
 umask 022
 export DEBIAN_FRONTEND=noninteractive

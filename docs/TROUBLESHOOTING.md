@@ -134,6 +134,38 @@ compatibility-link step. Version 1.3.1 replaces the conditional chain with an
 explicit helper that succeeds when the alias already exists and safely warns when
 the source command is unavailable. Upgrade to 1.3.1 and rerun the bootstrap.
 
+## Bootstrap says the host is unsupported
+
+`server-provision.sh` and `server-bootstrap.sh` run only on Ubuntu 24.04, on
+x86-64 (`amd64`) or ARM64 (`arm64`). On any other release, distribution, or
+architecture, or when `dpkg --print-architecture` does not match `uname -m`,
+both stop before they create the workspace, a log file, or a lock, and before
+apt runs. Nothing needs cleaning up; use a supported host. A
+`server-provision.sh --dry-run` preview still works anywhere.
+
+## Bootstrap refused an apt transaction that changes NVIDIA or CUDA packages
+
+The bootstrap does not change an installed NVIDIA driver or CUDA package
+([CONFIGURATION](CONFIGURATION.md#nvidia-driver-and-cuda-packages)). The warning
+names the packages and the transaction. See the plan for yourself with, for
+example:
+
+```bash
+apt-get -s -f install
+apt-get -s upgrade
+```
+
+Bring the driver or CUDA packages to a consistent state yourself, or set
+`RUN_APT_UPGRADE=0`, then rerun the bootstrap. A refused `[required]` package or
+upgrade fails the run; a refused repair or `[optional]` package only warns.
+
+## A required package could not be installed
+
+The run fails with `required packages could not be installed:` followed by the
+names. Every other required package has already been installed. Check the
+package sources with `apt-get update` and `apt-cache policy NAME`, or move the
+name to `[optional]`, drop it with `SKIP_PACKAGES`, and rerun.
+
 ## apt or dpkg is locked
 
 The bootstrap waits for existing package operations and attempts interrupted
