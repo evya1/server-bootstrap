@@ -4,12 +4,16 @@
 # ignored. Section headers select how failures are treated:
 #
 #   [required]  Installed as a single apt batch. If the batch fails, every
-#               package is retried individually so one unavailable name cannot
-#               block the rest. Only names that exist on every supported
-#               Ubuntu/Debian release belong here.
+#               package is retried individually, and any that still cannot be
+#               installed fails the run and is named. Only names that exist on
+#               every supported Ubuntu release belong here.
 #   [optional]  Best effort. Availability genuinely varies across releases
 #               (universe-only, renamed, or backported), so a package that
 #               cannot be installed logs a warning and never fails the run.
+#
+# No apt transaction here may change an installed NVIDIA driver or CUDA
+# package: each is simulated first and refused if it would. See
+# docs/CONFIGURATION.md.
 #
 # Override without editing this file:
 #   PACKAGES_FILE=/path/to/manifest.txt   read a different manifest

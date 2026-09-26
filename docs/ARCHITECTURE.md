@@ -51,7 +51,8 @@ tools/ml-lock.sh              generates and verifies the ML profile's locks
 `server-provision.sh` uses this order:
 
 ```text
-verify bootstrap archive
+check the host is Ubuntu 24.04 on x86-64 or ARM64
+→ verify bootstrap archive
 → extract bootstrap safely
 → install server foundation
 → run server-accept
@@ -63,7 +64,7 @@ verify bootstrap archive
 `server-bootstrap.sh` itself uses this order:
 
 ```text
-workspace → apt packages → persistent tools → Node.js → Claude/Codex/pi
+platform check → workspace → apt packages → persistent tools → Node.js → Claude/Codex/pi
 → uv → GitHub CLI → ngrok → base Python → pi config → API keys → shell
 → VS Code extensions → acceptance → optional legacy add-on → report → state
 ```
