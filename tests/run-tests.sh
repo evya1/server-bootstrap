@@ -1000,6 +1000,7 @@ checks the candidate tag|tools/check-release-tag.sh
 resolves the pinned scanner|tools/gitleaks.sh" path
 runs the reproducible build|release/build-release.sh
 scans the artifacts before upload|scan-artifacts release/dist
+verifies the exact release assets last|release/release-assets.sh" verify release/dist
 PREFLIGHT
 (( preflight_drift == 0 )) && ok "the release preflight still runs every pre-publication gate"
 
@@ -1435,6 +1436,13 @@ done < <(bootstrap_read_package_section config/packages.txt required
     && ok "shipped package manifest has no duplicates" || bad "duplicate package in manifest"
 [[ "$(bootstrap_read_package_section config/packages.txt required | wc -l)" -ge 40 ]] \
     && ok "shipped manifest keeps a substantial [required] set" || bad "manifest [required] shrank unexpectedly"
+# A full install promises rclone on PATH (#60), so it is required, listed once,
+# and never demoted to best effort.
+[[ "$(grep -cE '^[[:space:]]*rclone([[:space:]#]|$)' config/packages.txt)" == 1 \
+    && "$(bootstrap_read_package_section config/packages.txt required | grep -cx rclone)" == 1 \
+    && "$(bootstrap_read_package_section config/packages.txt optional | grep -cx rclone)" == 0 ]] \
+    && ok "rclone is listed once in the shipped manifest, under [required]" \
+    || bad "rclone must appear exactly once in config/packages.txt, under [required]"
 
 section "Supported platform: rejected before anything is created"
 # Ubuntu 24.04 on x86-64 or ARM64 only. Both entry points must refuse any other
@@ -1917,8 +1925,11 @@ if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
     # $TMP itself, not just on the plan directory inside it.
     chmod a+rx "$TMP" 2>/dev/null || true
     chmod -R a+rX "$PLAN_DIR" 2>/dev/null || true
-    setpriv --reuid=65534 --regid=65534 --clear-groups \
-        ./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null | grep -q 'Bundles: 2' \
+    # Captured, not piped into grep -q: under pipefail, grep leaving at its first
+    # match can kill the provisioner with SIGPIPE while it prints the next line.
+    dry_out="$(setpriv --reuid=65534 --regid=65534 --clear-groups \
+        ./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null)" \
+        && [[ "$dry_out" == *'Bundles: 2'* ]] \
         && ok "dry run works without root" || bad "dry run requires root"
 else
     ok "dry run without root (already unprivileged or setpriv absent)"
@@ -2190,9 +2201,10 @@ expected_dry="$(printf '%s\n' "Provision plan: $RPLAN/plan.sh" "Bootstrap: $RPLA
 if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
     chmod a+rx "$TMP" "$REMOTE" "$REMOTE/bin" "$RPLAN" 2>/dev/null || true
     chmod a+r "$RPLAN/plan.sh" 2>/dev/null || true
-    setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$REMOTE/bin:$PATH" \
-        "$ROOT/server-provision.sh" --plan "$RPLAN/plan.sh" --dry-run 2>/dev/null \
-        | grep -qF "  2. rtool 1.0.0 <- $RURL (sha256 $RSHA)" \
+    # Captured for the same SIGPIPE reason as the plain dry run without root.
+    rdry_out="$(setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$REMOTE/bin:$PATH" \
+        "$ROOT/server-provision.sh" --plan "$RPLAN/plan.sh" --dry-run 2>/dev/null)" \
+        && [[ "$rdry_out" == *"  2. rtool 1.0.0 <- $RURL (sha256 $RSHA)"* ]] \
         && ok "a remote dry run works without root" || bad "a remote dry run requires root"
 else
     ok "remote dry run without root (already unprivileged or setpriv absent)"
@@ -4153,6 +4165,42 @@ fi
 ml_env ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && grep -q 'plan: keep backend cpu' "$MLI/out" \
     && ok "a dry run on an installed host reports that it would keep the environment" || bad "dry run after install"
 
+# Free space is what a build needs. A repeat that keeps an environment matching
+# its lock builds nothing, so it must not fail for want of that space; every
+# run that builds still must. ML_MIN_FREE_GB above the free space stands in for
+# a disk the first install used up.
+ML_SHORT=ML_MIN_FREE_GB=999999
+: > "$MLI/uv.log"
+if ml_install "$ML_SHORT" --backend auto && grep -q 'nothing to rebuild' "$MLI/out" \
+    && grep -q 'nothing needs building' "$MLI/out" && [[ "$(readlink -- "$ML_LINK")" == "$first_target" ]] \
+    && ! grep -qE '^(venv|pip sync)' "$MLI/uv.log"; then
+    ok "a repeat that keeps a matching environment succeeds with less free space than a build needs"
+else
+    bad "no-op repeat with too little free space: $(cat "$MLI/out")"
+fi
+ml_env "$ML_SHORT" ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && grep -q 'plan: keep backend cpu' "$MLI/out" \
+    && ok "its dry run reports the keep and succeeds" || bad "no-op dry run with too little free space: $(cat "$MLI/out")"
+ml_short_state="$(cat "$ML_STATE"/* | sha256sum)"
+ml_short_refused() {  # label -> the last run stopped before building and changed nothing
+    if grep -q 'needs 999999' "$MLI/out" && grep -q 'nothing was changed' "$MLI/out" \
+        && [[ "$(readlink -- "$ML_LINK")" == "$first_target" && "$(cat "$ML_STATE"/* | sha256sum)" == "$ml_short_state" ]] \
+        && ! grep -qE '^(venv|pip sync)' "$MLI/uv.log"; then
+        ok "with too little free space, $1 stops before building and changes nothing"
+    else
+        bad "$1 with too little free space: $(cat "$MLI/out")"
+    fi
+}
+: > "$MLI/uv.log"; ml_install "$ML_SHORT" --backend auto --force && bad "--force built on a short disk" || ml_short_refused "--force"
+: > "$MLI/uv.log"; ml_install "$ML_SHORT" --backend cu130 --reconfigure && bad "--reconfigure built on a short disk" \
+    || ml_short_refused "a --reconfigure to cu130"
+ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu +cpu tqdm=4.67.1
+: > "$MLI/uv.log"; ml_install "$ML_SHORT" --backend auto && bad "an update built on a short disk" \
+    || ml_short_refused "an update to a changed lock"
+ml_env "$ML_SHORT" ./server-profile install ml --dry-run >"$MLI/out" 2>&1 && bad "the update's dry run passed on a short disk" \
+    || { grep -q 'needs 999999' "$MLI/out" && ok "the update's dry run fails the disk check too" \
+        || bad "update dry run with too little free space: $(cat "$MLI/out")"; }
+ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
+
 : > "$MLI/uv.log"
 if ! ml_install --backend cu130 && grep -q 'rerun with --reconfigure' "$MLI/out" \
     && [[ "$(readlink -- "$ML_LINK")" == "$first_target" && "$(cat "$ML_STATE/backend")" == cpu ]] \
@@ -4366,6 +4414,724 @@ else
     bad "bundle installation touched the ml profile's paths"
 fi
 
+section "Release assets: the ml profile ships in the main archives"
+# The profile, its commands and its locks are part of the one release, never an
+# artifact of their own. release/release-assets.sh is the single definition of
+# what release/dist holds; the build ends with its verify, and the preflight
+# runs it again as the last step before release.yml uploads by glob.
+RA_VERSION="$(tr -d '[:space:]' < VERSION)"
+if ra_required="$(bash release/release-assets.sh required 2>&1)"; then
+    ra_locks="$(grep -c '^profiles/ml/locks/' <<< "$ra_required")"
+    [[ "$ra_locks" == "$(awk '!/^#/ && NF { n += split($3, a, ",") } END { print n }' profiles/ml/backends.txt)" ]] \
+        && ok "every file the ml profile needs and all $ra_locks declared locks are in the tracked release set" \
+        || bad "release-assets required lists $ra_locks locks, backends.txt declares others"
+else
+    bad "release-assets required: $ra_required"
+fi
+ra_fx="$(release_build_fixture)"
+sed -i '/  profiles\/ml\/locks\/cu130-x86_64.txt$/d' "$ra_fx/checksums/SHA256SUMS"
+bash release/release-assets.sh --root "$ra_fx" required >/dev/null 2>"$TMP/ra-required.err" \
+    && bad "release-assets required accepted a release set without a declared lock" \
+    || { grep -q 'not in the release set: profiles/ml/locks/cu130-x86_64.txt' "$TMP/ra-required.err" \
+        && ok "a release set missing a declared lock is refused" || bad "missing lock: $(cat "$TMP/ra-required.err")"; }
+# The build itself refuses to package a declared backend without its lock.
+rm -f "$ra_fx/profiles/ml/locks/cu130-x86_64.txt"
+ra_out="$(release_build "$ra_fx")" && ra_rc=0 || ra_rc=$?
+(( ra_rc != 0 )) && grep -qF 'cu130-x86_64.txt is declared in backends.txt but not locked yet' <<< "$ra_out" \
+    && [[ ! -e "$ra_fx/release/dist/server-bootstrap-$RA_VERSION.tar.gz" ]] \
+    && ok "the release build stops before packaging when a declared lock is missing" \
+    || bad "the build packaged a release without a declared lock (rc=$ra_rc)"
+
+# One real build (scans off, suite skipped, as above) for everything below.
+ra_fx="$(release_build_fixture)"
+ra_out="$(release_build "$ra_fx")" && ra_rc=0 || ra_rc=$?
+RA_DIST="$ra_fx/release/dist"
+if (( ra_rc != 0 )); then
+    bad "fixture release build: $(tail -5 <<< "$ra_out")"
+else
+    grep -qF "release-assets: dist holds exactly the $(bash release/release-assets.sh built | wc -l) built files; $(bash release/release-assets.sh upload | wc -l) are published." <<< "$ra_out" \
+        && ok "the build ends by verifying release/dist holds exactly the release assets" \
+        || bad "the build did not verify its assets: $(tail -3 <<< "$ra_out")"
+    # Each main archive, listed with its own tool, carries every required file.
+    ra_missing=""
+    ra_list() {  # archive -> member paths without the top-level directory
+        case "$1" in
+            *.tar.gz) tar -tzf "$1" ;; *.tar) tar -tf "$1" ;; *.zip) unzip -Z1 "$1" ;;
+        esac | sed 's|^[^/]*/||'
+    }
+    for ra_archive in "server-bootstrap-$RA_VERSION.tar" "server-bootstrap-$RA_VERSION.tar.gz" \
+        "server-bootstrap-$RA_VERSION.zip" "server-bootstrap-$RA_VERSION-source.zip"; do
+        ra_members="$(ra_list "$RA_DIST/$ra_archive")"
+        while IFS= read -r ra_file; do
+            grep -qxF -- "$ra_file" <<< "$ra_members" || ra_missing+=" $ra_archive:$ra_file"
+        done <<< "$ra_required"
+    done
+    [[ -z "$ra_missing" ]] \
+        && ok "each of the four main archives carries the ml profile, its commands and its locks" \
+        || bad "archives miss:$ra_missing"
+    # The reproducibility gate compared archives carrying the profile.
+    [[ "$(ra_list "$tz_a/release/dist/server-bootstrap-$RA_VERSION.tar.gz" | grep -c '^profiles/ml/locks/')" == "$ra_locks" ]] \
+        && ok "the archives the reproducibility gate compared carry the ml profile and its locks" \
+        || bad "the reproducibility fixtures did not include the ml locks"
+    # The manifest's lock digests are those of the shipped locks.
+    ra_manifest="$RA_DIST/server-bootstrap-$RA_VERSION-release-manifest.json"
+    if python3 - "$ra_manifest" "$RA_DIST/server-bootstrap-$RA_VERSION.tar.gz" "$RA_VERSION" <<'PY'
+import hashlib, json, pathlib, sys, tarfile
+manifest, archive, version = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+entries = manifest["profiles"]["ml"]["backends"]
+assert entries, "no backends"
+with tarfile.open(archive) as tar:
+    for entry in entries:
+        member = tar.extractfile(f"server-bootstrap-{version}/{entry['lock']}").read()
+        tracked = pathlib.Path(entry["lock"]).read_bytes()
+        assert entry["lock_sha256"] == hashlib.sha256(member).hexdigest() == hashlib.sha256(tracked).hexdigest(), entry
+rows = set()
+for line in open("profiles/ml/backends.txt"):
+    fields = line.split("#")[0].split()
+    if fields:
+        rows |= {(fields[0], arch) for arch in fields[2].split(",")}
+assert {(e["backend"], e["arch"]) for e in entries} == rows, "backends differ from backends.txt"
+assert "server-profile" in manifest["entrypoints"]
+assert manifest["tests"] == "skipped" and manifest["release_scan"] == "skipped" and manifest["reproducible"] is True
+PY
+    then
+        ok "the release manifest records every shipped lock's sha256, matching the archive and the tree"
+    else
+        bad "release manifest profiles do not match the shipped locks"
+    fi
+    # Each standalone file is the tracked file, byte for byte, as in each archive.
+    ra_standalone=""
+    ra_tgz="$(mktemp -d "$TMP/ra-x.XXXXXX")"; ra_zip="$(mktemp -d "$TMP/ra-x.XXXXXX")"
+    tar -xzf "$RA_DIST/server-bootstrap-$RA_VERSION.tar.gz" -C "$ra_tgz"
+    unzip -q "$RA_DIST/server-bootstrap-$RA_VERSION.zip" -d "$ra_zip"
+    while IFS=$'\t' read -r ra_name ra_path _; do
+        cmp -s "$RA_DIST/$ra_name" "$ra_path" \
+            && cmp -s "$RA_DIST/$ra_name" "$ra_tgz/server-bootstrap-$RA_VERSION/$ra_path" \
+            && cmp -s "$RA_DIST/$ra_name" "$ra_zip/server-bootstrap-$RA_VERSION/$ra_path" \
+            || ra_standalone+=" $ra_name"
+    done < <(bash release/release-assets.sh standalone)
+    [[ -z "$ra_standalone" ]] \
+        && ok "every standalone file is byte-identical to its tracked copy and to the copy inside each archive" \
+        || bad "standalone files differ from their tracked or archived copies:$ra_standalone"
+    # No separately versioned ML artifact is built or published: the only
+    # published name that mentions ml is a plan file.
+    [[ -z "$(bash release/release-assets.sh built | grep -i ml | grep -vx 'provision-plan\.ml\.example\.sh')" ]] \
+        && ok "no ML archive, sidecar or manifest of its own is built or published" \
+        || bad "the release asset list names an ML artifact of its own"
+
+    # Every upload glob in release.yml matches published assets only, and
+    # together they publish every one. A glob is broader than the list: the
+    # tar.gz pattern also matches a separate server-bootstrap-ml-*.tar.gz, which
+    # is why release/dist itself must be exact.
+    ra_globs="$(grep -vE '^[[:space:]]*#' .github/workflows/release.yml \
+        | awk '/files: \|/{f=1; next} f && /^[[:space:]]+release\/dist\//{print $1; next} f{f=0}' | sed 's|^release/dist/||')"
+    ra_upload="$(bash release/release-assets.sh upload | LC_ALL=C sort)"
+    ra_matched=""; ra_glob_drift=0
+    while IFS= read -r ra_name; do
+        ra_hit=0
+        while IFS= read -r ra_glob; do
+            # shellcheck disable=SC2053  # the right-hand side is a glob on purpose
+            [[ -n "$ra_glob" && "$ra_name" == $ra_glob ]] && ra_hit=1
+        done <<< "$ra_globs"
+        if (( ra_hit )); then
+            ra_matched+="$ra_name"$'\n'
+            grep -qxF -- "$ra_name" <<< "$ra_upload" || { bad "release.yml would upload $ra_name, which is not published"; ra_glob_drift=1; }
+        fi
+    done < <(bash release/release-assets.sh built)
+    [[ "$(LC_ALL=C sort <<< "${ra_matched%$'\n'}")" == "$ra_upload" ]] \
+        || { bad "release.yml's globs do not cover exactly the published assets"; ra_glob_drift=1; }
+    # shellcheck disable=SC2053
+    grep -qx 'server-bootstrap-\*.tar.gz' <<< "$ra_globs" && [[ "server-bootstrap-ml-1.0.0.tar.gz" == server-bootstrap-*.tar.gz ]] \
+        || { bad "the glob this gate exists for has changed; revisit the fixture below"; ra_glob_drift=1; }
+    (( ra_glob_drift == 0 )) && ok "release.yml's upload globs match the published assets and nothing else release/dist holds"
+
+    # Rejection fixtures: a copy of the verified dist, one defect each.
+    ra_reject() {  # label, expected finding, then a shell mutation run inside the copy
+        local label="$1" finding="$2" copy out
+        copy="$(mktemp -d "$TMP/ra-dist.XXXXXX")"
+        cp -a "$RA_DIST/." "$copy/"
+        ( cd "$copy" && eval "$3" )
+        out="$(bash release/release-assets.sh --root "$ra_fx" verify "$copy" 2>&1)" \
+            && { bad "release-assets accepted $label"; return; }
+        grep -qF -- "$finding" <<< "$out" && ok "release-assets rejects $label" \
+            || bad "release-assets rejected $label, but not with '$finding': $out"
+    }
+    bash release/release-assets.sh --root "$ra_fx" verify "$RA_DIST" >/dev/null \
+        && ok "release-assets accepts the verified dist" || bad "release-assets rejects a clean build"
+    ra_reject "a separate ML archive the upload glob would publish" \
+        "unexpected file, not a release asset: server-bootstrap-ml-1.0.0.tar.gz" \
+        'printf x > server-bootstrap-ml-1.0.0.tar.gz; sha256sum server-bootstrap-ml-1.0.0.tar.gz > server-bootstrap-ml-1.0.0.tar.gz.sha256'
+    ra_reject "an unverified asset whose sidecar does not match" \
+        "server-bootstrap-$RA_VERSION.tar.gz.sha256 does not record the sha256" \
+        "printf '%064d  server-bootstrap-$RA_VERSION.tar.gz\n' 0 > server-bootstrap-$RA_VERSION.tar.gz.sha256"
+    ra_reject "an archive changed after the manifest was written" \
+        "zip_sha256 does not match server-bootstrap-$RA_VERSION.zip" \
+        "printf TAMPER >> server-bootstrap-$RA_VERSION.zip"
+    ra_reject "a standalone example that differs from the tracked file" \
+        "provision-plan.example.sh is not byte-identical to examples/provision-plan.example.sh" \
+        "printf 'register_bundle other 1.0.0 ./o.tar.gz ./o.sha256\n' >> provision-plan.example.sh"
+    ra_reject "a manifest lock digest that is not the shipped lock's" \
+        "profiles do not match the backends and locks" \
+        "sed -i 's/\"lock_sha256\": \"[0-9a-f]*\"/\"lock_sha256\": \"$(printf '%064d' 0)\"/' server-bootstrap-$RA_VERSION-release-manifest.json"
+    ra_reject "a missing published asset" "missing release asset: provision-plan.whisper.example.sh" \
+        "rm provision-plan.whisper.example.sh"
+    ra_reject "an asset that is a symlink" "not a regular file: provision-plan.example.sh" \
+        "rm provision-plan.example.sh; ln -s ../../examples/provision-plan.example.sh provision-plan.example.sh"
+    ra_reject "a source zip carrying a file outside the release" "not part of the release: ml-extra/model.bin" \
+        "python3 -c 'import zipfile,sys; z = zipfile.ZipFile(sys.argv[1], \"a\"); z.writestr(\"server-bootstrap/ml-extra/model.bin\", b\"x\"); z.close()' server-bootstrap-$RA_VERSION-source.zip"
+fi
+
+section "ML example plan"
+# examples/provision-plan.ml.example.sh installs one main release and enables
+# the ml profile inside it. It is data: the checks below read and run it only
+# through server-provision.sh.
+ML_EXAMPLE=examples/provision-plan.ml.example.sh
+ml_plan_body="$(grep -vE '^[[:space:]]*(#|$)' "$ML_EXAMPLE")"
+ml_example_drift=0
+[[ "$(grep -c '^register_bootstrap' <<< "$ml_plan_body")" == 1 ]] \
+    || { bad "the ml example must register exactly one bootstrap"; ml_example_drift=1; }
+grep -qE 'https?://|register_bundle|register_remote_bundle|[0-9a-fA-F]{64}' <<< "$ml_plan_body" \
+    && { bad "the ml example names a URL, a bundle or a checksum of its own"; ml_example_drift=1; }
+[[ "$(grep -oE '[A-Za-z0-9._-]+\.(tar\.gz|tgz|zip|sha256|whl)' <<< "$ml_plan_body" | LC_ALL=C sort -u | tr '\n' ' ')" \
+    == "server-bootstrap-$RA_VERSION.tar.gz server-bootstrap-$RA_VERSION.tar.gz.sha256 " ]] \
+    || { bad "the ml example names an archive other than server-bootstrap-$RA_VERSION.tar.gz"; ml_example_drift=1; }
+grep -qE '(ML|PROFILE)_?[A-Z_]*VERSION|--version' <<< "$ml_plan_body" \
+    && { bad "the ml example carries a profile version of its own"; ml_example_drift=1; }
+[[ "$(grep -E '^enable_profile' <<< "$ml_plan_body")" == 'enable_profile "ml" --backend auto' ]] \
+    || { bad "the ml example does not enable ml with --backend auto"; ml_example_drift=1; }
+grep -qx 'export DELETE_ARCHIVES_AFTER_SUCCESS=0' <<< "$ml_plan_body" \
+    || { bad "the ml example deletes its archive, so repeating it would fail"; ml_example_drift=1; }
+grep -qF 'enable_profile "ml" --backend cpu --reconfigure' "$ML_EXAMPLE" \
+    && grep -qF -- '--reconfigure' docs/ML-PROFILE.md \
+    || { bad "the ml example or its guide does not document --reconfigure for a backend change"; ml_example_drift=1; }
+(( ml_example_drift == 0 )) \
+    && ok "the ml example installs one main release and its ml profile, with no ML URL, version, archive or checksum"
+bash release/release-assets.sh standalone | grep -qxF $'provision-plan.ml.example.sh\texamples/provision-plan.ml.example.sh\t0644' \
+    && bash release/release-assets.sh required | grep -qxF "$ML_EXAMPLE" \
+    && grep -qxF '            release/dist/provision-plan.ml.example.sh' .github/workflows/release.yml \
+    && ok "the ml example is published beside the archives and required inside each of them" \
+    || bad "the ml example is not published, uploaded and required in the archives"
+grep -qE '^[[:space:]]*enable_profile' examples/provision-plan.example.sh \
+    && bad "the foundation-only example enables a profile" \
+    || ok "the minimal example plan still installs the foundation without the ml profile"
+
+# A dry run with every network client replaced by a recorder that fails.
+MLX="$TMP/ml-example"; mkdir -p "$MLX/plan" "$MLX/nonet"
+cp "$ML_EXAMPLE" "$MLX/plan/"
+for ml_client in curl wget git uv pip pip3 python3 nc ssh; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 1\n' "$ml_client" "$MLX" > "$MLX/nonet/$ml_client"
+    chmod 0755 "$MLX/nonet/$ml_client"
+done
+mlx_out="$(PATH="$MLX/nonet:/usr/bin:/bin" WORKSPACE_ROOT="$MLX/ws" \
+    ./server-provision.sh --plan "$MLX/plan/provision-plan.ml.example.sh" --dry-run 2>&1)"; mlx_code=$?
+mlx_expected="$(printf '%s\n' "Provision plan: $MLX/plan/provision-plan.ml.example.sh" \
+    "Bootstrap: $MLX/plan/server-bootstrap-$RA_VERSION.tar.gz" 'Bundles: 0' 'Profiles: 1' '  1. ml --backend auto')"
+[[ "$mlx_code" == 0 && "$mlx_out" == "$mlx_expected" && ! -e "$MLX/calls" && ! -e "$MLX/ws" ]] \
+    && ok "the ml example dry-runs with no network client, selecting server-bootstrap-$RA_VERSION.tar.gz and ml --backend auto" \
+    || bad "ml example dry run (exit $mlx_code): $mlx_out $(cat "$MLX/calls" 2>/dev/null)"
+grep -qF 'ssh -N -L 8888:127.0.0.1:8888' docs/ML-PROFILE.md && grep -qF "ip=\"\${ML_JUPYTER_IP:-127.0.0.1}\"" profiles/ml/bin/ml-jupyter \
+    && ok "ml-jupyter defaults to 127.0.0.1 and the guide documents SSH forwarding" \
+    || bad "ml-jupyter's loopback default or the SSH forwarding note is gone"
+
+# The example, end to end through server-provision.sh, the real server-profile
+# and the real installer, from a stand-in foundation archive: stand-in uv,
+# Python site and locks from the ML profile sections above, no network.
+if (( EUID != 0 )); then
+    skip "ml example lifecycle through server-provision.sh (needs root, as provisioning does)"
+elif [[ -z "$ML_PY312" ]]; then
+    skip "ml example lifecycle through server-provision.sh (no python3.12 on this host)"
+else
+    MLP="$(cd "$MLX" && pwd -P)/lifecycle"; mkdir -p "$MLP/plan" "$MLP/tmp"
+    mlp_archive() {  # build the stand-in server-bootstrap-VERSION.tar.gz from the fixture locks
+        local stage="$MLP/src/server-bootstrap-$RA_VERSION"
+        rm -rf "$MLP/src"; mkdir -p "$stage/lib" "$stage/profiles"
+        cp -a server-profile VERSION "$stage/"; cp lib/core.sh "$stage/lib/"
+        cp -a profiles/ml "$stage/profiles/"; rm -rf "$stage/profiles/ml/locks"
+        cp -a "$MLI/locks" "$stage/profiles/ml/locks"
+        cat > "$stage/server-bootstrap.sh" <<'FAKEBOOT'
+#!/usr/bin/env bash
+# Stand-in foundation: installs this archive's runtime files and server-profile
+# as the real runtime step does, and logging stand-ins for the rest.
+set -e
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+printf 'bootstrap\n' >> "$PROVISION_ORDER_LOG"
+rm -rf "$ML_TEST_RUNTIME"; cp -a "$here" "$ML_TEST_RUNTIME"
+ln -sfn "$ML_TEST_RUNTIME/server-profile" "$PROVISION_FAKE_BIN/server-profile"
+for command in server-accept server-bundle-install; do
+    printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$PROVISION_ORDER_LOG"\n' "$command" > "$PROVISION_FAKE_BIN/$command"
+    chmod 0755 "$PROVISION_FAKE_BIN/$command"
+done
+FAKEBOOT
+        chmod 0755 "$stage/server-bootstrap.sh"
+        tar -czf "$MLP/plan/server-bootstrap-$RA_VERSION.tar.gz" -C "$MLP/src" "server-bootstrap-$RA_VERSION"
+        ( cd "$MLP/plan" && sha256sum "server-bootstrap-$RA_VERSION.tar.gz" > "server-bootstrap-$RA_VERSION.tar.gz.sha256" )
+    }
+    mlp_plan() {  # enable_profile line [example] -> the example with that line, behind this test's environment
+        local example="${2:-$ML_EXAMPLE}"
+        sed "s|^enable_profile \"ml\" --backend auto\$|$1|" "$example" > "$MLP/plan/${example##*/}"
+        cat > "$MLP/plan/plan.sh" <<PLAN
+export WORKSPACE_ROOT="$MLP/ws" TMPDIR="$MLP/tmp" PROVISION_FAKE_BIN="$MLP/bin"
+export PROVISION_ORDER_LOG="$MLP/order.log" ML_TEST_RUNTIME="$MLP/runtime"
+export PATH="$MLP/bin:$MLI/bin:\$PATH"
+export ML_UV="$MLI/bin/uv" ML_PYTHON="$ML_PY312" ML_BIN_DIR="$MLP/usr-bin" ML_MIN_FREE_GB="\${ML_MIN_FREE_GB:-0}"
+export ML_SYSFS_ROOT="$MLS/sys-empty" ML_NVIDIA_SMI="$MLS/absent/nvidia-smi"
+export FAKE_UV_LOG="$MLP/uv.log" FAKE_UV_PYTHON="$ML_PY312" FAKE_UV_BUILDER="$MLI/build-site.py"
+export FAKE_UV_TEMPLATES="$MLI/templates"
+source "\$PLAN_DIR/${example##*/}"
+PLAN
+    }
+    mlp_run() {  # [NAME=VALUE...] -> runs the plan, output in $MLP/out
+        : > "$MLP/uv.log"; : > "$MLP/order.log"
+        env "$@" ./server-provision.sh --plan "$MLP/plan/plan.sh" > "$MLP/out" 2>&1
+    }
+    MLP_LINK="$MLP/ws/venvs/ml-workbench"; MLP_STATE="$MLP/ws/.setup-state/profiles/ml"
+    mkdir -p "$MLP/bin"
+    ml_fixture_lock "$MLI/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
+    ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
+    mlp_archive
+    mlp_plan 'enable_profile "ml" --backend auto'
+    if mlp_run && [[ "$(cat "$MLP/order.log")" == $'bootstrap\nserver-accept' ]] \
+        && grep -qx 'profiles_installed: 1' "$MLP/ws/startup-logs/latest-provision-summary.txt" \
+        && [[ "$(cat "$MLP_STATE/backend")" == cpu && -x "$MLP_LINK/bin/python" ]] \
+        && grep -q '^pip sync .*--torch-backend cpu ' "$MLP/uv.log" \
+        && [[ -f "$MLP/plan/server-bootstrap-$RA_VERSION.tar.gz" ]]; then
+        ok "the ml example installs the foundation and the ml profile (cpu without a GPU) and keeps the verified archive"
+    else
+        bad "ml example first run: $(tail -5 "$MLP/out")"
+    fi
+    mlp_target="$(readlink -- "$MLP_LINK")"; mlp_state="$(cat "$MLP_STATE"/* | sha256sum)"
+    if mlp_run && grep -q 'nothing to rebuild' "$MLP/out" && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log" \
+        && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE"/* | sha256sum)" == "$mlp_state" ]]; then
+        ok "repeating the ml example rebuilds nothing and downloads nothing for the environment"
+    else
+        bad "ml example repeat: $(tail -5 "$MLP/out")"
+    fi
+    mlp_plan 'enable_profile "ml" --backend cu130'
+    if ! mlp_run && grep -q 'rerun with --reconfigure' "$MLP/out" \
+        && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE/backend")" == cpu ]]; then
+        ok "a backend change in the ml example without --reconfigure stops and changes nothing"
+    else
+        bad "ml example backend change without --reconfigure: $(tail -5 "$MLP/out")"
+    fi
+    mlp_plan 'enable_profile "ml" --backend cu130 --reconfigure'
+    if mlp_run && [[ "$(cat "$MLP_STATE/backend")" == cu130 && "$(readlink -- "$MLP_LINK")" != "$mlp_target" ]]; then
+        ok "the documented --reconfigure edit changes the backend through the ml example"
+    else
+        bad "ml example reconfigure: $(tail -5 "$MLP/out")"
+    fi
+    # A new release whose lock changed, and a download that fails: the run
+    # fails, and the installed environment, its state and commands are kept.
+    mlp_target="$(readlink -- "$MLP_LINK")"; mlp_state="$(cat "$MLP_STATE"/* | sha256sum)"
+    ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130 \
+        +cu130 tqdm=4.67.1
+    mlp_archive
+    if ! mlp_run FAKE_UV_SYNC_FAIL=1 && grep -q 'previous environment is unchanged' "$MLP/out" \
+        && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE"/* | sha256sum)" == "$mlp_state" ]] \
+        && [[ "$(readlink -- "$MLP/usr-bin/ml-env")" == "$MLP/runtime/profiles/ml/bin/ml-env" ]]; then
+        ok "a failed update through the ml example keeps the previous environment, state and commands"
+    else
+        bad "ml example failed update: $(tail -5 "$MLP/out")"
+    fi
+    if mlp_run && grep -qx 'tqdm==4.67.1' "$MLP_STATE/packages" && [[ "$(readlink -- "$MLP_LINK")" != "$mlp_target" ]]; then
+        ok "rerunning the same ml example after the failure installs the update"
+    else
+        bad "ml example update after failure: $(tail -5 "$MLP/out")"
+    fi
+    ml_fixture_lock "$MLI/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
+fi
+
+section "Full example plan and the README's first install path"
+# examples/provision-plan.full.example.sh is the README's first install path:
+# every configurable installer and every built-in profile. Both sets are read
+# from the repository, so a new INSTALL_* default in lib/bootstrap/config.sh or
+# a new profiles/*/install.sh fails here until the plan names it. INSTALL_ADDON
+# is left out on purpose: it installs the legacy single external add-on, not a
+# built-in component.
+FULL_EXAMPLE=examples/provision-plan.full.example.sh
+full_installers() {  # root -> each configurable installer switch the bootstrap defines
+    sed -nE 's/^[[:space:]]*(INSTALL_[A-Z_]+)="\$\{\1:-[01]\}"$/\1/p' "$1/lib/bootstrap/config.sh" \
+        | grep -vx INSTALL_ADDON
+}
+full_profiles() {  # root -> each built-in profile, as server-profile lists them
+    local installer
+    for installer in "$1"/profiles/*/install.sh; do
+        [[ -f "$installer" ]] && basename -- "$(dirname -- "$installer")"
+    done
+    return 0
+}
+full_plan_gaps() {  # root -> one line per installer or profile the full plan does not enable
+    local root="$1" body name
+    body="$(grep -vE '^[[:space:]]*(#|$)' "$root/$FULL_EXAMPLE")"
+    while IFS= read -r name; do
+        grep -qx "export $name=1" <<< "$body" || echo "installer not enabled: $name"
+    done < <(full_installers "$root")
+    while IFS= read -r name; do
+        grep -qE "^enable_profile \"$name\"( |\$)" <<< "$body" || echo "profile not enabled: $name"
+    done < <(full_profiles "$root")
+    # A switch the bootstrap does not read would do nothing, such as an ngrok
+    # switch: ngrok has none, and every bootstrap run installs it.
+    while IFS= read -r name; do
+        full_installers "$root" | grep -qx "$name" || echo "not a configurable installer: $name"
+    done < <(grep -oE '^export INSTALL_[A-Z_]+=' <<< "$body" | sed 's/^export //; s/=$//')
+    return 0
+}
+
+FULL_FLAGS="$(full_installers .)"
+# The read above must still find the switches #60 names. An empty or shrunken
+# read would let every check below pass without checking anything.
+full_unread=""
+for name in INSTALL_ZSH INSTALL_OH_MY_ZSH INSTALL_NODEJS INSTALL_CLAUDE_CODE INSTALL_CODEX INSTALL_PI \
+    INSTALL_VSCODE_EXTENSIONS INSTALL_UV INSTALL_GITHUB_CLI INSTALL_BASE_PYTHON_ENV INSTALL_RUNTIME_TOOLS \
+    INSTALL_SECRETS_FILE INSTALL_PI_MODELS_TEMPLATE; do
+    grep -qx "$name" <<< "$FULL_FLAGS" || full_unread+=" $name"
+done
+[[ -z "$full_unread" && -n "$(full_profiles .)" ]] \
+    && ok "configurable installers and profiles are read from the repository: $(wc -l <<< "$FULL_FLAGS") switches; profiles $(full_profiles . | paste -sd' ' -)" \
+    || bad "the installer or profile read no longer finds:${full_unread:- any profile}"
+full_undocumented=""
+while IFS= read -r name; do
+    grep -qE "^\| \`$name\` \| \`[01]\` \|" docs/CONFIGURATION.md || full_undocumented+=" $name"
+done <<< "$FULL_FLAGS"
+[[ -z "$full_undocumented" ]] \
+    && ok "docs/CONFIGURATION.md documents every configurable installer with its default" \
+    || bad "docs/CONFIGURATION.md has no row for:$full_undocumented"
+full_gaps="$(full_plan_gaps .)"
+[[ -z "$full_gaps" ]] \
+    && ok "the full plan enables every configurable installer and every built-in profile" \
+    || bad "the full plan: $(tr '\n' ';' <<< "$full_gaps")"
+
+# The coverage check has to fire: one defect each, in a scratch copy of the
+# files it reads.
+full_gap_reject() {  # label, expected finding, mutation run inside the copy
+    local dir name out
+    dir="$(mktemp -d "$TMP/full-gaps.XXXXXX")"
+    mkdir -p "$dir/lib/bootstrap" "$dir/examples"
+    cp lib/bootstrap/config.sh "$dir/lib/bootstrap/"; cp "$FULL_EXAMPLE" "$dir/examples/"
+    while IFS= read -r name; do mkdir -p "$dir/profiles/$name"; : > "$dir/profiles/$name/install.sh"; done < <(full_profiles .)
+    ( cd "$dir" && eval "$3" )
+    out="$(full_plan_gaps "$dir")"
+    grep -qxF -- "$2" <<< "$out" && ok "the full-plan coverage check catches $1" \
+        || bad "the full-plan coverage check missed $1: ${out:-no finding}"
+}
+full_gap_reject "a new opt-in installer in config.sh" "installer not enabled: INSTALL_RUSTUP" \
+    'printf "    INSTALL_RUSTUP=\"\${INSTALL_RUSTUP:-0}\"\n" >> lib/bootstrap/config.sh'
+full_gap_reject "a new built-in profile" "profile not enabled: gpu-extra" \
+    'mkdir -p profiles/gpu-extra && : > profiles/gpu-extra/install.sh'
+full_gap_reject "a dropped installer line" "installer not enabled: INSTALL_CODEX" \
+    'sed -i "/^export INSTALL_CODEX=1\$/d" examples/provision-plan.full.example.sh'
+full_gap_reject "an installer switched off" "installer not enabled: INSTALL_PI" \
+    'sed -i "s/^export INSTALL_PI=1\$/export INSTALL_PI=0/" examples/provision-plan.full.example.sh'
+full_gap_reject "a dropped profile" "profile not enabled: ml" \
+    'sed -i "/^enable_profile \"ml\"/d" examples/provision-plan.full.example.sh'
+full_gap_reject "an ngrok switch the bootstrap does not have" "not a configurable installer: INSTALL_NGROK" \
+    'printf "export INSTALL_NGROK=1\n" >> examples/provision-plan.full.example.sh'
+
+full_body="$(grep -vE '^[[:space:]]*(#|$)' "$FULL_EXAMPLE")"
+full_drift=0
+[[ "$(grep -c '^register_bootstrap' <<< "$full_body")" == 1 ]] \
+    || { bad "the full plan must register exactly one bootstrap"; full_drift=1; }
+grep -qE 'https?://|register_bundle|register_remote_bundle|[0-9a-fA-F]{64}' <<< "$full_body" \
+    && { bad "the full plan names a URL, an external bundle or a checksum of its own"; full_drift=1; }
+[[ "$(grep -oE '[A-Za-z0-9._-]+\.(tar\.gz|tgz|zip|sha256|whl)' <<< "$full_body" | LC_ALL=C sort -u | tr '\n' ' ')" \
+    == "server-bootstrap-$RA_VERSION.tar.gz server-bootstrap-$RA_VERSION.tar.gz.sha256 " ]] \
+    || { bad "the full plan names an archive other than server-bootstrap-$RA_VERSION.tar.gz"; full_drift=1; }
+grep -qE '(PACKAGES_FILE|EXTRA_PACKAGES|SKIP_PACKAGES)=' <<< "$full_body" \
+    && { bad "the full plan overrides the shipped package manifest"; full_drift=1; }
+[[ "$(grep -E '^enable_profile' <<< "$full_body")" == 'enable_profile "ml" --backend auto' ]] \
+    || { bad "the full plan does not enable ml with --backend auto"; full_drift=1; }
+grep -qx 'export DELETE_ARCHIVES_AFTER_SUCCESS=0' <<< "$full_body" \
+    || { bad "the full plan deletes its archive, so repeating it would fail"; full_drift=1; }
+(( full_drift == 0 )) \
+    && ok "the full plan installs one main release with the shipped package manifest and ml --backend auto, and keeps its archive"
+
+
+# server-accept runs on every provision, a repeat included, and checks
+# MIN_DISK_GB against free space at that moment. A plan that asked it for the
+# profile's build space rejected a repeat once the install had used that
+# space. The real server-accept, with each plan's thresholds, on a host with
+# 20 GB free: no disk rejection. The same plan asking for 30 GB is rejected.
+FXA="$TMP/full-accept"; mkdir -p "$FXA/stub" "$FXA/ws"
+printf '#!/bin/sh\nprintf "Avail\\n  20G\\n"\n' > "$FXA/stub/df"; chmod 0755 "$FXA/stub/df"
+full_accept() {  # plan -> server-accept --json with the plan's thresholds and 20 GB free
+    ( eval "$(grep -E '^export (MIN_|REQUIRE_)[A-Z_]*=' "$1")"
+      PATH="$FXA/stub:/usr/bin:/bin" MIN_DISK_MBPS=0 WORKSPACE_ROOT="$FXA/ws" ./server-accept.sh --json 2>/dev/null )
+}
+for plan in "$FULL_EXAMPLE" "$ML_EXAMPLE"; do
+    sed 's/^export MIN_DISK_GB=.*/export MIN_DISK_GB=30/' "$plan" > "$FXA/asked-30.sh"
+    fxa_asked="$(full_accept "$FXA/asked-30.sh" | grep -o '{[^}]*disk-free[^}]*}')"
+    fxa_plan="$(full_accept "$plan" | grep -o '{[^}]*disk-free[^}]*}')"
+    if [[ "$fxa_asked" == *'"level":"reject"'* && "$fxa_plan" == *'"level":"ok"'* ]]; then
+        ok "server-accept does not reject a repeat of $plan for disk space the ml profile already holds"
+    else
+        bad "server-accept disk check for $plan: ${fxa_plan:-no disk-free finding} (asking for 30 GB: ${fxa_asked:-none})"
+    fi
+done
+
+# Dry runs with every network client replaced by the failing recorder above.
+FXP="$TMP/full-example"; mkdir -p "$FXP"
+cp "$FULL_EXAMPLE" examples/provision-plan.example.sh "$FXP/"
+fx_out="$(PATH="$MLX/nonet:/usr/bin:/bin" WORKSPACE_ROOT="$FXP/ws" \
+    ./server-provision.sh --plan "$FXP/provision-plan.full.example.sh" --dry-run 2>&1)"; fx_code=$?
+[[ "$fx_code" == 0 && ! -e "$MLX/calls" && ! -e "$FXP/ws" && "$fx_out" == "$(printf '%s\n' \
+    "Provision plan: $FXP/provision-plan.full.example.sh" "Bootstrap: $FXP/server-bootstrap-$RA_VERSION.tar.gz" \
+    'Bundles: 0' 'Profiles: 1' '  1. ml --backend auto')" ]] \
+    && ok "the full plan dry-runs with no network client, selecting server-bootstrap-$RA_VERSION.tar.gz and ml --backend auto" \
+    || bad "full plan dry run (exit $fx_code): $fx_out"
+fx_out="$(PATH="$MLX/nonet:/usr/bin:/bin" WORKSPACE_ROOT="$FXP/ws" \
+    ./server-provision.sh --plan "$FXP/provision-plan.example.sh" --dry-run 2>&1)"; fx_code=$?
+[[ "$fx_code" == 0 && ! -e "$MLX/calls" && ! -e "$FXP/ws" && "$fx_out" == "$(printf '%s\n' \
+    "Provision plan: $FXP/provision-plan.example.sh" "Bootstrap: $FXP/server-bootstrap-$RA_VERSION.tar.gz" 'Bundles: 0')" ]] \
+    && [[ "$(grep -oE '^export INSTALL_[A-Z_]+=.*' examples/provision-plan.example.sh)" == 'export INSTALL_UV=1' ]] \
+    && ok "the minimal plan still parses to the foundation alone: no bundle, no profile, installers at their defaults" \
+    || bad "minimal plan dry run (exit $fx_code): $fx_out"
+
+# Published beside the archives, and the same bytes everywhere a user meets it.
+bash release/release-assets.sh standalone | grep -qxF $'provision-plan.full.example.sh\texamples/provision-plan.full.example.sh\t0644' \
+    && bash release/release-assets.sh upload | grep -qxF provision-plan.full.example.sh \
+    && bash release/release-assets.sh required | grep -qxF "$FULL_EXAMPLE" \
+    && grep -qxF '            release/dist/provision-plan.full.example.sh' .github/workflows/release.yml \
+    && ok "the full plan is published beside the archives, uploaded, and required inside each of them" \
+    || bad "the full plan is not published, uploaded and required in the archives"
+if (( ra_rc == 0 )); then
+    full_copies=""
+    for ra_archive in "server-bootstrap-$RA_VERSION.tar" "server-bootstrap-$RA_VERSION.tar.gz" \
+        "server-bootstrap-$RA_VERSION.zip" "server-bootstrap-$RA_VERSION-source.zip"; do
+        case "$ra_archive" in
+            *-source.zip) unzip -p "$RA_DIST/$ra_archive" "server-bootstrap/$FULL_EXAMPLE" ;;
+            *.zip) unzip -p "$RA_DIST/$ra_archive" "server-bootstrap-$RA_VERSION/$FULL_EXAMPLE" ;;
+            *.tar.gz) tar -xzOf "$RA_DIST/$ra_archive" "server-bootstrap-$RA_VERSION/$FULL_EXAMPLE" ;;
+            *) tar -xOf "$RA_DIST/$ra_archive" "server-bootstrap-$RA_VERSION/$FULL_EXAMPLE" ;;
+        esac > "$TMP/full-member" 2>/dev/null && cmp -s "$TMP/full-member" "$FULL_EXAMPLE" \
+            || full_copies+=" $ra_archive"
+    done
+    cmp -s "$RA_DIST/provision-plan.full.example.sh" "$FULL_EXAMPLE" || full_copies+=" standalone"
+    [[ -z "$full_copies" ]] \
+        && ok "the full plan is byte-identical in the tree, the standalone asset and all four archives" \
+        || bad "the full plan differs from the tracked file in:$full_copies"
+    ra_reject "a standalone full plan that differs from the tracked file" \
+        "provision-plan.full.example.sh is not byte-identical to examples/provision-plan.full.example.sh" \
+        "sed -i 's/^export INSTALL_CODEX=1\$/export INSTALL_CODEX=0/' provision-plan.full.example.sh"
+else
+    bad "no built release to compare the full plan against"
+fi
+
+# The README's first Bash block is the whole installation: download the
+# provisioner, the full plan, the versioned main archive and its sidecar,
+# verify the archive, then run the full plan, each step only after the one
+# before it succeeded. The foundation-only block comes after it.
+RXB="$TMP/readme-blocks"; mkdir -p "$RXB"
+if readme_out="$(python3 - README.md "$RA_VERSION" "$RXB" <<'PY'
+import pathlib, re, sys
+path, version, out = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
+text = pathlib.Path(path).read_text()
+lines = text.split("\n")
+blocks, i = [], 0
+while i < len(lines):
+    if lines[i] == "```bash":
+        j = lines.index("```", i + 1)
+        blocks.append((i, "\n".join(lines[i + 1:j]) + "\n"))
+        i = j
+    i += 1
+
+def steps(body):
+    """(command, what joins it to the next) with continuation lines folded."""
+    result = []
+    for line in body.replace("\\\n", " ").splitlines():
+        parts = [re.sub(r"\s+", " ", p).strip() for p in line.split("&&")]
+        result += [(p, "&&" if k < len(parts) - 1 else "") for k, p in enumerate(parts)]
+    return result
+
+def expected(plan):
+    return [
+        (f"V={version}", ""),
+        ("BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V", ""),
+        ("cd /root", ""),
+        ('wget -q --show-progress "$BASE/server-provision.sh" "$BASE/' + plan
+         + '" "$BASE/server-bootstrap-$V.tar.gz" "$BASE/server-bootstrap-$V.tar.gz.sha256"', "&&"),
+        ('sha256sum -c "server-bootstrap-$V.tar.gz.sha256"', "&&"),
+        ("chmod +x server-provision.sh", "&&"),
+        (f"./server-provision.sh --plan ./{plan}", ""),
+    ]
+
+problems = []
+install = lines.index("## Install") if "## Install" in lines else -1
+full = [n for n, (_, body) in enumerate(blocks) if "provision-plan.full.example.sh" in body]
+minimal = [n for n, (_, body) in enumerate(blocks) if "provision-plan.example.sh" in body]
+if not blocks or install < 0 or blocks[0][0] < install or any(l.startswith("## ") for l in lines[install + 1:blocks[0][0]]):
+    problems.append("the first Bash block is not the first thing under ## Install")
+elif steps(blocks[0][1]) != expected("provision-plan.full.example.sh"):
+    problems.append("the first Bash block is not download, sha256sum -c, chmod, run the full plan, joined by &&")
+if not minimal or not full or minimal[0] <= full[0]:
+    problems.append("the foundation-only block does not come after the full plan's")
+elif steps(blocks[minimal[0]][1]) != expected("provision-plan.example.sh"):
+    problems.append("the foundation-only block is not the same verified flow with provision-plan.example.sh")
+elif "### Foundation-only install" not in lines[:blocks[minimal[0]][0]]:
+    problems.append("the foundation-only block is not under its own heading")
+if text.find("provision-plan.full.example.sh") > text.find("provision-plan.example.sh"):
+    problems.append("the README names the minimal plan before the full plan")
+if problems:
+    print("; ".join(problems))
+    raise SystemExit(1)
+(out / "first.sh").write_text(blocks[0][1])
+(out / "repeat.sh").write_text(steps(blocks[0][1])[-1][0] + "\n")
+for command, _ in steps(blocks[0][1]):
+    if command.startswith("wget "):
+        for url in re.findall(r'"\$BASE/([^"]+)"', command):
+            print(url.replace("$V", version))
+PY
+)"; then
+    readme_assets="$readme_out"
+    readme_unpublished="$(comm -23 <(LC_ALL=C sort <<< "$readme_assets") <(bash release/release-assets.sh upload | LC_ALL=C sort))"
+    [[ -z "$readme_unpublished" && "$(wc -l <<< "$readme_assets")" == 4 ]] \
+        && ok "the README's first block downloads four published assets, verifies the archive, then runs the full plan; the minimal plan follows" \
+        || bad "the README's first block downloads what no release publishes: $readme_unpublished"
+else
+    bad "README install blocks: $readme_out"
+fi
+
+# The block itself, run as pasted, against the files this release publishes.
+# wget is a stub serving the release URLs from a directory; the archive is the
+# built one with its server-bootstrap.sh replaced by a recorder, because the
+# real foundation would install onto this host. Every installer switch is set
+# to 0 in the caller's environment: the plan, not the defaults, must turn each
+# one on.
+if (( EUID != 0 )); then
+    skip "the README's first block against the built release (needs root, as provisioning does)"
+elif (( ra_rc != 0 )) || [[ ! -s "$RXB/first.sh" ]]; then
+    bad "the README's first block was not run: no built release or no block"
+else
+    RX="$(mktemp -d "$TMP/readme-run.XXXXXX")"
+    RX_URL="https://github.com/evya1/server-bootstrap/releases/download/v$RA_VERSION"
+    mkdir -p "$RX/serve" "$RX/stub" "$RX/bin" "$RX/src" "$RX/tmp"
+    while IFS=$'\t' read -r name _ _; do cp -p "$RA_DIST/$name" "$RX/serve/"; done < <(bash release/release-assets.sh standalone)
+    tar -xzf "$RA_DIST/server-bootstrap-$RA_VERSION.tar.gz" -C "$RX/src"
+    cat > "$RX/src/server-bootstrap-$RA_VERSION/server-bootstrap.sh" <<'RECORDER'
+#!/usr/bin/env bash
+# Stand-in foundation: records what the bootstrap was asked to install, and
+# puts logging stand-ins where the provisioner looks for its next commands.
+set -e
+printf 'bootstrap\n' >> "$README_ORDER_LOG"
+env | grep -E '^(INSTALL_[A-Z_]+|PACKAGES_FILE|EXTRA_PACKAGES|SKIP_PACKAGES)=' | LC_ALL=C sort > "$README_BOOTSTRAP_ENV"
+for command in server-accept server-bundle-install server-profile; do
+    cat > "$README_FAKE_BIN/$command" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "$command\${*:+ \$*}" >> "\$README_ORDER_LOG"
+STUB
+    chmod 0755 "$README_FAKE_BIN/$command"
+done
+RECORDER
+    chmod 0755 "$RX/src/server-bootstrap-$RA_VERSION/server-bootstrap.sh"
+    tar -czf "$RX/serve/server-bootstrap-$RA_VERSION.tar.gz" -C "$RX/src" "server-bootstrap-$RA_VERSION"
+    ( cd "$RX/serve" && sha256sum "server-bootstrap-$RA_VERSION.tar.gz" > "server-bootstrap-$RA_VERSION.tar.gz.sha256" )
+    cat > "$RX/stub/wget" <<'WGET'
+#!/usr/bin/env bash
+# Serves release URLs from a directory. Anything else fails, as a 404 would.
+status=0
+for arg in "$@"; do
+    [[ "$arg" == -* ]] && continue
+    printf '%s\n' "$arg" >> "$README_WGET_LOG"
+    name="${arg#"$README_RELEASE_URL"/}"
+    if [[ "$name" != "$arg" && "$name" != */* && -f "$README_SERVE/$name" ]]; then
+        cp -- "$README_SERVE/$name" "./$name"
+    else
+        status=8
+    fi
+done
+exit "$status"
+WGET
+    for rx_client in curl git ssh nc; do
+        printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 1\n' "$rx_client" "$RX" > "$RX/stub/$rx_client"
+    done
+    chmod 0755 "$RX/stub"/*
+    rx_off=(); while IFS= read -r name; do rx_off+=("$name=0"); done <<< "$FULL_FLAGS"
+    readme_run() {  # script -> runs it as a pasted block would, from $RX/home; output in $RX/out
+        : > "$RX/order.log"; : > "$RX/wget.log"; rm -f -- "$RX/bootstrap.env"; mkdir -p "$RX/home"
+        ( cd "$RX/home" && env -u PACKAGES_FILE -u EXTRA_PACKAGES -u SKIP_PACKAGES "${rx_off[@]}" \
+            PATH="$RX/stub:$RX/bin:$PATH" WORKSPACE_ROOT="$RX/ws" TMPDIR="$RX/tmp" \
+            README_HOME="$RX/home" README_SERVE="$RX/serve" README_RELEASE_URL="$RX_URL" \
+            README_ORDER_LOG="$RX/order.log" README_WGET_LOG="$RX/wget.log" \
+            README_BOOTSTRAP_ENV="$RX/bootstrap.env" README_FAKE_BIN="$RX/bin" \
+            bash -c 'cd() { if [[ $# == 1 && $1 == /root ]]; then builtin cd -- "$README_HOME"; else builtin cd "$@"; fi; }
+                     source "$1"' _ "$1" ) > "$RX/out" 2>&1
+    }
+    rx_summary="$RX/ws/startup-logs/latest-provision-summary.txt"
+    readme_run "$RXB/first.sh"; rx_code=$?
+    rx_selected=1
+    while IFS= read -r name; do grep -qx "$name=1" "$RX/bootstrap.env" 2>/dev/null || rx_selected=0; done <<< "$FULL_FLAGS"
+    grep -qE '^(PACKAGES_FILE|EXTRA_PACKAGES|SKIP_PACKAGES)=' "$RX/bootstrap.env" 2>/dev/null && rx_selected=0
+    if [[ "$rx_code" == 0 && ! -e "$RX/calls" ]] && (( rx_selected )) \
+        && [[ "$(cat "$RX/wget.log")" == "$(printf "$RX_URL/%s\n" server-provision.sh provision-plan.full.example.sh \
+            "server-bootstrap-$RA_VERSION.tar.gz" "server-bootstrap-$RA_VERSION.tar.gz.sha256")" ]] \
+        && grep -qx "server-bootstrap-$RA_VERSION.tar.gz: OK" "$RX/out" \
+        && [[ "$(cat "$RX/order.log")" == $'bootstrap\nserver-accept\nserver-profile install ml --backend auto' ]] \
+        && grep -qx 'profiles_installed: 1' "$rx_summary" && grep -qx 'bundles_installed: 0' "$rx_summary" \
+        && [[ -f "$RX/home/server-bootstrap-$RA_VERSION.tar.gz" ]]; then
+        ok "the README's first block, as pasted, verifies the archive and runs the full plan: all $(wc -l <<< "$FULL_FLAGS") installers on over an environment that turned them off, the shipped package manifest, then ml --backend auto"
+    else
+        bad "README first block (exit $rx_code): $(tail -5 "$RX/out" | tr '\n' ' ') order: $(tr '\n' ' ' < "$RX/order.log")"
+    fi
+    readme_run "$RXB/repeat.sh"; rx_code=$?
+    if [[ "$rx_code" == 0 && ! -s "$RX/wget.log" ]] \
+        && [[ "$(cat "$RX/order.log")" == $'bootstrap\nserver-accept\nserver-profile install ml --backend auto' ]] \
+        && [[ -f "$RX/home/server-bootstrap-$RA_VERSION.tar.gz" ]]; then
+        ok "the block's last line repeats the install from the kept archive, downloading nothing"
+    else
+        bad "README repeat (exit $rx_code): $(tail -5 "$RX/out" | tr '\n' ' ')"
+    fi
+    # What the README says happens today, and with a damaged download.
+    rm -rf -- "${RX:?}/home" "${RX:?}/ws"; mv "$RX/serve/provision-plan.full.example.sh" "$RX/full.sh"
+    readme_run "$RXB/first.sh"; rx_code=$?
+    (( rx_code != 0 )) && [[ ! -s "$RX/order.log" && ! -e "$RX/ws" ]] \
+        && ok "from a release without the full plan, the block stops after the download and installs nothing" \
+        || bad "README block with no full plan published (exit $rx_code): $(tail -3 "$RX/out" | tr '\n' ' ')"
+    rm -rf -- "${RX:?}/home" "${RX:?}/ws"; mv "$RX/full.sh" "$RX/serve/provision-plan.full.example.sh"
+    printf 'x' >> "$RX/serve/server-bootstrap-$RA_VERSION.tar.gz"
+    readme_run "$RXB/first.sh"; rx_code=$?
+    (( rx_code != 0 )) && grep -q "server-bootstrap-$RA_VERSION.tar.gz: FAILED" "$RX/out" \
+        && [[ ! -s "$RX/order.log" && ! -e "$RX/ws" ]] \
+        && ok "with an archive that does not match its sidecar, the block stops at sha256sum -c and installs nothing" \
+        || bad "README block with a damaged archive (exit $rx_code): $(tail -3 "$RX/out" | tr '\n' ' ')"
+fi
+
+# The ml part of the full plan through the real server-profile and installer,
+# with the stand-ins of the ml example lifecycle above: a first run installs,
+# a repeat rebuilds and downloads nothing.
+if (( EUID != 0 )); then
+    skip "full plan through the real ml installer (needs root, as provisioning does)"
+elif [[ -z "$ML_PY312" ]]; then
+    skip "full plan through the real ml installer (no python3.12 on this host)"
+else
+    rm -rf -- "${MLP:?}/ws" "${MLP:?}/usr-bin" "${MLP:?}/runtime" "${MLP:?}/bin"; mkdir -p "$MLP/bin"
+    mlp_archive
+    mlp_plan 'enable_profile "ml" --backend auto' "$FULL_EXAMPLE"
+    if mlp_run && [[ "$(cat "$MLP/order.log")" == $'bootstrap\nserver-accept' ]] \
+        && [[ "$(cat "$MLP_STATE/backend")" == cpu && -x "$MLP_LINK/bin/python" ]] \
+        && grep -q '^pip sync .*--torch-backend cpu ' "$MLP/uv.log"; then
+        mlp_target="$(readlink -- "$MLP_LINK")"; mlp_state="$(cat "$MLP_STATE"/* | sha256sum)"
+        if mlp_run && grep -q 'nothing to rebuild' "$MLP/out" && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log" \
+            && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" && "$(cat "$MLP_STATE"/* | sha256sum)" == "$mlp_state" ]]; then
+            ok "the full plan installs the ml profile through the real installer, and a repeat rebuilds and downloads nothing"
+        else
+            bad "full plan repeat: $(tail -5 "$MLP/out")"
+        fi
+        if mlp_run ML_MIN_FREE_GB=999999 && grep -q 'nothing to rebuild' "$MLP/out" && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log" \
+            && [[ "$(readlink -- "$MLP_LINK")" == "$mlp_target" ]]; then
+            ok "a repeat of the full plan succeeds with less free space than a build needs"
+        else
+            bad "full plan repeat with too little free space: $(tail -5 "$MLP/out")"
+        fi
+        rm -rf -- "${MLP:?}/ws" "${MLP:?}/usr-bin" "${MLP:?}/runtime"
+        if ! mlp_run ML_MIN_FREE_GB=999999 && grep -q 'needs 999999' "$MLP/out" \
+            && [[ ! -e "$MLP_LINK" && ! -e "$MLP_STATE" ]] && ! grep -qE '^(venv|pip sync)' "$MLP/uv.log"; then
+            ok "a first install through the full plan with too little free space stops before building"
+        else
+            bad "full plan first install with too little free space: $(tail -5 "$MLP/out")"
+        fi
+    else
+        bad "full plan first run: $(tail -5 "$MLP/out")"
+    fi
+fi
+
 section "Runtime installation of the new files"
 for entry in 'server-secrets" "$stage/server-secrets' 'server-profile" "$stage/server-profile' \
     'lib/secrets-load.sh" "$stage/lib/secrets-load.sh' \
@@ -4394,12 +5160,42 @@ grep -q "BOOTSTRAP_VERSION=\"$declared\"" lib/bootstrap/config.sh \
     || { bad "BOOTSTRAP_VERSION does not match VERSION ($declared)"; version_drift=1; }
 grep -qF "V=$declared" README.md \
     || { bad "README download snippet does not pin V=$declared"; version_drift=1; }
+# Every copyable download block names the version the plans and the built
+# archives carry, and is valid Bash as written. docs/ML-PROFILE.md once had
+# V=<ml-release>, which a shell reads as redirections: pasted, it failed with a
+# syntax error before anything ran.
+while IFS= read -r hit; do
+    [[ -n "$hit" ]] || continue
+    bad "download snippet: $hit"
+    version_drift=1
+done < <(python3 - "$declared" README.md docs/*.md <<'PY'
+import pathlib, subprocess, sys
+declared, paths = sys.argv[1], sys.argv[2:]
+for path in paths:
+    lines = pathlib.Path(path).read_text().split("\n")
+    i = 0
+    while i < len(lines):
+        if lines[i] == "```bash":
+            j = lines.index("```", i + 1)
+            body = "\n".join(lines[i + 1:j]) + "\n"
+            if "releases/download" in body:
+                where = f"{path}:{i + 1}"
+                pins = [l for l in body.splitlines() if l.startswith("V=")]
+                if pins != [f"V={declared}"]:
+                    print(f"{where} sets {pins or 'no V'}, not V={declared}")
+                check = subprocess.run(["bash", "-n"], input=body, text=True, capture_output=True)
+                if check.returncode:
+                    print(f"{where} is not valid Bash: {check.stderr.strip()}")
+            i = j
+        i += 1
+PY
+)
 while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
     bad "stale version string: $hit"
     version_drift=1
 done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
-    README.md config.example.env checksums/*.txt docs/PROVISIONING.md examples/*.sh 2>/dev/null \
+    README.md config.example.env checksums/*.txt docs/PROVISIONING.md docs/ML-PROFILE.md examples/*.sh 2>/dev/null \
     | grep -vF "server-bootstrap $declared" \
     | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"

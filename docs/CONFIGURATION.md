@@ -19,6 +19,7 @@ convenient place to export them.
 | `INSTALL_UV` | `1` | install pinned, checksum-verified uv |
 | `INSTALL_GITHUB_CLI` | `1` | install pinned, checksum-verified `gh` |
 | `INSTALL_BASE_PYTHON_ENV` | `1` | create isolated base Python environment |
+| `INSTALL_RUNTIME_TOOLS` | `1` | install the release under `/usr/local/lib/server-bootstrap` and link the `server-*` commands; `server-provision.sh` needs them |
 | `INSTALL_SECRETS_FILE` | `1` | create the API keys file and its shell loader |
 | `INSTALL_PI_MODELS_TEMPLATE` | `1` | seed `models.json` when pi has none |
 | `BASE_PYTHON_PACKAGES` | `numpy` | packages installed in that environment |

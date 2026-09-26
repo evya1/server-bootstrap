@@ -237,10 +237,25 @@ ml_free_gb() {  # path -> whole GB available on its file system (nearest existin
 # --- Checks shared by ml-preflight and the installer -----------------------------
 ml_line() { printf '%-5s %s\n' "$1" "$2"; }
 
+# Free space is what a build needs, so it is checked only for a run that will
+# build: a repeat that keeps a matching environment writes nothing. With
+# "defer-disk" the preflight measures it into ML_DISK_FREE and ML_DISK_NEED,
+# and ml_disk_check prints and decides once the caller knows.
+ml_disk_check() {  # -> the disk line; 1 if there is less free space than a build needs
+    if [[ -n "$ML_DISK_FREE" ]] && (( ML_DISK_FREE >= ML_DISK_NEED )); then
+        ml_line PASS "disk: ${ML_DISK_FREE} GB free for $VENV_ROOT (needs $ML_DISK_NEED)"
+    else
+        ml_line FAIL "disk: ${ML_DISK_FREE:-unknown} GB free for $VENV_ROOT, needs $ML_DISK_NEED (set ML_MIN_FREE_GB to override)"
+        return 1
+    fi
+}
+
 # Prints one line per check and returns 1 if any failed. Selection results are
-# left in ML_BACKEND and friends, so the caller can act on them.
+# left in ML_BACKEND and friends, so the caller can act on them. A second
+# argument of defer-disk leaves the disk check to the caller (ml_disk_check).
 ml_preflight() {
-    local requested="$1" failed=0 arch uv version free need errors line
+    local requested="$1" disk="${2:-check}" failed=0 arch uv version errors line
+    ML_DISK_FREE=""; ML_DISK_NEED=""
 
     if arch="$(ml_arch)"; then ml_line PASS "architecture: $arch"
     else ml_line FAIL "architecture: $(uname -m) is not supported"; failed=1; fi
@@ -271,13 +286,8 @@ ml_preflight() {
         elif [[ "$ML_BACKEND_CUDA" == none && "$ML_GPU_STATE" != none ]]; then
             ml_line WARN "backend: the CPU backend was requested on a host with NVIDIA hardware; the GPU will not be used"
         fi
-        free="$(ml_free_gb "$VENV_ROOT")"; need="$(ml_min_free_gb "$ML_BACKEND_CUDA")"
-        if [[ -n "$free" ]] && (( free >= need )); then
-            ml_line PASS "disk: ${free} GB free for $VENV_ROOT (needs $need)"
-        else
-            ml_line FAIL "disk: ${free:-unknown} GB free for $VENV_ROOT, needs $need (set ML_MIN_FREE_GB to override)"
-            failed=1
-        fi
+        ML_DISK_FREE="$(ml_free_gb "$VENV_ROOT")"; ML_DISK_NEED="$(ml_min_free_gb "$ML_BACKEND_CUDA")"
+        [[ "$disk" == defer-disk ]] || ml_disk_check || failed=1
     else
         while IFS= read -r line; do ml_line FAIL "backend: $line"; done < "$errors"
         failed=1

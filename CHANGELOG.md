@@ -4,6 +4,84 @@
 
 ### Added
 
+- **The `ml` profile is covered by the main release gates.** It ships only
+  inside the existing archives: every archive carries the profile, its
+  commands and every lock `backends.txt` declares, and the build stops before
+  packaging if a declared lock is missing (`tools/ml-lock.sh --verify
+  --require-all`). The release manifest adds `server-profile` to its
+  entrypoints and a `profiles` object listing each locked backend,
+  architecture, CUDA version, PyTorch index and lock SHA-256, taken from the
+  shipped files. The new `release/release-assets.sh` defines the published
+  assets once. The build ends with its `verify`, and the release preflight
+  runs it again after the final artifact scan. It fails unless `release/dist`
+  holds exactly the expected files. Each sidecar and the manifest must match
+  the archives. The tar, tar.gz, zip and source zip must each hold exactly the
+  release file set, byte for byte. The standalone copies must be identical to
+  their tracked files, and the manifest's lock digests must be those of the
+  shipped locks. `release.yml` uploads by glob, and
+  `server-bootstrap-*.tar.gz` would also match a separate
+  `server-bootstrap-ml-*.tar.gz`. The exact check is what keeps such a file,
+  or any unverified one, from being published. No separate ML archive,
+  sidecar or release is built. ([#56][])
+
+[#56]: https://github.com/evya1/server-bootstrap/issues/56
+
+- **A one-command ML provision example.**
+  `examples/provision-plan.ml.example.sh`, also published beside each release
+  as `provision-plan.ml.example.sh`, installs the foundation from the one
+  checksum-pinned release it names and enables its built-in `ml` profile with
+  `--backend auto`. It carries no ML URL, version, archive or checksum. It
+  keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so the same
+  command can be repeated; a repeat rebuilds no environment. It leaves free
+  space to the profile, which checks it before any run that builds, so
+  `server-accept` does not reject a repeat once the install has used that
+  space. Changing backend
+  is an edit to its `enable_profile` line with `--reconfigure`, and without it
+  the run stops and changes nothing. The README and `docs/ML-PROFILE.md` show
+  the copyable download-and-run block. The suite dry-runs the example with
+  every network client replaced by a failing recorder. As root, it also runs
+  the example through `server-provision.sh`, the real `server-profile` and the
+  real installer from a stand-in foundation archive: a fresh install, an
+  identical repeat, a refused and then explicit backend change, and a failed
+  update that leaves the previous environment in place. ([#57][])
+
+[#57]: https://github.com/evya1/server-bootstrap/issues/57
+
+- **The README's first install path is the complete built-in stack.**
+  `examples/provision-plan.full.example.sh`, also published beside each
+  release as `provision-plan.full.example.sh` and required in every archive,
+  installs the foundation from the one checksum-pinned release it names. It
+  exports every configurable installer as `1` (`INSTALL_ZSH`,
+  `INSTALL_OH_MY_ZSH`, `INSTALL_NODEJS`, `INSTALL_CLAUDE_CODE`,
+  `INSTALL_CODEX`, `INSTALL_PI`, `INSTALL_VSCODE_EXTENSIONS`, `INSTALL_UV`,
+  `INSTALL_GITHUB_CLI`, `INSTALL_BASE_PYTHON_ENV`, `INSTALL_RUNTIME_TOOLS`,
+  `INSTALL_SECRETS_FILE`, `INSTALL_PI_MODELS_TEMPLATE`), keeps the shipped
+  package manifest, and enables every built-in profile:
+  `enable_profile "ml" --backend auto`. The pinned ngrok CLI has no switch;
+  every bootstrap run installs it. `rclone`, for file transfer and
+  S3-compatible object storage, moves from `[optional]` to `[required]` in
+  `config/packages.txt`, so a full install leaves `rclone` on `PATH`; no
+  remote, credential or transfer is set up, and the suite checks it is listed
+  once, under `[required]`. The plan keeps its verified archive, so its
+  last command can be repeated, and leaves free space to the `ml` profile.
+  The README's first Bash block downloads the provisioner, the full
+  plan, the versioned archive and its sidecar, checks the archive with
+  `sha256sum -c`, and runs the plan, each step only if the previous one
+  succeeded. `provision-plan.example.sh` remains as the foundation-only
+  install, after it. The suite reads the installer switches from
+  `lib/bootstrap/config.sh` and the profiles from `profiles/`, and fails when
+  the plan misses one. It checks the README block's commands, order and
+  assets, and the full plan's bytes in the tree, the standalone asset and all
+  four archives. As root, it runs the README block as pasted against the
+  built release with a recording stand-in foundation: every installer is
+  selected over an environment that turned them off, `ml` follows, the last
+  line repeats the install, and a missing plan or a damaged archive stops the
+  block before anything is installed. The `docs/ML-PROFILE.md` download block
+  is valid Bash again, and `docs/CONFIGURATION.md` now lists
+  `INSTALL_RUNTIME_TOOLS` with the other installer switches. ([#60][])
+
+[#60]: https://github.com/evya1/server-bootstrap/issues/60
+
 - **`AGENTS.md`** — repository rules for coding agents: supported scope, entry
   points, security boundaries, release invariants, the validation commands, and
   the actions that need owner approval. It links to the existing guides rather
@@ -57,7 +135,11 @@
   failure before the switch leaves the previous environment, its commands and
   the recorded state unchanged. A failure after it, while the state or the
   command links are written, switches back and restores them, and a failed
-  first install leaves nothing installed. A repeat run rebuilds nothing.
+  first install leaves nothing installed. A repeat run rebuilds nothing. Free
+  space (`ML_MIN_FREE_GB`, 10 GB for CPU and 30 GB for CUDA) is required
+  before a run that builds: an install, an update, a `--reconfigure` or a
+  `--force`. A repeat that keeps an environment matching its lock builds
+  nothing and does not need it.
   `--backend auto` chooses `cpu` without an NVIDIA GPU and `cu130` with a
   driver that reports CUDA 13.0 or newer, and never falls back to CPU on a
   host with NVIDIA hardware. Changing backend needs `--reconfigure`. State

@@ -32,6 +32,7 @@ curl
 wget
 aria2
 rsync
+rclone          # file transfer and S3-compatible object storage
 unzip
 zip
 xz-utils
@@ -149,7 +150,6 @@ nvtop
 # --- network and transfer ------------------------------------------------------
 speedtest-cli
 httpie
-rclone
 
 # --- developer tooling ---------------------------------------------------------
 shellcheck

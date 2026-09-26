@@ -23,6 +23,8 @@
 #   2. the pinned Gitleaks resolves and verifies
 #   3. the reproducible build, which runs the suite and builds twice
 #   4. the pre-upload artifact scan, descending into the archives
+#   5. release/dist holds exactly the verified release assets, and nothing
+#      else the upload's globs could pick up
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -32,7 +34,7 @@ TAG=""
 while (( $# )); do
     case "$1" in
         --tag) TAG="${2:?--tag needs a candidate}"; shift 2 ;;
-        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "usage: $0 [--tag CANDIDATE]" >&2; exit 2 ;;
     esac
 done
@@ -61,5 +63,10 @@ bash "$ROOT/release/build-release.sh"
 # and honours no skip switch.
 echo "==> Pre-publication artifact scan"
 bash "$ROOT/tools/gitleaks.sh" scan-artifacts release/dist "release artifacts"
+
+# release.yml uploads by glob. This is the last step before it: release/dist
+# must hold the expected assets and nothing else, each one verified.
+echo "==> Release assets"
+bash "$ROOT/release/release-assets.sh" verify release/dist
 
 printf '\nrelease-preflight: every pre-publication gate passed\n'

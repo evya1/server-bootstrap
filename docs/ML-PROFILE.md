@@ -13,6 +13,60 @@ environment, no profile state, and no `ml-*` command. The profile does not
 touch the system Python, the NVIDIA driver, or a system CUDA installation. It
 downloads no model or dataset and starts no service.
 
+## One-command install
+
+> [!IMPORTANT]
+> No published release ships this profile yet. v2.2.3, the latest release,
+> has neither the `ml` profile nor `provision-plan.ml.example.sh`, so today
+> the download below fails and nothing is installed. The block names 2.2.3
+> because that is still this repository's `VERSION`; the release that ships
+> the profile replaces it.
+
+The README's [first install block](../README.md#install) enables this profile
+as part of the complete built-in stack, with
+`provision-plan.full.example.sh`. `provision-plan.ml.example.sh` is the plan
+for the foundation and this profile. A release with the profile publishes
+both beside its archive and ships them inside it, under `examples/`. Each
+installs the foundation and enables this profile from the one release it
+names. The profile is part of that archive, so neither plan carries an ML URL,
+version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
+
+```bash
+V=2.2.3
+BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
+cd /root
+wget -q --show-progress \
+  "$BASE/server-provision.sh" \
+  "$BASE/provision-plan.ml.example.sh" \
+  "$BASE/server-bootstrap-$V.tar.gz" \
+  "$BASE/server-bootstrap-$V.tar.gz.sha256" \
+  && sha256sum -c "server-bootstrap-$V.tar.gz.sha256" \
+  && chmod +x server-provision.sh \
+  && ./server-provision.sh --plan ./provision-plan.ml.example.sh --dry-run \
+  && ./server-provision.sh --plan ./provision-plan.ml.example.sh
+```
+
+Each command runs only if the one before it succeeded. The dry run lists the
+archive and `ml --backend auto` and changes nothing. The real run verifies the
+archive's SHA-256 again, installs the foundation, runs `server-accept`, then
+`server-profile install ml --backend auto`.
+
+- The plan leaves free space to this profile: 30 GB for a CUDA backend, which
+  `auto` selects on an NVIDIA host, and 10 GB for CPU (`ML_MIN_FREE_GB`
+  below), checked before any run that builds. `server-accept` checks the
+  plan's `MIN_DISK_GB` on every run, so the plan sets none that a repeat
+  would fail once the install has used the space.
+- The plan keeps the verified archive (`DELETE_ARCHIVES_AFTER_SUCCESS=0`), so
+  its last command, `./server-provision.sh --plan
+  ./provision-plan.ml.example.sh`, can be run again. A repeat finds the
+  environment current and rebuilds nothing.
+- To change backend, edit the plan's `enable_profile` line to name the backend
+  and add `--reconfigure`, for example `enable_profile "ml" --backend cpu
+  --reconfigure`. Without `--reconfigure` a run that would change backend
+  stops and changes nothing.
+- If an update fails, the previous environment, its state and its commands
+  stay as they were; see [Install, repeat, change](#install-repeat-change).
+
 ## Enable it
 
 In a provision plan, after `register_bootstrap`:
@@ -101,7 +155,8 @@ A CUDA backend is listed only after it has been validated on real hardware.
   cannot restore anything itself; the state then still names the previous
   environment, so `ml-status` reports the mismatch and the next run rebuilds.
 - A repeat run with the same backend and lock, on an intact environment,
-  rebuilds nothing. The environment is exactly its lock: if packages were
+  rebuilds nothing, and so does not need the free space a build does. The
+  environment is exactly its lock: if packages were
   added, removed, or changed in it, the next run rebuilds it from the lock.
   Keep your own extra packages in a project environment.
 - When a newer release ships a changed lock, the next
@@ -154,7 +209,7 @@ and a non-loopback address prints a warning. Nothing starts Jupyter for you.
 | Variable | Default | Meaning |
 |---|---:|---|
 | `ML_PYTHON` | `/usr/bin/python3.12` | base interpreter; must be Python 3.12 |
-| `ML_MIN_FREE_GB` | `10` CPU, `30` CUDA | free space required on the file system that holds the environments |
+| `ML_MIN_FREE_GB` | `10` CPU, `30` CUDA | free space required, before a run that builds, on the file system that holds the environments |
 | `ML_JUPYTER_IP` | `127.0.0.1` | address `ml-jupyter` listens on |
 | `ML_JUPYTER_PORT` | `8888` | port `ml-jupyter` listens on |
 

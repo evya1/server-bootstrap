@@ -8,7 +8,10 @@ through it, so the scanner cannot drift between them.
 The release build scans the source staging tree and every extracted archive, and
 the release workflow scans `release/dist` again immediately before upload. That
 last pass descends into the archives — a flat scan of a directory of tarballs
-reads zero bytes and would pass anything.
+reads zero bytes and would pass anything. After it, `release/release-assets.sh
+verify` fails unless `release/dist` holds exactly the expected assets, each
+matching its sidecar, the release manifest and the tracked files, so the
+upload's globs can pick up nothing else.
 
 Findings are remediated with new commits. Published history is never rewritten
 and the allowlist is never broadened to silence a preserved finding; see

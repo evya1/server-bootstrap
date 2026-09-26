@@ -68,6 +68,12 @@ if (( SKIP_TESTS == 0 )); then
     bash tests/run-tests.sh
 fi
 
+# The ml profile ships in these archives, not as an artifact of its own. Every
+# lock backends.txt declares must be present, frozen and hashed; the check is
+# offline and runs even when the suite is skipped.
+echo "==> ml profile locks"
+bash "$ROOT/tools/ml-lock.sh" --verify --require-all
+
 # One canonical set of release files, resolved once and used for the checksum
 # manifest, the tar, the source stage and the tests. This used to be three
 # separate `find .` walks of the working tree, which is how an untracked scratch
@@ -131,10 +137,10 @@ rm -rf "$DIST"; mkdir -p "$DIST"
 # in one list is what stops a new archive being added to the release without
 # being added to the gate -- which is how the source zip ended up outside it.
 #
-# Scope, stated exactly: this list is the four archives, not the nine assets
-# release.yml uploads. The other five -- the two sidecars, the manifest and the
-# two standalone first-run files -- are derived from or describe these, and are
-# deliberately not double-built. See #47.
+# Scope, stated exactly: this list is the four archives, not every asset
+# release.yml uploads (release/release-assets.sh upload). The others -- the
+# sidecars, the manifest and the standalone first-run files -- are derived from
+# or describe these, and are deliberately not double-built. See #47.
 ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" "$NAME-$VERSION-source.zip")
 
 hash_artifacts() {  # directory -> "<name> <sha256>" per line, sorted by name
@@ -174,10 +180,16 @@ sha_src_1="$(sha_of "$NAME-$VERSION-source.zip" "$hashes_1")"
     && sha256sum "$NAME-$VERSION.tar.gz" > "$NAME-$VERSION.tar.gz.sha256" \
     && sha256sum "$NAME-$VERSION.zip" > "$NAME-$VERSION.zip.sha256" )
 
-# First-run files are also copied beside the archives for direct upload.
-install -m 0755 server-provision.sh "$DIST/server-provision.sh"
-install -m 0644 examples/provision-plan.example.sh "$DIST/provision-plan.example.sh"
-install -m 0644 examples/provision-plan.whisper.example.sh "$DIST/provision-plan.whisper.example.sh"
+# First-run files are also copied beside the archives for direct upload. The
+# list, and the mode of each copy, is release/release-assets.sh's, which the
+# final check below holds the result to.
+while IFS=$'\t' read -r standalone_name standalone_path standalone_mode; do
+    install -m "$standalone_mode" "$standalone_path" "$DIST/$standalone_name"
+done < <(bash "$ROOT/release/release-assets.sh" standalone)
+
+# Which ml backends this release carries, and the digest of each lock, taken
+# from the files the archives were built from.
+PROFILES_JSON="$(bash "$ROOT/release/release-assets.sh" profiles)"
 
 cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
 {
@@ -190,7 +202,8 @@ cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
   "tests": "$TESTS_STATUS",
   "release_scan": "$SCAN_STATUS",
   "reproducible": true,
-  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets"]
+  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets", "server-profile"],
+  "profiles": $PROFILES_JSON
 }
 JSON
 
@@ -230,6 +243,12 @@ if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then
     diff <(printf '%s\n' "$hashes_1") <(hash_artifacts "$DIST") >&2 || true
     exit 1
 fi
+
+# release/dist must hold exactly the release: the expected files and nothing
+# else, each archive carrying the whole release set byte for byte, sidecars and
+# manifest agreeing with the archives, and the ml profile and its locks inside.
+echo "==> Release assets"
+bash "$ROOT/release/release-assets.sh" verify "$DIST"
 
 printf '\nRelease complete: %s %s\n' "$NAME" "$VERSION"
 printf '  tar sha256:    %s\n' "$sha_tar_1"
