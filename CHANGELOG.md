@@ -58,7 +58,11 @@
   `INSTALL_SECRETS_FILE`, `INSTALL_PI_MODELS_TEMPLATE`), keeps the shipped
   package manifest, and enables every built-in profile:
   `enable_profile "ml" --backend auto`. The pinned ngrok CLI has no switch;
-  every bootstrap run installs it. The plan keeps its verified archive, so its
+  every bootstrap run installs it. `rclone`, for file transfer and
+  S3-compatible object storage, moves from `[optional]` to `[required]` in
+  `config/packages.txt`, so a full install leaves `rclone` on `PATH`; no
+  remote, credential or transfer is set up, and the suite checks it is listed
+  once, under `[required]`. The plan keeps its verified archive, so its
   last command can be repeated, and leaves free space to the `ml` profile.
   The README's first Bash block downloads the provisioner, the full
   plan, the versioned archive and its sidecar, checks the archive with

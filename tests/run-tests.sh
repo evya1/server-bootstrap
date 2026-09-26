@@ -1436,6 +1436,13 @@ done < <(bootstrap_read_package_section config/packages.txt required
     && ok "shipped package manifest has no duplicates" || bad "duplicate package in manifest"
 [[ "$(bootstrap_read_package_section config/packages.txt required | wc -l)" -ge 40 ]] \
     && ok "shipped manifest keeps a substantial [required] set" || bad "manifest [required] shrank unexpectedly"
+# A full install promises rclone on PATH (#60), so it is required, listed once,
+# and never demoted to best effort.
+[[ "$(grep -cE '^[[:space:]]*rclone([[:space:]#]|$)' config/packages.txt)" == 1 \
+    && "$(bootstrap_read_package_section config/packages.txt required | grep -cx rclone)" == 1 \
+    && "$(bootstrap_read_package_section config/packages.txt optional | grep -cx rclone)" == 0 ]] \
+    && ok "rclone is listed once in the shipped manifest, under [required]" \
+    || bad "rclone must appear exactly once in config/packages.txt, under [required]"
 
 section "Supported platform: rejected before anything is created"
 # Ubuntu 24.04 on x86-64 or ARM64 only. Both entry points must refuse any other
