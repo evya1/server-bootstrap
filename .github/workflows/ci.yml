@@ -86,6 +86,38 @@ jobs:
       # YAML text.
       - name: Release preflight
         run: bash tools/release-preflight.sh
+      # Branch pushes only: a short-lived Actions artifact holding exactly the
+      # files a release would publish, so a candidate can be tested on a real
+      # host before anything is tagged. It is not a release, and its archive
+      # keeps the unbumped VERSION in its name; the artifact name carries the
+      # commit. The file list is release/release-assets.sh upload, the set
+      # release.yml publishes, and release/dist is verified again immediately
+      # before it is copied. SHA256SUMS covers every file in the artifact.
+      - name: Stage the verified test candidate
+        id: candidate
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          set -Eeuo pipefail
+          bash release/release-assets.sh verify
+          stage="$RUNNER_TEMP/test-candidate"
+          mkdir -p "$stage"
+          mapfile -t files < <(bash release/release-assets.sh upload)
+          (( ${#files[@]} > 0 )) || { echo "the release upload list is empty" >&2; exit 1; }
+          for f in "${files[@]}"; do cp -p -- "release/dist/$f" "$stage/$f"; done
+          cd "$stage"
+          sha256sum -c -- *.sha256
+          sha256sum -- "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+          echo "name=server-bootstrap-test-candidate-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "dir=$stage" >> "$GITHUB_OUTPUT"
+      - name: Upload the test candidate
+        if: steps.candidate.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.candidate.outputs.name }}
+          path: ${{ steps.candidate.outputs.dir }}
+          retention-days: 7
+          if-no-files-found: error
 
   tag-checkout:
     runs-on: ubuntu-latest
