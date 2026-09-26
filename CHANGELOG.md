@@ -137,15 +137,19 @@
   remain uninstalled are named and fail the run. They used to be downgraded to a
   warning, so a run could report `STATUS: OK` without them. `[optional]`
   packages remain best effort.
-- **The bootstrap no longer changes installed NVIDIA driver or CUDA packages.**
-  `dpkg --configure -a`, `apt-get -f install -y`, every `[required]` and
+- **The bootstrap's apt steps check installed NVIDIA driver and CUDA packages
+  before they run.** `apt-get -f install -y`, every `[required]` and
   `[optional]` install, and `RUN_APT_UPGRADE=1` are simulated with `apt-get -s`
-  first. A plan that would upgrade, downgrade, reinstall, reconfigure, or remove
-  such a package is not run: the repair steps and optional packages are skipped
-  with a warning, and a required package or the upgrade fails the run.
-  `apt-get -f install` used to run unconditionally with its failure ignored,
-  and could remove a GPU host's driver to resolve dependencies. Nothing is held
-  or otherwise changed on the host.
+  before every attempt, retries included. `dpkg --configure -a` is checked
+  instead with `dpkg-query`: it is skipped while a driver or CUDA package is
+  left unconfigured. A transaction whose plan would upgrade, downgrade,
+  reinstall, reconfigure, or remove such a package is not run: the repair steps
+  and optional packages are skipped with a warning, and a required package or
+  the upgrade fails the run. `apt-get -f install` used to run unconditionally
+  with its failure ignored, and could remove a GPU host's driver to resolve
+  dependencies. Nothing is held or otherwise changed on the host, so another apt
+  process running between a simulation and its transaction can still change
+  what that transaction does.
 
 ## 2.2.3
 

@@ -11,14 +11,16 @@ bootstrap_wait_for_apt() {
 }
 
 # --- NVIDIA driver and CUDA packages ---------------------------------------
-# The bootstrap never upgrades, downgrades, reinstalls, reconfigures, or removes
-# an NVIDIA driver or CUDA package that is already on the host. Every apt
-# transaction is simulated first and refused if its plan would; a driver that a
-# resolver swaps out unattended leaves a GPU host without a working driver.
+# The bootstrap does not run an apt transaction whose plan would upgrade,
+# downgrade, reinstall, reconfigure, or remove an NVIDIA driver or CUDA package
+# that is already on the host. Every attempt is simulated first and refused if
+# its plan would; a driver that a resolver swaps out unattended leaves a GPU
+# host without a working driver. Another apt process can still change the plan
+# between a simulation and the attempt that follows it.
 # Fresh installs of such a package are not refused: they change nothing that is
 # installed, and one that replaced an installed package would show as a Remv.
 BOOTSTRAP_APT_PROTECTED_PATTERN='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)'
-# Returned, without running anything, when a transaction is refused.
+# Returned when a transaction is refused; the refused attempt is not run.
 BOOTSTRAP_APT_REFUSED=3
 
 bootstrap_apt_protected_name() { [[ "$1" =~ $BOOTSTRAP_APT_PROTECTED_PATTERN ]]; }
@@ -41,22 +43,34 @@ bootstrap_apt_protected_changes() {
 }
 
 # bootstrap_apt_guarded ATTEMPTS APT-GET-ARGUMENTS...
-# Simulates the transaction, then runs it with retries only if the simulation
-# succeeded and changes no installed NVIDIA driver or CUDA package. Returns
-# BOOTSTRAP_APT_REFUSED for a refusal and 1 for any other failure.
+# Runs the transaction, retrying a failed attempt up to ATTEMPTS in all with
+# sb_retry's backoff. Each attempt is simulated afresh and runs only if that
+# simulation succeeded and changes no installed NVIDIA driver or CUDA package: a
+# failed attempt can leave apt with a different plan for the next one. A
+# refusal or a failed simulation ends the retries before the real attempt.
+# Returns BOOTSTRAP_APT_REFUSED for a refusal and 1 for any other failure.
 bootstrap_apt_guarded() {
-    local attempts="$1" plan changes; shift
-    if ! plan="$(apt-get -s "$@" 2>&1)"; then
-        sb_warn "apt-get $* cannot be resolved:"
-        printf '%s\n' "$plan" | grep -E '^(E|W):' | head -n 5 >&2 || true
-        return 1
-    fi
-    changes="$(printf '%s\n' "$plan" | bootstrap_apt_protected_changes)"
-    if [[ -n "$changes" ]]; then
-        sb_warn "refused apt-get $*: it would change installed NVIDIA driver or CUDA packages: ${changes//$'\n'/ }"
-        return "$BOOTSTRAP_APT_REFUSED"
-    fi
-    sb_retry "$attempts" apt-get "$@"
+    local attempts="$1" plan changes n=1 delay=5; shift
+    while true; do
+        if ! plan="$(apt-get -s "$@" 2>&1)"; then
+            sb_warn "apt-get $* cannot be resolved:"
+            printf '%s\n' "$plan" | grep -E '^(E|W):' | head -n 5 >&2 || true
+            return 1
+        fi
+        changes="$(printf '%s\n' "$plan" | bootstrap_apt_protected_changes)"
+        if [[ -n "$changes" ]]; then
+            sb_warn "refused apt-get $*: it would change installed NVIDIA driver or CUDA packages: ${changes//$'\n'/ }"
+            return "$BOOTSTRAP_APT_REFUSED"
+        fi
+        if apt-get "$@"; then return 0; fi
+        if (( n >= attempts )); then
+            sb_warn "command failed after $attempts attempts: apt-get $*"
+            return 1
+        fi
+        sb_warn "attempt $n/$attempts failed; retry in ${delay}s"
+        sleep "$delay"
+        n=$((n + 1)); delay=$(( delay * 2 > 60 ? 60 : delay * 2 ))
+    done
 }
 
 bootstrap_apt_optional() {

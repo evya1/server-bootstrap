@@ -1552,7 +1552,10 @@ section "APT transactions: required packages and the NVIDIA/CUDA guard"
 # Offline. apt-get, dpkg and dpkg-query are stubs driven by fixture files, so
 # no package is resolved, installed or removed on the machine running this.
 #   sim/WORD         printed by `apt-get -s ...` when WORD is one of its arguments
+#   sim/WORD@N       printed instead by the Nth such simulation
 #   unavailable/PKG  `apt-get [-s] install ... PKG` fails, as for a missing name
+#   fail-run/WORD    holds K: the first K real runs with WORD fail, as a
+#                    transient error (a mirror timeout) would
 #   dpkg-status      what dpkg-query reports: "NAME WANT FLAG STATUS" lines
 # Every call lands in calls: "SIM args", "RUN args", or "DPKG args".
 APTX="$TMP/apt"; mkdir -p "$APTX/bin"
@@ -1560,12 +1563,25 @@ cat > "$APTX/bin/apt-get" <<'STUB'
 #!/usr/bin/env bash
 sim=0; args=()
 for arg in "$@"; do if [[ "$arg" == -s ]]; then sim=1; else args+=("$arg"); fi; done
-printf '%s %s\n' "$( ((sim)) && echo SIM || echo RUN )" "${args[*]}" >> "$APT_FIX/calls"
+kind="$( ((sim)) && echo SIM || echo RUN )"
+printf '%s %s\n' "$kind" "${args[*]}" >> "$APT_FIX/calls"
+nth() {  # how many calls so far, this one included, were of this kind with $1
+    awk -v kind="$kind" -v w="$1" '$1 == kind { for (i = 2; i <= NF; i++) if ($i == w) { n++; break } }
+        END { print n + 0 }' "$APT_FIX/calls"
+}
 for arg in "${args[@]}"; do
     [[ ! -e "$APT_FIX/unavailable/$arg" ]] || { echo "E: Unable to locate package $arg"; exit 100; }
 done
 if (( sim )); then
-    for arg in "${args[@]}"; do [[ ! -f "$APT_FIX/sim/$arg" ]] || cat -- "$APT_FIX/sim/$arg"; done
+    for arg in "${args[@]}"; do
+        if [[ -f "$APT_FIX/sim/$arg@$(nth "$arg")" ]]; then cat -- "$APT_FIX/sim/$arg@$(nth "$arg")"
+        elif [[ -f "$APT_FIX/sim/$arg" ]]; then cat -- "$APT_FIX/sim/$arg"; fi
+    done
+else
+    for arg in "${args[@]}"; do
+        [[ ! -f "$APT_FIX/fail-run/$arg" ]] || (( $(nth "$arg") > $(cat -- "$APT_FIX/fail-run/$arg") )) \
+            || { echo "E: Failed to fetch $arg (stub transient failure)"; exit 100; }
+    done
 fi
 exit 0
 STUB
@@ -1601,7 +1617,7 @@ bootstrap_packages
 DRIVER
 
 apt_scenario() {  # name; then set up $APT_FIX before apt_run
-    APT_FIX="$APTX/$1"; mkdir -p "$APT_FIX/sim" "$APT_FIX/unavailable" "$APT_FIX/localbin"
+    APT_FIX="$APTX/$1"; mkdir -p "$APT_FIX/sim" "$APT_FIX/unavailable" "$APT_FIX/fail-run" "$APT_FIX/localbin"
 }
 apt_run() {  # [VAR=value...]; sets aout, acode, acalls
     aout="$(env PATH="$APTX/bin:$PATH" APT_FIX="$APT_FIX" REPO="$ROOT" \
@@ -1749,6 +1765,33 @@ apt_scenario upgrade-clean; apt_run RUN_APT_UPGRADE=1
 [[ "$acode" == 0 ]] && has_call "RUN upgrade -y" \
     && ok "RUN_APT_UPGRADE=1 still upgrades when no driver or CUDA package would change" \
     || bad "clean upgrade (exit $acode): $aout"
+
+# A failed attempt can change what apt would do next, so every real attempt
+# gets its own simulation: one planned safely before the first attempt says
+# nothing about the retry.
+apt_scenario retry-plan-turns-unsafe
+printf '1\n' > "$APT_FIX/fail-run/delta"
+printf 'Remv nvidia-driver-550 [550.120-0ubuntu0.24.04.1]\n' > "$APT_FIX/sim/delta@2"
+apt_run
+[[ "$acode" == 0 && "$aout" == *"attempt 1/2 failed"* \
+    && "$aout" == *"refused apt-get $INSTALL delta"*"nvidia-driver-550"* \
+    && "$aout" == *"optional package not installed: delta"* ]] \
+    && [[ "$(grep -cxF -- "SIM $INSTALL delta" <<< "$acalls")" == 2 \
+        && "$(grep -cxF -- "RUN $INSTALL delta" <<< "$acalls")" == 1 ]] \
+    && [[ "$(grep -xE -- "(SIM|RUN) $INSTALL delta" <<< "$acalls" | tr '\n' '|')" == "SIM $INSTALL delta|RUN $INSTALL delta|SIM $INSTALL delta|" ]] \
+    && has_call "RUN $INSTALL echo" \
+    && ok "a retry whose fresh simulation would remove the NVIDIA driver is refused before it runs" \
+    || bad "retry re-simulation guard (exit $acode): $acalls"
+
+apt_scenario retry-succeeds
+printf '1\n' > "$APT_FIX/fail-run/alpha"
+apt_run
+[[ "$acode" == 0 && "$aout" == *"attempt 1/3 failed"* && "$aout" != *refused* \
+    && "$aout" != *"retrying individually"* \
+    && "$(grep -xE -- "(SIM|RUN) $INSTALL alpha.*" <<< "$acalls" | tr '\n' '|')" == "SIM $INSTALL alpha bravo charlie|RUN $INSTALL alpha bravo charlie|SIM $INSTALL alpha bravo charlie|RUN $INSTALL alpha bravo charlie|" ]] \
+    && has_call "RUN $INSTALL delta" && has_call "RUN $INSTALL echo" \
+    && ok "a transient failure is retried, the retry simulated again first, and the run succeeds" \
+    || bad "retry after a transient failure (exit $acode): $acalls"
 
 apt_scenario dpkg-pending-driver
 printf 'nvidia-dkms-550 install ok half-configured\nlibfoo1 install ok installed\n' > "$APT_FIX/dpkg-status"
