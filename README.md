@@ -161,9 +161,12 @@ registered bundle in order, and deletes local archives only after success.
 The distribution packages live in [`config/packages.txt`](config/packages.txt),
 not in shell code. `[required]` is installed as one apt batch, and a required
 package that cannot be installed fails the run; `[optional]` is best effort, for
-packages whose availability varies across Ubuntu releases. No apt step changes
-an installed NVIDIA driver or CUDA package. Edit the file, or adjust it from the
-environment without touching it:
+packages whose availability varies across Ubuntu releases. Before each real apt
+attempt the bootstrap simulates it and refuses a plan that would change an
+installed NVIDIA driver or CUDA package; another apt process can still change
+the plan between simulation and execution
+([details](docs/CONFIGURATION.md#nvidia-driver-and-cuda-packages)). Edit the
+file, or adjust it from the environment without touching it:
 
 ```bash
 EXTRA_PACKAGES="postgresql-client redis-tools" \
@@ -260,7 +263,9 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 - Installation state records versions and completion status.
 - Local workload archives and checksums are removed only after success.
 - No workload, model, dataset, or public service starts automatically.
-- The bootstrap never installs or replaces the NVIDIA driver.
+- Before each real apt attempt the bootstrap simulates it and refuses a plan
+  that would change an installed NVIDIA driver or CUDA package. Another apt
+  process can still change the plan between simulation and execution.
 - Release archives are byte-reproducible and verified twice on every build.
 - Release staging trees and every extracted archive are secret-scanned, and
   `release/dist` is scanned again immediately before upload.

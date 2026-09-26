@@ -8,7 +8,7 @@ convenient place to export them.
 | Variable | Default | Meaning |
 |---|---:|---|
 | `WORKSPACE_ROOT` | `/workspace` | workspace root |
-| `RUN_APT_UPGRADE` | `0` | run full apt upgrade; fails rather than change an installed NVIDIA driver or CUDA package |
+| `RUN_APT_UPGRADE` | `0` | run full apt upgrade; fails if its simulated plan would change an installed NVIDIA driver or CUDA package |
 | `INSTALL_ZSH` | `1` | configure Zsh and set it as root's login shell |
 | `INSTALL_OH_MY_ZSH` | `1` | install and load pinned Oh My Zsh |
 | `INSTALL_NODEJS` | `1` | install checksum-verified Node.js LTS |
@@ -39,10 +39,13 @@ changing it never means editing a script. The manifest has two sections:
 
 ### NVIDIA driver and CUDA packages
 
-The bootstrap never upgrades, downgrades, reinstalls, reconfigures, or removes
-an NVIDIA driver or CUDA package that is already installed. Before each apt
-transaction it runs the same command with `apt-get -s` and reads the plan; a
-plan that would change such a package is not run. Package names beginning
+Before each real apt attempt, retries included, the bootstrap runs the same
+command with `apt-get -s` and reads the plan. A plan that would upgrade,
+downgrade, reinstall, reconfigure, or remove an NVIDIA driver or CUDA package
+that is already installed is refused, and that attempt is not run.
+`dpkg --configure -a` is checked with `dpkg-query` instead, as the table shows.
+Another apt process can still change the plan between the simulation and the
+real attempt. Package names beginning
 `nvidia`, `libnvidia`, `cuda`, `libcuda`, `cudnn`, `libcudnn`, `libnccl`,
 `nsight-`, and the CUDA math and runtime libraries count, as does any name
 containing `-nvidia` (the X driver and the prebuilt kernel modules).
