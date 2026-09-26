@@ -67,7 +67,9 @@
   The README's first Bash block downloads the provisioner, the full
   plan, the versioned archive and its sidecar, checks the archive with
   `sha256sum -c`, and runs the plan, each step only if the previous one
-  succeeded. `provision-plan.example.sh` remains as the foundation-only
+  succeeded. On a bare image without `wget` or a CA bundle, such as the stock
+  `ubuntu:24.04` container, a line before the download installs only `wget`
+  and `ca-certificates`, with `--no-remove`; both install blocks carry it. `provision-plan.example.sh` remains as the foundation-only
   install, after it. The suite reads the installer switches from
   `lib/bootstrap/config.sh` and the profiles from `profiles/`, and fails when
   the plan misses one. It checks the README block's commands, order and

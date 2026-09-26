@@ -34,6 +34,8 @@ optional `ml` environment.
 V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] \
+  || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
 wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.full.example.sh" \
@@ -46,7 +48,10 @@ wget -q --show-progress \
 
 That is the whole installation. Each command runs only if the one before it
 succeeded, so nothing is installed unless all four files downloaded and the
-archive matches its SHA-256. The foundation takes roughly five minutes, most of
+archive matches its SHA-256. A bare container image such as `ubuntu:24.04` has
+no `wget` or CA certificates; the line before the download installs just those
+two, and only when one is missing. It never removes a package (`--no-remove`),
+and neither depends on an NVIDIA driver or CUDA package. The foundation takes roughly five minutes, most of
 it `apt`; the `ml` environment then adds its own download, several gigabytes on
 a CUDA host.
 
@@ -73,6 +78,8 @@ profile, and deletes the archive after a successful run. v2.2.3 publishes it:
 V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] \
+  || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
 wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.example.sh" \

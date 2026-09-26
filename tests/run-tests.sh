@@ -4937,15 +4937,22 @@ def steps(body):
     """(command, what joins it to the next) with continuation lines folded."""
     result = []
     for line in body.replace("\\\n", " ").splitlines():
-        parts = [re.sub(r"\s+", " ", p).strip() for p in line.split("&&")]
+        # The download prerequisite is one statement of its own, not a step
+        # joined to the next; its inner && stays inside it.
+        pieces = [line] if line.startswith("command -v wget") else line.split("&&")
+        parts = [re.sub(r"\s+", " ", p).strip() for p in pieces]
         result += [(p, "&&" if k < len(parts) - 1 else "") for k, p in enumerate(parts)]
     return result
+
+PREREQ = ("command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update && "
+          "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }")
 
 def expected(plan):
     return [
         (f"V={version}", ""),
         ("BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V", ""),
         ("cd /root", ""),
+        (PREREQ, ""),
         ('wget -q --show-progress "$BASE/server-provision.sh" "$BASE/' + plan
          + '" "$BASE/server-bootstrap-$V.tar.gz" "$BASE/server-bootstrap-$V.tar.gz.sha256"', "&&"),
         ('sha256sum -c "server-bootstrap-$V.tar.gz.sha256"', "&&"),
@@ -4974,6 +4981,7 @@ if problems:
     raise SystemExit(1)
 (out / "first.sh").write_text(blocks[0][1])
 (out / "repeat.sh").write_text(steps(blocks[0][1])[-1][0] + "\n")
+(out / "prereq.sh").write_text(PREREQ + "\n")
 for command, _ in steps(blocks[0][1]):
     if command.startswith("wget "):
         for url in re.findall(r'"\$BASE/([^"]+)"', command):
@@ -4987,6 +4995,31 @@ PY
         || bad "the README's first block downloads what no release publishes: $readme_unpublished"
 else
     bad "README install blocks: $readme_out"
+fi
+
+# The line before the download: on a bare image with no wget (the stock
+# ubuntu:24.04 container), it installs wget and ca-certificates and nothing
+# else, never removing a package; where wget and a CA bundle exist it runs no
+# apt at all. apt-get is a recorder here, so nothing is installed on this host.
+if [[ -s "$RXB/prereq.sh" ]]; then
+    PQ="$TMP/readme-prereq"; mkdir -p "$PQ/bare" "$PQ/full"
+    printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${DEBIAN_FRONTEND:-}" "$*" >> "%s/apt.log"\n' "$PQ" > "$PQ/bare/apt-get"
+    cp "$PQ/bare/apt-get" "$PQ/full/apt-get"; printf '#!/bin/sh\nexit 0\n' > "$PQ/full/wget"
+    chmod 0755 "$PQ/bare/apt-get" "$PQ/full/apt-get" "$PQ/full/wget"
+    PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
+    [[ "$pq_code" == 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == \
+        $'|update\nnoninteractive|install -y --no-install-recommends --no-remove wget ca-certificates' ]] \
+        && ok "without wget, the README's prerequisite line installs only wget and ca-certificates, removing nothing" \
+        || bad "README prerequisite line without wget (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
+    rm -f "$PQ/apt.log"
+    if [[ -s /etc/ssl/certs/ca-certificates.crt ]]; then
+        PATH="$PQ/full" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
+        [[ "$pq_code" == 0 && ! -e "$PQ/apt.log" ]] \
+            && ok "with wget and a CA bundle present, the README's prerequisite line runs no apt" \
+            || bad "README prerequisite line ran apt although wget and a CA bundle exist (exit $pq_code)"
+    else
+        skip "the README prerequisite line with wget present (this host has no CA bundle)"
+    fi
 fi
 
 # The block itself, run as pasted, against the files this release publishes.
@@ -5039,7 +5072,7 @@ for arg in "$@"; do
 done
 exit "$status"
 WGET
-    for rx_client in curl git ssh nc; do
+    for rx_client in curl git ssh nc apt-get; do
         printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\nexit 1\n' "$rx_client" "$RX" > "$RX/stub/$rx_client"
     done
     chmod 0755 "$RX/stub"/*
