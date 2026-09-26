@@ -35,6 +35,10 @@ version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
 V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+  && apt-get -s install --no-install-recommends --no-remove wget ca-certificates | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
+    '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
 wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.ml.example.sh" \
@@ -46,10 +50,13 @@ wget -q --show-progress \
   && ./server-provision.sh --plan ./provision-plan.ml.example.sh
 ```
 
-Each command runs only if the one before it succeeded. The dry run lists the
-archive and `ml --backend auto` and changes nothing. The real run verifies the
-archive's SHA-256 again, installs the foundation, runs `server-accept`, then
-`server-profile install ml --backend auto`.
+Each command runs only if the one before it succeeded. On a bare image without
+`wget` or CA certificates, the lines before the download install just those
+two, as in the [README](../README.md#install), and stop without installing if
+apt's plan would also touch an NVIDIA driver or CUDA package. The dry run
+lists the archive and `ml --backend auto` and changes nothing. The real run
+verifies the archive's SHA-256 again, installs the foundation, runs
+`server-accept`, then `server-profile install ml --backend auto`.
 
 - The plan leaves free space to this profile: 30 GB for a CUDA backend, which
   `auto` selects on an NVIDIA host, and 10 GB for CPU (`ML_MIN_FREE_GB`

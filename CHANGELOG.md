@@ -68,9 +68,12 @@
   plan, the versioned archive and its sidecar, checks the archive with
   `sha256sum -c`, and runs the plan, each step only if the previous one
   succeeded. On a bare image without `wget` or a CA bundle, such as the stock
-  `ubuntu:24.04` container, a line before the download installs only `wget`
-  and `ca-certificates`, with `--no-remove`; both install blocks carry it. `provision-plan.example.sh` remains as the foundation-only
-  install, after it. The suite reads the installer switches from
+  `ubuntu:24.04` container, the lines before the download install only
+  `wget` and `ca-certificates`, with `--no-remove`. They simulate the install
+  first and install nothing if apt's plan would also touch a package the
+  provisioner protects (NVIDIA driver or CUDA). Both README install blocks and
+  the `docs/ML-PROFILE.md` block carry them. `provision-plan.example.sh`
+  remains as the foundation-only install, after it. The suite reads the installer switches from
   `lib/bootstrap/config.sh` and the profiles from `profiles/`, and fails when
   the plan misses one. It checks the README block's commands, order and
   assets, and the full plan's bytes in the tree, the standalone asset and all

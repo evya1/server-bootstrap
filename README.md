@@ -34,8 +34,10 @@ optional `ml` environment.
 V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
-command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] \
-  || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+  && apt-get -s install --no-install-recommends --no-remove wget ca-certificates | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
+    '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
 wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.full.example.sh" \
@@ -49,11 +51,13 @@ wget -q --show-progress \
 That is the whole installation. Each command runs only if the one before it
 succeeded, so nothing is installed unless all four files downloaded and the
 archive matches its SHA-256. A bare container image such as `ubuntu:24.04` has
-no `wget` or CA certificates; the line before the download installs just those
-two, and only when one is missing. It never removes a package (`--no-remove`),
-and neither depends on an NVIDIA driver or CUDA package. The foundation takes roughly five minutes, most of
-it `apt`; the `ml` environment then adds its own download, several gigabytes on
-a CUDA host.
+no `wget` or CA certificates; the lines before the download install just those
+two, and only when one is missing. They simulate the install first and stop
+without installing if apt's plan would also touch an NVIDIA driver or CUDA
+package, the same packages the provisioner protects, and they never remove a
+package (`--no-remove`). The foundation takes roughly five minutes, most of it
+`apt`; the `ml` environment then adds its own download, several gigabytes on a
+CUDA host.
 
 - The full plan enables every configurable installer and every built-in
   profile. `ml` uses `--backend auto`: CPU on a host without an NVIDIA GPU,
@@ -78,8 +82,10 @@ profile, and deletes the archive after a successful run. v2.2.3 publishes it:
 V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
-command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] \
-  || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+  && apt-get -s install --no-install-recommends --no-remove wget ca-certificates | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
+    '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
 wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.example.sh" \

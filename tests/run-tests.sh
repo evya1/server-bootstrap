@@ -4944,8 +4944,16 @@ def steps(body):
         result += [(p, "&&" if k < len(parts) - 1 else "") for k, p in enumerate(parts)]
     return result
 
-PREREQ = ("command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update && "
-          "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }")
+# apt's plan for wget and ca-certificates is simulated first and matched
+# against the provisioner's own protected pattern, so a change there reaches
+# this line too.
+PROTECTED = re.search(r"^BOOTSTRAP_APT_PROTECTED_PATTERN='([^']*)'$",
+                      pathlib.Path("lib/bootstrap/packages.sh").read_text(), re.M).group(1)
+PREREQ = ("command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update "
+          "&& apt-get -s install --no-install-recommends --no-remove wget ca-certificates | awk -v p='" + PROTECTED + "' "
+          "'/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, \"\", n); if (n ~ p) "
+          "{ print \"not installing wget: apt would also change \" n; s = 1 } } END { exit s }' "
+          "&& DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }")
 
 def expected(plan):
     return [
@@ -5000,19 +5008,41 @@ fi
 # The line before the download: on a bare image with no wget (the stock
 # ubuntu:24.04 container), it installs wget and ca-certificates and nothing
 # else, never removing a package; where wget and a CA bundle exist it runs no
-# apt at all. apt-get is a recorder here, so nothing is installed on this host.
+# apt at all. It simulates first and installs nothing if apt's plan would touch
+# a package the provisioner protects: an image with CUDA packages and no wget
+# is common. apt-get is a recorder that prints $PQ/plan for a simulation, so
+# nothing is installed on this host.
 if [[ -s "$RXB/prereq.sh" ]]; then
     PQ="$TMP/readme-prereq"; mkdir -p "$PQ/bare" "$PQ/full"
-    printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${DEBIAN_FRONTEND:-}" "$*" >> "%s/apt.log"\n' "$PQ" > "$PQ/bare/apt-get"
+    printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${DEBIAN_FRONTEND:-}" "$*" >> "%s/apt.log"\n[[ "$1" != -s ]] || printf "%%s\\n" "$(< "%s/plan")"\n' "$PQ" "$PQ" > "$PQ/bare/apt-get"
     cp "$PQ/bare/apt-get" "$PQ/full/apt-get"; printf '#!/bin/sh\nexit 0\n' > "$PQ/full/wget"
     chmod 0755 "$PQ/bare/apt-get" "$PQ/full/apt-get" "$PQ/full/wget"
+    ln -s "$(command -v awk)" "$PQ/bare/awk"; ln -s "$(command -v awk)" "$PQ/full/awk"
+    pq_sim='|-s install --no-install-recommends --no-remove wget ca-certificates'
+    pq_real='noninteractive|install -y --no-install-recommends --no-remove wget ca-certificates'
+    # A plain bare-image plan: a dependency upgrade and two fresh installs.
+    printf '%s\n' 'Inst libssl3t64 [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates [amd64])' \
+        'Inst ca-certificates (20240203 Ubuntu:24.04/noble [all])' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])' \
+        'Conf libssl3t64 (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates [amd64])' 'Conf wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])' \
+        > "$PQ/plan"
     # CI runners export DEBIAN_FRONTEND; unset it so only what the line sets is seen.
     env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
-    [[ "$pq_code" == 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == \
-        $'|update\nnoninteractive|install -y --no-install-recommends --no-remove wget ca-certificates' ]] \
-        && ok "without wget, the README's prerequisite line installs only wget and ca-certificates, removing nothing" \
+    [[ "$pq_code" == 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "|update"$'\n'"$pq_sim"$'\n'"$pq_real" ]] \
+        && ok "without wget, the README's prerequisite line simulates, then installs only wget and ca-certificates, removing nothing" \
         || bad "README prerequisite line without wget (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
     rm -f "$PQ/apt.log"
+    # Plans that would change a protected package: the real install never runs.
+    for pq_line in 'Inst libnvidia-compute-580:amd64 [580.65.06-0ubuntu1] (580.82.07-0ubuntu1 Ubuntu:24.04/noble-updates [amd64])' \
+                   'Remv cuda-compat-13-0 [580.82.07-1]' 'Conf xserver-xorg-video-nvidia-580 (580.82.07-0ubuntu1 Ubuntu:24.04/noble-updates [amd64])'; do
+        printf '%s\n' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])' "$pq_line" > "$PQ/plan"
+        pq_out="$(env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" 2>&1)"; pq_code=$?
+        pq_name="${pq_line#* }"; pq_name="${pq_name%% *}"; pq_name="${pq_name%%:*}"
+        [[ "$pq_code" != 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "|update"$'\n'"$pq_sim" \
+            && "$pq_out" == *"apt would also change $pq_name"* ]] \
+            && ok "the README's prerequisite line installs nothing when apt would also change $pq_name (${pq_line%% *})" \
+            || bad "README prerequisite line with $pq_name in apt's plan (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
+        rm -f "$PQ/apt.log"
+    done
     if [[ -s /etc/ssl/certs/ca-certificates.crt ]]; then
         env -u DEBIAN_FRONTEND PATH="$PQ/full" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
         [[ "$pq_code" == 0 && ! -e "$PQ/apt.log" ]] \
@@ -5197,14 +5227,16 @@ grep -qF "V=$declared" README.md \
 # Every copyable download block names the version the plans and the built
 # archives carry, and is valid Bash as written. docs/ML-PROFILE.md once had
 # V=<ml-release>, which a shell reads as redirections: pasted, it failed with a
-# syntax error before anything ran.
+# syntax error before anything ran. A block that downloads with wget carries
+# the README's prerequisite line, so it works on a bare image too.
 while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
     bad "download snippet: $hit"
     version_drift=1
-done < <(python3 - "$declared" README.md docs/*.md <<'PY'
-import pathlib, subprocess, sys
-declared, paths = sys.argv[1], sys.argv[2:]
+done < <(python3 - "$declared" "$TMP/readme-blocks/prereq.sh" README.md docs/*.md <<'PY'
+import pathlib, re, subprocess, sys
+declared, prereq, paths = sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3:]
+prereq = prereq.read_text().strip() if prereq.is_file() else None
 for path in paths:
     lines = pathlib.Path(path).read_text().split("\n")
     i = 0
@@ -5217,6 +5249,9 @@ for path in paths:
                 pins = [l for l in body.splitlines() if l.startswith("V=")]
                 if pins != [f"V={declared}"]:
                     print(f"{where} sets {pins or 'no V'}, not V={declared}")
+                folded = [re.sub(r"\s+", " ", l).strip() for l in body.replace("\\\n", " ").splitlines()]
+                if "wget" in body and prereq not in folded:
+                    print(f"{where} downloads with wget without the README's prerequisite line")
                 check = subprocess.run(["bash", "-n"], input=body, text=True, capture_output=True)
                 if check.returncode:
                     print(f"{where} is not valid Bash: {check.stderr.strip()}")
