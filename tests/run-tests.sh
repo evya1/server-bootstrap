@@ -1925,8 +1925,11 @@ if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
     # $TMP itself, not just on the plan directory inside it.
     chmod a+rx "$TMP" 2>/dev/null || true
     chmod -R a+rX "$PLAN_DIR" 2>/dev/null || true
-    setpriv --reuid=65534 --regid=65534 --clear-groups \
-        ./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null | grep -q 'Bundles: 2' \
+    # Captured, not piped into grep -q: under pipefail, grep leaving at its first
+    # match can kill the provisioner with SIGPIPE while it prints the next line.
+    dry_out="$(setpriv --reuid=65534 --regid=65534 --clear-groups \
+        ./server-provision.sh --plan "$PLAN_DIR/plan.sh" --dry-run 2>/dev/null)" \
+        && [[ "$dry_out" == *'Bundles: 2'* ]] \
         && ok "dry run works without root" || bad "dry run requires root"
 else
     ok "dry run without root (already unprivileged or setpriv absent)"
@@ -2198,9 +2201,10 @@ expected_dry="$(printf '%s\n' "Provision plan: $RPLAN/plan.sh" "Bootstrap: $RPLA
 if (( EUID == 0 )) && command -v setpriv >/dev/null 2>&1; then
     chmod a+rx "$TMP" "$REMOTE" "$REMOTE/bin" "$RPLAN" 2>/dev/null || true
     chmod a+r "$RPLAN/plan.sh" 2>/dev/null || true
-    setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$REMOTE/bin:$PATH" \
-        "$ROOT/server-provision.sh" --plan "$RPLAN/plan.sh" --dry-run 2>/dev/null \
-        | grep -qF "  2. rtool 1.0.0 <- $RURL (sha256 $RSHA)" \
+    # Captured for the same SIGPIPE reason as the plain dry run without root.
+    rdry_out="$(setpriv --reuid=65534 --regid=65534 --clear-groups env PATH="$REMOTE/bin:$PATH" \
+        "$ROOT/server-provision.sh" --plan "$RPLAN/plan.sh" --dry-run 2>/dev/null)" \
+        && [[ "$rdry_out" == *"  2. rtool 1.0.0 <- $RURL (sha256 $RSHA)"* ]] \
         && ok "a remote dry run works without root" || bad "a remote dry run requires root"
 else
     ok "remote dry run without root (already unprivileged or setpriv absent)"
