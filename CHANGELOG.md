@@ -150,6 +150,19 @@
   dependencies. Nothing is held or otherwise changed on the host, so another apt
   process running between a simulation and its transaction can still change
   what that transaction does.
+- **`base-python` now runs the base environment's interpreter, not the
+  system one.** It was a symlink to `$BASE_PYTHON_ENV/bin/python`; started
+  under that name, Python finds no `pyvenv.cfg` beside or above it and falls
+  back to the system installation, so `base-python -c 'import numpy'` failed
+  even though the bootstrap had installed `numpy` into the base environment
+  and reported it ready. `base-python` is now a small launcher script that
+  `exec`s the environment's interpreter directly. An upgrade replaces an
+  existing symlink or launcher by writing a temporary file beside it and
+  renaming it into place, so the pathname is never opened for writing while
+  it still resolves into the environment. `base-python-env` is unchanged.
+  ([#71][])
+
+[#71]: https://github.com/evya1/server-bootstrap/issues/71
 
 ## 2.2.3
 
