@@ -17,28 +17,90 @@ Checks the host against its declared specification, installs a pinned toolchain,
 
 ## Install
 
-Paste this whole block into a fresh Ubuntu server, VM, or container, as root:
+Paste this whole block into a fresh Ubuntu 24.04 server, VM, or container, as
+root. It installs the complete built-in stack: the foundation
+[listed below](#what-the-run-installs), including the ngrok CLI, and the
+optional `ml` environment.
+
+> [!IMPORTANT]
+> No published release ships this block's plan yet. v2.2.3, the latest
+> release, has neither `provision-plan.full.example.sh` nor the `ml` profile,
+> so today the download fails and the block installs nothing. The block names
+> 2.2.3 because that is still this repository's `VERSION`; the release that
+> ships the full plan replaces it. Until then, use the
+> [foundation-only install](#foundation-only-install), which works with v2.2.3.
 
 ```bash
 V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
-wget -q --show-progress \
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+  && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
+  && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
+    '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; } \
+  && wget -q --show-progress \
   "$BASE/server-provision.sh" \
-  "$BASE/provision-plan.example.sh" \
+  "$BASE/provision-plan.full.example.sh" \
   "$BASE/server-bootstrap-$V.tar.gz" \
-  "$BASE/server-bootstrap-$V.tar.gz.sha256"
-chmod +x server-provision.sh
-./server-provision.sh --plan ./provision-plan.example.sh
+  "$BASE/server-bootstrap-$V.tar.gz.sha256" \
+  && sha256sum -c "server-bootstrap-$V.tar.gz.sha256" \
+  && chmod +x server-provision.sh \
+  && ./server-provision.sh --plan ./provision-plan.full.example.sh
 ```
 
-That is the whole installation — roughly five minutes, most of it `apt`.
+That is the whole installation. Each command runs only if the one before it
+succeeded, so nothing is installed unless all four files downloaded and the
+archive matches its SHA-256. A bare container image such as `ubuntu:24.04` has
+no `wget` or CA certificates; the lines before the download install just those
+two, and only when one is missing. They simulate the install first and stop
+without installing if the simulation fails or if apt's plan would also touch
+an NVIDIA driver or CUDA package, the same packages the provisioner protects,
+and they never remove a package (`--no-remove`). The foundation takes roughly five minutes, most of it
+`apt`; the `ml` environment then adds its own download, several gigabytes on a
+CUDA host.
+
+- The full plan enables every configurable installer and every built-in
+  profile. `ml` uses `--backend auto`: CPU on a host without an NVIDIA GPU,
+  CUDA 13.0 on one whose driver supports it and whose GPUs have compute
+  capability 7.5 or newer. On other NVIDIA hardware the `ml` step stops rather
+  than install CPU; see [ML-PROFILE](docs/ML-PROFILE.md).
+- The `ml` profile needs 30 GB free for a CUDA backend and 10 GB for CPU,
+  checked before it builds. A repeat that rebuilds nothing does not need it.
+- It keeps the verified archive. To repeat the install, run the last line
+  again; an up-to-date `ml` environment is not rebuilt.
 
 > [!NOTE]
 > Fresh hosts and containers often provide a root shell and ship without `sudo`.
-> Prefix the last command with `sudo` only if you are not root.
+> Put `sudo` before `./server-provision.sh` only if you are not root.
 
-Then start the new shell and paste your API keys once, into the one file every
+### Foundation-only install
+
+`provision-plan.example.sh` installs the foundation alone, without the `ml`
+profile, and deletes the archive after a successful run. v2.2.3 publishes it:
+
+```bash
+V=2.2.3
+BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
+cd /root
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+  && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
+  && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
+    '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; } \
+  && wget -q --show-progress \
+  "$BASE/server-provision.sh" \
+  "$BASE/provision-plan.example.sh" \
+  "$BASE/server-bootstrap-$V.tar.gz" \
+  "$BASE/server-bootstrap-$V.tar.gz.sha256" \
+  && sha256sum -c "server-bootstrap-$V.tar.gz.sha256" \
+  && chmod +x server-provision.sh \
+  && ./server-provision.sh --plan ./provision-plan.example.sh
+```
+
+### After the install
+
+Start the new shell and paste your API keys once, into the one file every
 login shell loads:
 
 ```bash
@@ -75,6 +137,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear` and disk/mem/GPU aliases |
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
 | **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.101.0 (`gh`) |
+| **Transfer** | `rclone` for file transfer and S3-compatible object storage, installed only: no remote, credential or transfer is set up |
 | **Tunnels** | Checksum-verified ngrok 3.39.11 agent CLI (`ngrok`), installed only: no auth token, tunnel or service is set up |
 | **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
 | **Agents** | Claude Code 2.1.280, OpenAI Codex 0.156.0 and pi 0.87.1, isolated in `/opt/ai-cli` |
@@ -82,6 +145,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Python** | uv, plus an isolated base environment |
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
 | **Hardware** | A `server-accept` report: CPU, RAM, disk speed, and — when a GPU is present — PCIe link width, thermals, ECC |
+| **ML** (full plan) | The built-in `ml` profile: one Python 3.12 environment for PyTorch, vision, Jupyter and language tooling, from a frozen lock, plus the `ml-*` commands. No model or dataset |
 
 Every version above is pinned by the release. The two guarantees behind that
 word are different and worth separating: **downloaded binary artifacts** —
@@ -100,7 +164,7 @@ flowchart LR
   B --> C["extract<br/>bundle"]
   C --> D["install<br/>foundation"]
   D --> E["server-accept"]
-  E --> F["workload bundles<br/>in plan order"]
+  E --> F["built-in profiles,<br/>then bundles"]
 ```
 
 Acceptance runs **before** any workload. A rejected host stops provisioning, so
@@ -114,7 +178,9 @@ when the declared specification requires a GPU.
 
 | Goal | Command |
 | --- | --- |
-| Provision a fresh server end to end | `./server-provision.sh --plan ./provision-plan.example.sh` |
+| Provision a fresh server with the complete built-in stack (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.full.example.sh` |
+| Provision a fresh server with the foundation only | `./server-provision.sh --plan ./provision-plan.example.sh` |
+| Provision a fresh server with the foundation and the ML environment (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
 | Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check the host against its declared specification | `server-accept` |
@@ -176,7 +242,9 @@ SKIP_PACKAGES="nmap tcpdump" \
 
 Each subsystem except ngrok can also be switched off individually —
 `INSTALL_GITHUB_CLI=0`, `INSTALL_NODEJS=0`, `INSTALL_VSCODE_EXTENSIONS=0`, and
-so on. See [CONFIGURATION](docs/CONFIGURATION.md) for the full list.
+so on. See [CONFIGURATION](docs/CONFIGURATION.md) for the full list. The full
+plan exports every one of them as `1`, and a plan's value wins over the
+environment, so to switch one off there, edit its line in the plan.
 
 Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, ngrok, and
 the AI CLIs — are deliberately absent from the manifest. Adding one of them to
@@ -268,7 +336,8 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
   process can still change the plan between simulation and execution.
 - Release archives are byte-reproducible and verified twice on every build.
 - Release staging trees and every extracted archive are secret-scanned, and
-  `release/dist` is scanned again immediately before upload.
+  `release/dist` is scanned again immediately before upload. It must then hold
+  exactly the expected assets, each verified, or nothing is published.
 - Security fixes are additive: published history is never rewritten, so the
   complete history stays available to the scanner. See [SECURITY.md](SECURITY.md).
 

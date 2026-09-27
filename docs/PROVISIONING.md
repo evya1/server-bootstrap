@@ -93,7 +93,20 @@ enable_profile "ml" --backend auto
   `server-profile install NAME [options]`. A repeat run leaves an up-to-date
   profile as it is.
 
-See [ML-PROFILE](ML-PROFILE.md) for the `ml` profile.
+`examples/provision-plan.ml.example.sh`, also published beside each release,
+installs the foundation and enables the `ml` profile. See
+[ML-PROFILE](ML-PROFILE.md#one-command-install).
+
+`examples/provision-plan.full.example.sh`, also published beside each release,
+is the complete built-in stack and the README's first install path. It
+exports every configurable installer switch the bootstrap defines as `1` (see
+[CONFIGURATION](CONFIGURATION.md); the legacy `INSTALL_ADDON` is not a
+built-in installer) and enables every built-in profile, today
+`enable_profile "ml" --backend auto`. It installs no external bundle and sets
+up no credential or service. A plan's exports win over the caller's
+environment, so to leave a component out, edit its line in a copy of the plan.
+The suite fails when an installer switch or a profile is added without a line
+in this plan.
 
 ## Archive deletion
 
