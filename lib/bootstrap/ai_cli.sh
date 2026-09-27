@@ -21,6 +21,23 @@ bootstrap_verify_npm_package_version() {
     printf '%s\n' "$actual"
 }
 
+# True when every requested package is already installed at its pinned version,
+# with its command in place, so a repeat needs no npm install: npm would unpack
+# the same version again. A "latest" request always goes to the registry.
+bootstrap_npm_packages_current() {  # package@version:command ...
+    local item spec command package version package_json actual
+    for item in "$@"; do
+        spec="${item%:*}"; command="${item##*:}"
+        package="${spec%@*}"; version="${spec##*@}"
+        ! sb_is_latest "$version" || return 1
+        package_json="$AI_CLI_PREFIX/lib/node_modules/$package/package.json"
+        [[ -x "$AI_CLI_PREFIX/bin/$command" && -f "$package_json" ]] || return 1
+        actual="$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.version)' "$package_json" 2>/dev/null)" \
+            || return 1
+        [[ "$actual" == "$version" ]] || return 1
+    done
+}
+
 bootstrap_ai_cli() {
     CLAUDE_RESULT="disabled"
     CODEX_RESULT="disabled"
@@ -34,17 +51,23 @@ bootstrap_ai_cli() {
 
     # "latest" is a real npm dist-tag, so a resolved and a pinned request share
     # one install command; only the version check afterwards differs.
-    local -a packages=()
-    [[ "$INSTALL_CLAUDE_CODE" != 1 ]] || packages+=("@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION")
-    [[ "$INSTALL_CODEX" != 1 ]] || packages+=("@openai/codex@$CODEX_VERSION")
-    [[ "$INSTALL_PI" != 1 ]] || packages+=("@earendil-works/pi-coding-agent@$PI_VERSION")
+    local -a packages=() wanted=()
+    local item
+    [[ "$INSTALL_CLAUDE_CODE" != 1 ]] || wanted+=("@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION:claude")
+    [[ "$INSTALL_CODEX" != 1 ]] || wanted+=("@openai/codex@$CODEX_VERSION:codex")
+    [[ "$INSTALL_PI" != 1 ]] || wanted+=("@earendil-works/pi-coding-agent@$PI_VERSION:pi")
+    for item in "${wanted[@]}"; do packages+=("${item%:*}"); done
 
     mkdir -p "$AI_CLI_PREFIX"
-    NPM_CONFIG_REGISTRY="$NPM_REGISTRY" \
-    NPM_CONFIG_AUDIT=false \
-    NPM_CONFIG_FUND=false \
-    NPM_CONFIG_UPDATE_NOTIFIER=false \
-        sb_retry 3 npm install --global --prefix "$AI_CLI_PREFIX" --no-audit --no-fund "${packages[@]}"
+    if bootstrap_npm_packages_current "${wanted[@]}"; then
+        sb_log "AI CLI packages already installed: ${packages[*]}"
+    else
+        NPM_CONFIG_REGISTRY="$NPM_REGISTRY" \
+        NPM_CONFIG_AUDIT=false \
+        NPM_CONFIG_FUND=false \
+        NPM_CONFIG_UPDATE_NOTIFIER=false \
+            sb_retry 3 npm install --global --prefix "$AI_CLI_PREFIX" --no-audit --no-fund "${packages[@]}"
+    fi
 
     local resolved
     if [[ "$INSTALL_CLAUDE_CODE" == 1 ]]; then

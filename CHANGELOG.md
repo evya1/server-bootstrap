@@ -216,6 +216,14 @@
 
 ### Fixed
 
+- **A repeat no longer reinstalls the AI CLIs.** Every run ran
+  `npm install --global` for Claude Code, Codex and pi, so a repeated full
+  install unpacked the same pinned versions again. The bootstrap now skips npm
+  when each requested package is already installed at its pinned version with
+  its command in place; a `latest` request still asks the registry. Found by
+  repeating the full plan on a fresh Ubuntu 24.04 container, where everything
+  else was kept. ([#60][])
+
 - **Unsupported hosts are refused before anything is created.**
   `server-provision.sh` and `server-bootstrap.sh` now check for Ubuntu 24.04 on
   x86-64 or ARM64, with a matching `dpkg` architecture, before they create the

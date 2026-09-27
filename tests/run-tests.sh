@@ -3145,6 +3145,36 @@ done
 (( resolution_guard == 0 )) && ok "every resolved download still passes sb_valid_sha256"
 grep -q 'sb_is_latest' lib/bootstrap/ai_cli.sh \
     && ok "the npm CLIs accept latest" || bad "npm latest support"
+# A repeat keeps AI CLIs already installed at their pinned versions: npm would
+# unpack the same version again. The helper decides from each package.json and
+# command under a stand-in prefix; bootstrap_ai_cli itself writes to
+# /usr/local/bin, so only its order is checked here.
+if command -v node >/dev/null 2>&1; then
+    AIQ="$TMP/ai-cli-current"
+    mkdir -p "$AIQ/lib/node_modules/@scope/tool" "$AIQ/lib/node_modules/plain" "$AIQ/bin"
+    printf '{"name":"@scope/tool","version":"1.2.3"}\n' > "$AIQ/lib/node_modules/@scope/tool/package.json"
+    printf '{"name":"plain","version":"4.5.6"}\n' > "$AIQ/lib/node_modules/plain/package.json"
+    printf '#!/bin/sh\n' > "$AIQ/bin/tool"; chmod 0755 "$AIQ/bin/tool"
+    aiq() {  # expected result (current|install), label, package@version:command ...
+        local expect="$1" label="$2" got; shift 2
+        if bash -c 'source lib/core.sh; source lib/bootstrap/ai_cli.sh; AI_CLI_PREFIX="$1"; shift
+                    bootstrap_npm_packages_current "$@"' _ "$AIQ" "$@" 2>/dev/null; then got=current; else got=install; fi
+        [[ "$got" == "$expect" ]] && ok "AI CLI repeat: $label" || bad "AI CLI repeat: $label (got $got)"
+    }
+    aiq current "a package at its pinned version with its command is kept" "@scope/tool@1.2.3:tool"
+    aiq install "another pinned version is installed" "@scope/tool@1.2.4:tool"
+    aiq install "latest always asks the registry" "@scope/tool@latest:tool"
+    aiq install "a package whose command is missing is installed" "plain@4.5.6:plain"
+    aiq install "a package that is not installed is installed" "@scope/absent@1.0.0:absent"
+    aiq install "one package out of date installs them all" "@scope/tool@1.2.3:tool" "@scope/tool@9.9.9:tool"
+    helper_line="$(grep -n 'if bootstrap_npm_packages_current' lib/bootstrap/ai_cli.sh | cut -d: -f1)"
+    npm_line="$(grep -n 'sb_retry 3 npm install' lib/bootstrap/ai_cli.sh | cut -d: -f1)"
+    [[ -n "$helper_line" && -n "$npm_line" && "$helper_line" -lt "$npm_line" ]] \
+        && ok "bootstrap_ai_cli checks the installed versions before any npm install" \
+        || bad "bootstrap_ai_cli runs npm install without checking the installed versions first"
+else
+    skip "AI CLI repeat checks (no node on this host)"
+fi
 grep -q 'git ls-remote' lib/core.sh \
     && ok "tag discovery avoids the rate-limited GitHub API" || bad "tag discovery method"
 
