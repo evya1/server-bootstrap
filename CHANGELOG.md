@@ -73,7 +73,8 @@
   first and install nothing if the simulation fails or if apt's plan would
   also touch a package the provisioner protects (NVIDIA driver or CUDA). The
   simulation is captured before it is filtered, because a pasted block has no
-  `pipefail` and a pipe into `awk` would hide its failure. Both README install blocks and
+  `pipefail` and a pipe into `awk` would hide its failure, and the lines are
+  joined to the download by `&&`, so when they fail nothing after them runs. Both README install blocks and
   the `docs/ML-PROFILE.md` block carry them. `provision-plan.example.sh`
   remains as the foundation-only install, after it. The suite reads the installer switches from
   `lib/bootstrap/config.sh` and the profiles from `profiles/`, and fails when

@@ -5003,9 +5003,13 @@ def steps(body):
     """(command, what joins it to the next) with continuation lines folded."""
     result = []
     for line in body.replace("\\\n", " ").splitlines():
-        # The download prerequisite is one statement of its own, not a step
-        # joined to the next; its inner && stays inside it.
-        pieces = [line] if line.startswith("command -v wget") else line.split("&&")
+        # The download prerequisite is one step, joined to the download by
+        # &&; its own inner && and || stay inside it.
+        if line.startswith("command -v wget"):
+            k = line.rfind("wget ca-certificates; }") + len("wget ca-certificates; }")
+            pieces = [line[:k]] + line[k:].split("&&")[1:]
+        else:
+            pieces = line.split("&&")
         parts = [re.sub(r"\s+", " ", p).strip() for p in pieces]
         result += [(p, "&&" if k < len(parts) - 1 else "") for k, p in enumerate(parts)]
     return result
@@ -5028,7 +5032,7 @@ def expected(plan):
         (f"V={version}", ""),
         ("BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V", ""),
         ("cd /root", ""),
-        (PREREQ, ""),
+        (PREREQ, "&&"),
         ('wget -q --show-progress "$BASE/server-provision.sh" "$BASE/' + plan
          + '" "$BASE/server-bootstrap-$V.tar.gz" "$BASE/server-bootstrap-$V.tar.gz.sha256"', "&&"),
         ('sha256sum -c "server-bootstrap-$V.tar.gz.sha256"', "&&"),
@@ -5132,6 +5136,68 @@ if [[ -s "$RXB/prereq.sh" ]]; then
         skip "the README prerequisite line with wget present (this host has no CA bundle)"
     fi
 fi
+
+# Every pasted download block as a whole, under bash and dash: the prerequisite
+# is joined to the download by &&, so when it fails nothing after it runs.
+# wget is present and the CA bundle check fails (the test copy names a missing
+# file), so the prerequisite runs; apt-get, wget, sha256sum and the
+# provisioner are stubs that log their calls, so nothing is downloaded or
+# installed. A failed simulation must stop the block before wget; a successful
+# one must still reach the provisioner. Each run gets a fresh home.
+PB="$TMP/pasted-blocks"; mkdir -p "$PB/stub"
+cat > "$PB/stub/apt-get" <<'STUB'
+#!/bin/sh
+echo "apt-get $*" >> "$PB_LOG"
+[ "$1" = -s ] && exit "$PB_SIM"
+exit 0
+STUB
+cat > "$PB/stub/wget" <<'STUB'
+#!/bin/sh
+echo wget >> "$PB_LOG"
+for a; do case "$a" in -*) ;; *) printf '#!/bin/sh\necho "provisioner $*" >> "$PB_LOG"\n' > "${a##*/}" ;; esac; done
+STUB
+printf '#!/bin/sh\necho "sha256sum $*" >> "$PB_LOG"\n' > "$PB/stub/sha256sum"
+chmod 0755 "$PB/stub"/*
+pb_blocks="$(python3 - "$PB" README.md docs/*.md <<'PY'
+import pathlib, sys
+out, n = pathlib.Path(sys.argv[1]), 0
+for path in sys.argv[2:]:
+    lines = pathlib.Path(path).read_text().split("\n")
+    i = 0
+    while i < len(lines):
+        if lines[i] == "```bash":
+            j = lines.index("```", i + 1)
+            body = "\n".join(lines[i + 1:j]) + "\n"
+            if "releases/download" in body and "wget" in body:
+                n += 1
+                (out / f"block{n}.sh").write_text(body.replace("/etc/ssl/certs/ca-certificates.crt", "/nonexistent/ca-bundle.crt"))
+                print(f"block{n} {path}:{i + 1} {body.count('/etc/ssl/certs/ca-certificates.crt')}")
+            i = j
+        i += 1
+PY
+)"
+pb_shells=(bash); command -v dash >/dev/null 2>&1 && pb_shells+=(dash) || skip "pasted download blocks under dash (no dash on this host)"
+pb_count=0
+while read -r pb_block pb_where pb_ca; do
+    [[ -n "$pb_block" ]] || continue
+    pb_count=$((pb_count + 1))
+    [[ "$pb_ca" == 1 ]] || { bad "pasted block $pb_where: the CA bundle path appears $pb_ca times, not once"; continue; }
+    for pb_sh in "${pb_shells[@]}"; do
+        pb_result=""
+        for pb_sim in 100 0; do
+            pb_home="$(mktemp -d "$PB/home.XXXXXX")"; pb_log="$pb_home.log"; : > "$pb_log"
+            ( cd "$pb_home" && env PB_LOG="$pb_log" PB_SIM="$pb_sim" PB_HOME="$pb_home" PATH="$PB/stub:/usr/bin:/bin" \
+                "$pb_sh" -c 'cd() { if [ "$#" = 1 ] && [ "$1" = /root ]; then command cd "$PB_HOME"; else command cd "$@"; fi; }
+                             . "$1"' _ "$PB/$pb_block.sh" ) > "$pb_home.out" 2>&1
+            pb_code=$?
+            pb_result+="sim=$pb_sim exit=$pb_code wget=$(grep -c '^wget' "$pb_log") provisioner=$(grep -c '^provisioner' "$pb_log") install=$(grep -c '^apt-get install -y' "$pb_log"); "
+        done
+        [[ "$pb_result" =~ ^"sim=100 exit=100 wget=0 provisioner=0 install=0; sim=0 exit=0 wget=1 provisioner="[12]" install=1; "$ ]] \
+            && ok "pasted block $pb_where under $pb_sh: a failed apt simulation stops it before wget; a successful one reaches the provisioner" \
+            || bad "pasted block $pb_where under $pb_sh: $pb_result"
+    done
+done <<< "$pb_blocks"
+(( pb_count >= 3 )) && ok "every pasted download block ran: $pb_count" || bad "expected the README's two download blocks and the ML guide's; found $pb_count"
 
 # The block itself, run as pasted, against the files this release publishes.
 # wget is a stub serving the release URLs from a directory; the archive is the
@@ -5330,8 +5396,8 @@ for path in paths:
                 if pins != [f"V={declared}"]:
                     print(f"{where} sets {pins or 'no V'}, not V={declared}")
                 folded = [re.sub(r"\s+", " ", l).strip() for l in body.replace("\\\n", " ").splitlines()]
-                if "wget" in body and prereq not in folded:
-                    print(f"{where} downloads with wget without the README's prerequisite line")
+                if "wget" in body and not any(l.startswith(f"{prereq} && wget ") for l in folded):
+                    print(f"{where} downloads with wget without the README's prerequisite line joined to it by &&")
                 check = subprocess.run(["bash", "-n"], input=body, text=True, capture_output=True)
                 if check.returncode:
                     print(f"{where} is not valid Bash: {check.stderr.strip()}")

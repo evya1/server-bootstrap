@@ -39,8 +39,8 @@ command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt
   && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
   && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
     '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
-wget -q --show-progress \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; } \
+  && wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.ml.example.sh" \
   "$BASE/server-bootstrap-$V.tar.gz" \
