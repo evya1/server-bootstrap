@@ -5012,11 +5012,13 @@ def steps(body):
 
 # apt's plan for wget and ca-certificates is simulated first and matched
 # against the provisioner's own protected pattern, so a change there reaches
-# this line too.
+# this line too. The simulation is captured before it is filtered: a pasted
+# block has no pipefail, so a pipe into awk would hide its failure.
 PROTECTED = re.search(r"^BOOTSTRAP_APT_PROTECTED_PATTERN='([^']*)'$",
                       pathlib.Path("lib/bootstrap/packages.sh").read_text(), re.M).group(1)
 PREREQ = ("command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update "
-          "&& apt-get -s install --no-install-recommends --no-remove wget ca-certificates | awk -v p='" + PROTECTED + "' "
+          "&& plan=\"$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)\" "
+          "&& printf '%s\\n' \"$plan\" | awk -v p='" + PROTECTED + "' "
           "'/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, \"\", n); if (n ~ p) "
           "{ print \"not installing wget: apt would also change \" n; s = 1 } } END { exit s }' "
           "&& DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }")
@@ -5080,7 +5082,8 @@ fi
 # nothing is installed on this host.
 if [[ -s "$RXB/prereq.sh" ]]; then
     PQ="$TMP/readme-prereq"; mkdir -p "$PQ/bare" "$PQ/full"
-    printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${DEBIAN_FRONTEND:-}" "$*" >> "%s/apt.log"\n[[ "$1" != -s ]] || printf "%%s\\n" "$(< "%s/plan")"\n' "$PQ" "$PQ" > "$PQ/bare/apt-get"
+    printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${DEBIAN_FRONTEND:-}" "$*" >> "%s/apt.log"\n[[ "$1" != -s ]] || { printf "%%s\\n" "$(< "%s/plan")"; exit "$(< "%s/sim-exit")"; }\n' "$PQ" "$PQ" "$PQ" > "$PQ/bare/apt-get"
+    printf '0\n' > "$PQ/sim-exit"
     cp "$PQ/bare/apt-get" "$PQ/full/apt-get"; printf '#!/bin/sh\nexit 0\n' > "$PQ/full/wget"
     chmod 0755 "$PQ/bare/apt-get" "$PQ/full/apt-get" "$PQ/full/wget"
     ln -s "$(command -v awk)" "$PQ/bare/awk"; ln -s "$(command -v awk)" "$PQ/full/awk"
@@ -5097,6 +5100,17 @@ if [[ -s "$RXB/prereq.sh" ]]; then
         && ok "without wget, the README's prerequisite line simulates, then installs only wget and ca-certificates, removing nothing" \
         || bad "README prerequisite line without wget (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
     rm -f "$PQ/apt.log"
+    # A simulation that fails stops the line before the real install, whether
+    # it printed no plan or a harmless one; a pipe into awk used to hide it.
+    for pq_plan in '' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])'; do
+        printf '%s\n' "$pq_plan" > "$PQ/plan"; printf '100\n' > "$PQ/sim-exit"
+        env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
+        [[ "$pq_code" != 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "|update"$'\n'"$pq_sim" ]] \
+            && ok "the README's prerequisite line runs no real install after a failed simulation ($([[ -n "$pq_plan" ]] && echo 'with a harmless plan' || echo 'no plan'))" \
+            || bad "README prerequisite line after a failed simulation (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
+        rm -f "$PQ/apt.log"
+    done
+    printf '0\n' > "$PQ/sim-exit"
     # Plans that would change a protected package: the real install never runs.
     for pq_line in 'Inst libnvidia-compute-580:amd64 [580.65.06-0ubuntu1] (580.82.07-0ubuntu1 Ubuntu:24.04/noble-updates [amd64])' \
                    'Remv cuda-compat-13-0 [580.82.07-1]' 'Conf xserver-xorg-video-nvidia-580 (580.82.07-0ubuntu1 Ubuntu:24.04/noble-updates [amd64])'; do

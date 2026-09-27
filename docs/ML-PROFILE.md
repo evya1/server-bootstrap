@@ -36,7 +36,8 @@ V=2.2.3
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
-  && apt-get -s install --no-install-recommends --no-remove wget ca-certificates | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
+  && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
+  && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
     '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }
 wget -q --show-progress \
@@ -53,7 +54,8 @@ wget -q --show-progress \
 Each command runs only if the one before it succeeded. On a bare image without
 `wget` or CA certificates, the lines before the download install just those
 two, as in the [README](../README.md#install), and stop without installing if
-apt's plan would also touch an NVIDIA driver or CUDA package. The dry run
+the simulation fails or if apt's plan would also touch an NVIDIA driver or
+CUDA package. The dry run
 lists the archive and `ml --backend auto` and changes nothing. The real run
 verifies the archive's SHA-256 again, installs the foundation, runs
 `server-accept`, then `server-profile install ml --backend auto`.

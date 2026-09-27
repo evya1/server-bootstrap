@@ -70,8 +70,10 @@
   succeeded. On a bare image without `wget` or a CA bundle, such as the stock
   `ubuntu:24.04` container, the lines before the download install only
   `wget` and `ca-certificates`, with `--no-remove`. They simulate the install
-  first and install nothing if apt's plan would also touch a package the
-  provisioner protects (NVIDIA driver or CUDA). Both README install blocks and
+  first and install nothing if the simulation fails or if apt's plan would
+  also touch a package the provisioner protects (NVIDIA driver or CUDA). The
+  simulation is captured before it is filtered, because a pasted block has no
+  `pipefail` and a pipe into `awk` would hide its failure. Both README install blocks and
   the `docs/ML-PROFILE.md` block carry them. `provision-plan.example.sh`
   remains as the foundation-only install, after it. The suite reads the installer switches from
   `lib/bootstrap/config.sh` and the profiles from `profiles/`, and fails when
