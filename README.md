@@ -61,9 +61,9 @@ CUDA host.
 
 - The full plan enables every configurable installer and every built-in
   profile. `ml` uses `--backend auto`: CPU on a host without an NVIDIA GPU,
-  CUDA 13.0 on one whose driver supports it. On NVIDIA hardware without such a
-  driver the `ml` step stops rather than install CPU; see
-  [ML-PROFILE](docs/ML-PROFILE.md).
+  CUDA 13.0 on one whose driver supports it and whose GPUs have compute
+  capability 7.5 or newer. On other NVIDIA hardware the `ml` step stops rather
+  than install CPU; see [ML-PROFILE](docs/ML-PROFILE.md).
 - The `ml` profile needs 30 GB free for a CUDA backend and 10 GB for CPU,
   checked before it builds. A repeat that rebuilds nothing does not need it.
 - It keeps the verified archive. To repeat the install, run the last line

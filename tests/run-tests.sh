@@ -3637,17 +3637,26 @@ chmod 0755 "$MLS/python3.12" "$MLS/python3.11"
 ml_fixture_lock "$MLS/locks/cpu-$ML_ARCH.txt" cpu "$ML_ARCH" none https://download.pytorch.org/whl/cpu
 ml_fixture_lock "$MLS/locks/cu126-$ML_ARCH.txt" cu126 "$ML_ARCH" 12.6 https://download.pytorch.org/whl/cu126
 ml_fixture_lock "$MLS/locks/cu130-$ML_ARCH.txt" cu130 "$ML_ARCH" 13.0 https://download.pytorch.org/whl/cu130
-fake_smi() {  # directory, CUDA version (or "broken")
+fake_smi() {  # directory, CUDA version (or "broken"), compute capability of each GPU (default 8.6; N/A for none)
+    local cc n=0
     mkdir -p "$1"
     if [[ "$2" == broken ]]; then
         printf '#!/bin/sh\necho "NVIDIA-SMI has failed because it could not communicate with the NVIDIA driver." >&2\nexit 9\n' > "$1/nvidia-smi"
     else
-        printf '#!/bin/sh\nif [ "$1" = -L ]; then echo "GPU 0: Fake GPU (UUID: GPU-0)"; exit 0; fi\n' > "$1/nvidia-smi"
+        printf '#!/bin/sh\nif [ "$1" = -L ]; then\n' > "$1/nvidia-smi"
+        for cc in ${3:-8.6}; do printf '  echo "GPU %d: Fake GPU (UUID: GPU-%d)"\n' "$n" "$n" >> "$1/nvidia-smi"; n=$((n + 1)); done
+        printf '  exit 0\nfi\ncase "$*" in *compute_cap*) printf "%%s\\n" %s; exit 0 ;; esac\n' "${3:-8.6}" >> "$1/nvidia-smi"
         printf 'echo "| NVIDIA-SMI 999.99   Driver Version: 999.99   CUDA Version: %s |"\n' "$2" >> "$1/nvidia-smi"
     fi
     chmod 0755 "$1/nvidia-smi"
 }
 fake_smi "$MLS/smi-13.0" 13.0; fake_smi "$MLS/smi-12.8" 12.8; fake_smi "$MLS/smi-12.4" 12.4; fake_smi "$MLS/smi-broken" broken
+# Compute capability: 6.1 is a Pascal GPU (such as a Quadro P2200), 12.0 a
+# Blackwell one; a mixed host has one GPU of each age; N/A is a driver that
+# reports none.
+fake_smi "$MLS/smi-13.0-cc6.1" 13.0 6.1; fake_smi "$MLS/smi-13.0-cc12.0" 13.0 12.0
+fake_smi "$MLS/smi-13.0-mixed" 13.0 "8.6 6.1"; fake_smi "$MLS/smi-13.0-cc-na" 13.0 N/A
+mkdir -p "$MLS/cpu-cu130"; cp "$MLS/locks/cpu-$ML_ARCH.txt" "$MLS/locks/cu130-$ML_ARCH.txt" "$MLS/cpu-cu130/"
 ml_select() {  # label, expect (backend name or "fail"), fragment, env assignments..., -- args
     local label="$1" expect="$2" fragment="$3" out code
     local -a assignments=()
@@ -3674,6 +3683,33 @@ ml_select "a CUDA 12.8 driver selects the newest backend it supports" cu126 'CUD
     ML_NVIDIA_SMI="$MLS/smi-12.8/nvidia-smi" --
 ml_select "a driver too old for every CUDA lock fails instead of choosing CPU" fail \
     'does not fall back to CPU' ML_NVIDIA_SMI="$MLS/smi-12.4/nvidia-smi" --
+# A new driver does not make an old GPU usable: cu130 needs compute capability
+# 7.5, and the fixture cu126 records no minimum.
+ml_select "a GPU too old for cu130 gets the newest backend it can run" cu126 'compute capability 6.1' \
+    ML_NVIDIA_SMI="$MLS/smi-13.0-cc6.1/nvidia-smi" --
+ml_select "a GPU too old for every CUDA lock fails instead of choosing CPU" fail \
+    'the GPU is too old for: cu130 (compute capability 7.5 or newer)' \
+    ML_LOCK_DIR="$MLS/cpu-cu130" ML_NVIDIA_SMI="$MLS/smi-13.0-cc6.1/nvidia-smi" --
+ml_select "the oldest of several GPUs decides" fail 'oldest compute capability 6.1' \
+    ML_LOCK_DIR="$MLS/cpu-cu130" ML_NVIDIA_SMI="$MLS/smi-13.0-mixed/nvidia-smi" --
+ml_select "a compute capability nvidia-smi does not report does not meet cu130's minimum" fail \
+    'oldest compute capability unknown' ML_LOCK_DIR="$MLS/cpu-cu130" ML_NVIDIA_SMI="$MLS/smi-13.0-cc-na/nvidia-smi" --
+ml_select "compute capability 12.0 is newer than 7.5" cu130 'compute capability 12.0' \
+    ML_LOCK_DIR="$MLS/cpu-cu130" ML_NVIDIA_SMI="$MLS/smi-13.0-cc12.0/nvidia-smi" --
+ml_select "cu130 by name on a GPU below 7.5 fails" fail \
+    'backend cu130 needs a GPU of compute capability 7.5 or newer, but the oldest GPU here is 6.1' \
+    ML_NVIDIA_SMI="$MLS/smi-13.0-cc6.1/nvidia-smi" -- --backend cu130
+ml_select "cpu by name on a GPU too old for CUDA proceeds with a warning" cpu 'WARN  backend: the CPU backend was requested' \
+    ML_LOCK_DIR="$MLS/cpu-cu130" ML_NVIDIA_SMI="$MLS/smi-13.0-cc6.1/nvidia-smi" -- --backend cpu
+# Every CUDA backend the profile may lock records the oldest GPU it runs on.
+ml_no_min="$(bash -c '. profiles/ml/lib.sh
+    while read -r backend cuda _; do
+        [[ -z "$backend" || "$backend" == \#* || "$cuda" == none ]] && continue
+        [[ "$(ml_backend_min_cc "$backend")" =~ ^[0-9]+\.[0-9]+$ ]] || printf "%s " "$backend"
+    done < profiles/ml/backends.txt')"
+[[ -z "$ml_no_min" ]] \
+    && ok "every CUDA backend in backends.txt records a minimum compute capability" \
+    || bad "CUDA backends without a minimum compute capability in profiles/ml/lib.sh: $ml_no_min"
 ml_select "NVIDIA hardware without nvidia-smi fails instead of choosing CPU" fail \
     'does not fall back to CPU' ML_SYSFS_ROOT="$MLS/sys-gpu" --
 ml_select "a failing nvidia-smi fails instead of choosing CPU" fail 'does not fall back to CPU' \

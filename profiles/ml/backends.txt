@@ -5,7 +5,9 @@
 #
 # cuda is the CUDA version a backend's PyTorch build targets: none for CPU. On
 # an NVIDIA host, `--backend auto` picks the locked row with the highest cuda
-# that is not above the CUDA version the driver reports in nvidia-smi's header.
+# that is not above the CUDA version the driver reports in nvidia-smi's header,
+# skipping a row whose minimum compute capability (ml_backend_min_cc in lib.sh)
+# the oldest GPU does not meet. A CUDA row needs an entry there.
 # Add a CUDA row only together with its lock, and validate it on real hardware
 # for every architecture the row lists.
 #

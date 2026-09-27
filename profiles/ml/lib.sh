@@ -80,7 +80,9 @@ ml_version_le() {
 #   nvidia-unusable  NVIDIA hardware or nvidia-smi is present, but the driver
 #                    does not answer with a GPU and a CUDA version
 # ML_DRIVER_CUDA is the highest CUDA version the driver supports, as nvidia-smi
-# prints it in its header. ML_GPU_SUMMARY is one line for people.
+# prints it in its header. ML_GPU_CC is the compute capability of the oldest
+# GPU, empty unless nvidia-smi reports one for every GPU it lists.
+# ML_GPU_SUMMARY is one line for people.
 
 ml_nvidia_pci_count() {
     local device vendor class count=0
@@ -94,7 +96,8 @@ ml_nvidia_pci_count() {
 
 ml_detect_gpu() {
     local pci smi_out names
-    ML_GPU_STATE=none; ML_DRIVER_CUDA=""; ML_GPU_COUNT=0; ML_GPU_SUMMARY="no NVIDIA GPU detected"
+    local ccs
+    ML_GPU_STATE=none; ML_DRIVER_CUDA=""; ML_GPU_CC=""; ML_GPU_COUNT=0; ML_GPU_SUMMARY="no NVIDIA GPU detected"
     pci="$(ml_nvidia_pci_count)"
     if ! command -v "$ML_NVIDIA_SMI" >/dev/null 2>&1; then
         if (( pci > 0 )); then
@@ -110,11 +113,35 @@ ml_detect_gpu() {
     if [[ "$smi_out" =~ CUDA\ Version:\ *([0-9]+\.[0-9]+) ]] && (( ML_GPU_COUNT > 0 )); then
         ML_GPU_STATE=nvidia
         ML_DRIVER_CUDA="${BASH_REMATCH[1]}"
-        ML_GPU_SUMMARY="$ML_GPU_COUNT NVIDIA GPU(s), driver supports CUDA $ML_DRIVER_CUDA"
+        ccs="$("$ML_NVIDIA_SMI" --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d ' \r' \
+            | grep -E '^[0-9]+\.[0-9]+$' || true)"
+        if [[ -n "$ccs" && "$(grep -c . <<< "$ccs")" == "$ML_GPU_COUNT" ]]; then
+            ML_GPU_CC="$(sort -V <<< "$ccs" | head -n1)"
+        fi
+        ML_GPU_SUMMARY="$ML_GPU_COUNT NVIDIA GPU(s), driver supports CUDA $ML_DRIVER_CUDA, oldest compute capability ${ML_GPU_CC:-unknown}"
     else
         ML_GPU_STATE=nvidia-unusable
         ML_GPU_SUMMARY="nvidia-smi is present but reports no GPU and CUDA version"
     fi
+}
+
+# The oldest compute capability each CUDA backend's PyTorch build runs on. A new
+# driver does not make an old GPU usable: CUDA 13 cannot target GPUs below 7.5
+# (Maxwell, Pascal, Volta), so cu130 does not run on them. Every CUDA row in
+# backends.txt needs an entry here; the suite fails until it has one.
+ml_backend_min_cc() {  # backend -> minimum compute capability; nothing if none is recorded
+    case "$1" in
+        cu130) printf '7.5\n' ;;
+    esac
+}
+
+# True when every GPU can run the backend: it records no minimum, or the oldest
+# GPU meets it. An unknown compute capability does not meet a minimum.
+ml_gpu_runs_backend() {
+    local min
+    min="$(ml_backend_min_cc "$1")"
+    [[ -z "$min" ]] && return 0
+    [[ -n "${ML_GPU_CC:-}" ]] && ml_version_le "$min" "$ML_GPU_CC"
 }
 
 # --- Locks ---------------------------------------------------------------------
@@ -156,7 +183,7 @@ ml_pins() {
 # why no backend fits and returns 1. `auto` never falls back to CPU on a host
 # with NVIDIA hardware: CPU is only chosen there when asked for by name.
 ml_select_backend() {
-    local requested="$1" arch best="" best_cuda="" backend cuda locked
+    local requested="$1" arch best="" best_cuda="" backend cuda locked too_old=""
     ML_BACKEND=""; ML_LOCK=""; ML_BACKEND_CUDA=""; ML_SELECTION_REASON=""
     [[ "$requested" =~ ^[a-z0-9]+$ ]] \
         || { echo "invalid backend name: $requested" >&2; return 1; }
@@ -175,18 +202,27 @@ ml_select_backend() {
                     cuda="$(ml_lock_field "$(ml_lock_path "$backend" "$arch")" cuda)"
                     [[ "$cuda" =~ ^[0-9]+\.[0-9]+$ ]] || continue
                     ml_version_le "$cuda" "$ML_DRIVER_CUDA" || continue
+                    if ! ml_gpu_runs_backend "$backend"; then
+                        too_old+=" $backend (compute capability $(ml_backend_min_cc "$backend") or newer)"
+                        continue
+                    fi
                     if [[ -z "$best" ]] || ! ml_version_le "$cuda" "$best_cuda"; then
                         best="$backend"; best_cuda="$cuda"
                     fi
                 done
                 if [[ -z "$best" ]]; then
-                    echo "NVIDIA GPU detected (driver supports CUDA $ML_DRIVER_CUDA), but no locked CUDA backend for $arch runs on it" >&2
+                    echo "NVIDIA GPU detected (driver supports CUDA $ML_DRIVER_CUDA, oldest compute capability ${ML_GPU_CC:-unknown}), but no locked CUDA backend for $arch runs on it" >&2
+                    if [[ -n "$too_old" && -n "${ML_GPU_CC:-}" ]]; then
+                        echo "the GPU is too old for:$too_old" >&2
+                    elif [[ -n "$too_old" ]]; then
+                        echo "nvidia-smi does not report a compute capability for every GPU, so none of these can be confirmed:$too_old" >&2
+                    fi
                     echo "locked backends for $arch: ${locked:-none}" >&2
                     echo "auto does not fall back to CPU on a GPU host; pass --backend cpu to install the CPU backend deliberately" >&2
                     return 1
                 fi
                 requested="$best"
-                ML_SELECTION_REASON="auto: newest locked CUDA backend the driver supports (CUDA $ML_DRIVER_CUDA)" ;;
+                ML_SELECTION_REASON="auto: newest locked CUDA backend the driver (CUDA $ML_DRIVER_CUDA) and GPU (compute capability ${ML_GPU_CC:-unknown}) support" ;;
             *)
                 echo "NVIDIA hardware is present but unusable: $ML_GPU_SUMMARY" >&2
                 echo "auto does not fall back to CPU on a GPU host; fix the driver, or pass --backend cpu to install the CPU backend deliberately" >&2
@@ -206,6 +242,10 @@ ml_select_backend() {
     if [[ "$ML_BACKEND_CUDA" != none && "$ML_GPU_STATE" == nvidia ]] \
         && ! ml_version_le "$ML_BACKEND_CUDA" "$ML_DRIVER_CUDA"; then
         echo "backend $ML_BACKEND needs CUDA $ML_BACKEND_CUDA, but the driver supports CUDA $ML_DRIVER_CUDA" >&2
+        return 1
+    fi
+    if [[ "$ML_BACKEND_CUDA" != none && "$ML_GPU_STATE" == nvidia ]] && ! ml_gpu_runs_backend "$ML_BACKEND"; then
+        echo "backend $ML_BACKEND needs a GPU of compute capability $(ml_backend_min_cc "$ML_BACKEND") or newer, but the oldest GPU here is ${ML_GPU_CC:-unknown to nvidia-smi}" >&2
         return 1
     fi
     return 0

@@ -136,13 +136,16 @@ on it. No CUDA backend is locked for ARM64.
 | Host | Result |
 | --- | --- |
 | No NVIDIA GPU | `cpu` |
-| NVIDIA GPU with a working driver | the locked CUDA backend with the highest CUDA version not above the one `nvidia-smi` reports |
-| NVIDIA GPU, but no locked CUDA backend fits the driver | fails |
+| NVIDIA GPU with a working driver | the locked CUDA backend with the highest CUDA version not above the one `nvidia-smi` reports, among those every GPU's compute capability meets |
+| NVIDIA GPU, but no locked CUDA backend fits the driver and the GPUs | fails |
 | NVIDIA hardware, but `nvidia-smi` is missing or failing | fails |
 
 `auto` never falls back to CPU on a host with NVIDIA hardware. To install the
 CPU backend there, ask for it by name: `--backend cpu`. A CUDA backend
-requested by name still fails if the driver is too old for it.
+requested by name still fails if the driver is too old for it, or if a GPU's
+compute capability is below the backend's minimum (7.5 for `cu130`). A newer
+driver does not help an older GPU: CUDA 13 cannot target Maxwell, Pascal or
+Volta GPUs. `ml-preflight` shows the oldest GPU's compute capability.
 
 A CUDA backend is listed only after it has been validated on real hardware.
 
@@ -329,8 +332,9 @@ service, the NVIDIA driver, a system CUDA toolkit, a spaCy language model, and
 ## Troubleshooting
 
 - **`auto` fails on a GPU host.** Either no locked CUDA backend fits the
-  driver, or the driver does not answer. Run `ml-preflight`, fix the driver, or
-  install the CPU backend deliberately with `--backend cpu`.
+  driver, a GPU is older than every locked CUDA backend supports, or the
+  driver does not answer. Run `ml-preflight`, fix the driver, or install the
+  CPU backend deliberately with `--backend cpu`.
 - **`... exists and was not created by this profile`.** Something else is at
   `/workspace/venvs/ml-workbench`. Move it aside, then run the installer again.
 - **The disk check fails.** Free space, or set `ML_MIN_FREE_GB` if you know the

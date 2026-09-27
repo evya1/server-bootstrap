@@ -146,8 +146,11 @@
   `--force`. A repeat that keeps an environment matching its lock builds
   nothing and does not need it.
   `--backend auto` chooses `cpu` without an NVIDIA GPU and `cu130` with a
-  driver that reports CUDA 13.0 or newer, and never falls back to CPU on a
-  host with NVIDIA hardware. Changing backend needs `--reconfigure`. State
+  driver that reports CUDA 13.0 or newer and GPUs of compute capability 7.5
+  or newer, and never falls back to CPU on a host with NVIDIA hardware. A GPU
+  below a CUDA backend's minimum, read from `nvidia-smi` before anything is
+  built, fails selection for that backend, by `auto` or by name: CUDA 13
+  cannot target Pascal-class GPUs however new the driver. Changing backend needs `--reconfigure`. State
   under `/workspace/.setup-state/profiles/ml` records the repository version,
   backend, lock digest and core package versions. `ml-env`, `ml-status`,
   `ml-doctor`, `ml-preflight` and `ml-jupyter` are linked only once the
