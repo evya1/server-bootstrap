@@ -49,7 +49,7 @@ REPO_VERSION="$(ml_repository_version)"
 preflight_out="$(mktemp)"
 trap 'rm -f -- "$preflight_out"' EXIT
 preflight_ok=1
-ml_preflight "$REQUESTED" > "$preflight_out" || preflight_ok=0
+ml_preflight "$REQUESTED" defer-disk > "$preflight_out" || preflight_ok=0
 sed 's/^/  /' "$preflight_out"
 
 if [[ -e "$ML_ENV" && ! -L "$ML_ENV" ]]; then
@@ -67,9 +67,6 @@ if (( DRY_RUN == 0 )); then
     mkdir -p -- "$STATE_ROOT/profiles"
     exec 8>"$STATE_ROOT/profiles/ml.lock"
     flock -w 1800 8 || { sb_warn "another ml profile installation is running"; exit 1; }
-    # What a killed run could not remove: its copy of the previous state, a
-    # half-written state and a link it had not yet renamed. See the switch.
-    rm -rf -- "$STATE_ROOT/profiles/".ml-state-previous.* "$ML_STATE_DIR"/.state.* "$ML_ENV".switch.*
 fi
 INSTALLED_BACKEND="$(ml_state backend)"
 INSTALLED_SHA="$(ml_state lock-sha256)"
@@ -102,6 +99,23 @@ if [[ -n "$INSTALLED_BACKEND" ]]; then
     else
         ACTION=replace
     fi
+fi
+
+# Only a run that builds needs the free space; a keep writes nothing, so a
+# repeat still succeeds once the first install has used that space.
+if disk_line="$(ml_disk_check)"; then
+    printf '  %s\n' "$disk_line"
+elif [[ "$ACTION" == keep ]]; then
+    printf '  %s\n' "$(ml_line INFO "disk: ${ML_DISK_FREE:-unknown} GB free for $VENV_ROOT; nothing needs building, so the $ML_DISK_NEED GB a build needs is not required")"
+else
+    printf '  %s\n' "$disk_line"
+    sb_warn "preflight failed; nothing was changed"
+    exit 1
+fi
+if (( DRY_RUN == 0 )); then
+    # What a killed run could not remove: its copy of the previous state, a
+    # half-written state and a link it had not yet renamed. See the switch.
+    rm -rf -- "$STATE_ROOT/profiles/".ml-state-previous.* "$ML_STATE_DIR"/.state.* "$ML_ENV".switch.*
 fi
 
 printf '  plan: %s backend %s from %s (sha256 %s)\n' "$ACTION" "$ML_BACKEND" \

@@ -80,6 +80,7 @@ directory, assert against it, and delete it. See `tests/run-tests.sh` and
 | Credential filenames, private keys, tracked build output | `tests/privacy-guard.sh` |
 | Release staging and extracted-archive scans | `release/build-release.sh` |
 | Final artifact scan before upload | `.github/workflows/release.yml` |
+| `release/dist` holds exactly the verified release assets before upload | `release/release-assets.sh` |
 | Allowlist scope | `.gitleaks.toml`, `docs/SECURITY-SCANNING.md` |
 
 The scanner allowlist is deliberately small and holds only exact, reviewed

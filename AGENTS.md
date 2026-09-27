@@ -48,7 +48,8 @@ Never execute one directly.
 - `config/` apt package and VS Code extension manifests.
 - `checksums/` pinned upstream checksums and `SHA256SUMS`, the release manifest.
 - `examples/` shipped plans and templates; `docs/` user guides.
-- `release/` the canonical file set and the build; `release/dist/` is output.
+- `release/` the canonical file set (`release-files.sh`), the published asset
+  set (`release-assets.sh`) and the build; `release/dist/` is output.
 - `tests/` the suite and the privacy guard; `tools/` pin, scanner, linter and
   preflight scripts; `.github/workflows/` CI, release and pin drift.
 
@@ -85,6 +86,12 @@ Never execute one directly.
   one file. `CHANGELOG.md` is a hand edit that keeps `## Unreleased` first.
 - A file the installed runtime needs is registered in `lib/bootstrap/runtime.sh`
   and in the verify list in `release/build-release.sh`.
+- A file published beside the archives is added to `release/release-assets.sh`
+  and to the upload list in `.github/workflows/release.yml`. The ML profile
+  ships inside the main archives, never as an artifact of its own.
+- A new `INSTALL_*` installer in `lib/bootstrap/config.sh` or a new profile
+  under `profiles/` is enabled in `examples/provision-plan.full.example.sh`,
+  the README's first install path; the suite fails until it is.
 - Release gates live in `tools/release-preflight.sh`; `.github/workflows/release.yml`
   runs only that script.
 - A release tag is exactly `v` plus `VERSION`. A version is spent once tagged: a
