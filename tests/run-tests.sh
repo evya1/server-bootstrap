@@ -1442,6 +1442,28 @@ if python3 -m venv --without-pip "$BPY_FIX/venv" >/dev/null 2>&1; then
     [[ "$fwd_rc" == 7 ]] \
         && ok "launcher forwards the interpreter's exit status" \
         || bad "launcher exit status mismatch (got: $fwd_rc, want: 7)"
+
+    # The launcher takes the environment path literally, whatever it contains.
+    BPY_ODD="$BPY_FIX/odd dir \$HOME \"dq\" 'sq' \`id\`"
+    if python3 -m venv --without-pip "$BPY_ODD/venv" >/dev/null 2>&1; then
+        bootstrap_install_base_python_launcher "$BPY_ODD/venv" "$BPY_FIX/bin/odd-python"
+        odd_prefix="$("$BPY_FIX/bin/odd-python" -c 'import sys; print(sys.prefix)' 2>/dev/null)"
+        [[ "$odd_prefix" == "$(cd "$BPY_ODD/venv" && pwd -P)" ]] \
+            && ok "launcher handles spaces and shell metacharacters in the environment path" \
+            || bad "launcher mangles an unusual environment path (got: $odd_prefix)"
+    else
+        skip "launcher with an unusual environment path (python3 -m venv refused it)"
+    fi
+
+    # A failed install keeps the existing base-python, removes its temporary
+    # file, and returns non-zero even when the caller does not run under set -e.
+    ln -sfn "$BPY_FIX/venv/bin/python" "$BPY_FIX/bin/base-python"
+    fail_rc=0
+    ( chmod() { return 1; }
+      bootstrap_install_base_python_launcher "$BPY_FIX/venv" "$BPY_FIX/bin/base-python" ) 2>/dev/null || fail_rc=$?
+    [[ "$fail_rc" != 0 && -L "$BPY_FIX/bin/base-python" && -z "$(find "$BPY_FIX/bin" -name '.*' -type f)" ]] \
+        && ok "a failed launcher install keeps base-python and leaves no temporary file" \
+        || bad "a failed launcher install (rc $fail_rc) replaced base-python or left a temporary file"
 else
     skip "base-python launcher (python3 -m venv unavailable)"
 fi

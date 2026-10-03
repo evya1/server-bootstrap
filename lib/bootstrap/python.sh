@@ -5,16 +5,20 @@
 # release) or as a launcher from a prior run of this function; either way, a
 # temporary file is written beside it and renamed into place so the pathname
 # is never opened for writing while it still resolves into the venv, which
-# would otherwise truncate the interpreter it points to.
+# would otherwise truncate the interpreter it points to. The interpreter path
+# is shell-quoted with %q, so any character in it is taken literally. If any
+# step fails, the temporary file is removed, $2 is left as it was, and the
+# function returns non-zero whether or not the caller runs under set -e.
 bootstrap_install_base_python_launcher() {
     local venv="$1" target="$2" tmp
-    tmp="$(mktemp "$(dirname -- "$target")/.$(basename -- "$target").XXXXXX")"
-    cat > "$tmp" <<LAUNCHEOF
-#!/usr/bin/env bash
-exec "$venv/bin/python" "\$@"
-LAUNCHEOF
-    chmod 0755 "$tmp"
-    mv -f "$tmp" "$target"
+    tmp="$(mktemp "$(dirname -- "$target")/.$(basename -- "$target").XXXXXX")" || return
+    # shellcheck disable=SC2016  # "$@" is for the launcher, not expanded here
+    if ! printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$venv/bin/python" > "$tmp" \
+        || ! chmod 0755 "$tmp" \
+        || ! mv -f -- "$tmp" "$target"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
 }
 
 bootstrap_base_python() {
