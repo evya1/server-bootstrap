@@ -305,13 +305,15 @@ fingerprint() {  # built and downloaded tools, the ml environment and apt, then 
     local p
     echo "## installed files (inode, mtime, size)"
     for p in /usr/local/bin/ngrok /usr/local/bin/gh /usr/local/bin/uv /usr/bin/rclone \
-             /usr/local/bin/base-python \
              "$(readlink -f /usr/local/bin/node 2>/dev/null)" \
              /workspace/venvs/base-python/pyvenv.cfg /root/.oh-my-zsh/oh-my-zsh.sh \
              $(find /opt/ai-cli/lib/node_modules -mindepth 2 -maxdepth 3 -name package.json \
                    -not -path '*/node_modules/*/node_modules/*' 2>/dev/null | sort); do
         [[ -n "$p" && -e "$p" ]] && stat -c '%n inode=%i mtime=%Y size=%s' "$p"
     done
+    # The base-python launcher is a 72-byte script each run renames into place;
+    # identical content is what "unchanged" means for it.
+    printf 'base-python launcher sha256 %s\n' "$(sha256sum < /usr/local/bin/base-python 2>/dev/null | cut -d' ' -f1)"
     echo "## ml environment build"
     printf 'ml-workbench -> %s\n' "$(readlink -f /workspace/venvs/ml-workbench 2>/dev/null)"
     stat -c '%n inode=%i mtime=%Y' /workspace/venvs/ml-workbench/pyvenv.cfg 2>/dev/null
