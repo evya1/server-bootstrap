@@ -219,6 +219,19 @@
 
 ### Fixed
 
+- **A command the `ml` profile links can no longer be left out of the
+  release.** The files `release/release-assets.sh` requires in every archive
+  were a fixed list. A new command added to `ML_COMMANDS` in
+  `profiles/ml/lib.sh`, with its file left untracked, passed every gate: the
+  archives shipped a `lib.sh` naming a command they did not carry, and the
+  installer would link a missing file. The commands are now derived from
+  `ML_COMMANDS`, so `release-assets.sh required` and the build's final
+  `verify` refuse such a release. The suite also checks that every tracked
+  file under `profiles/` is required, so untracking one later fails too.
+  ([#67][])
+
+[#67]: https://github.com/evya1/server-bootstrap/issues/67
+
 - **A repeat no longer reinstalls the AI CLIs.** Every run ran
   `npm install --global` for Claude Code, Codex and pi, so a repeated full
   install unpacked the same pinned versions again. The bootstrap now skips npm

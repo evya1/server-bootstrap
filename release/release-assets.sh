@@ -19,9 +19,9 @@
 #     server-bootstrap-VERSION/, and the source zip under server-bootstrap/, each
 #     file byte-identical to the tree the release was built from;
 #   - every standalone copy is byte-identical to its tracked file, with its mode;
-#   - every file the ml profile needs, and every lock backends.txt declares, is
-#     in the release set, and the manifest's lock digests are those of the locks
-#     inside the archives.
+#   - every file the ml profile needs, every command profiles/ml/lib.sh links
+#     (ML_COMMANDS) and every lock backends.txt declares, is in the release set,
+#     and the manifest's lock digests are those of the locks inside the archives.
 #
 # release.yml uploads by glob, and a glob such as server-bootstrap-*.tar.gz also
 # matches a separate archive like server-bootstrap-ml-1.0.0.tar.gz. The exact-set
@@ -97,7 +97,9 @@ UPLOAD = (f"{BASE}.tar.gz", f"{BASE}.tar.gz.sha256", f"{BASE}.zip", f"{BASE}.zip
 # the tar.gz is published.
 BUILT = UPLOAD + (f"{BASE}.tar", f"{BASE}.tar.sha256")
 # What the ml profile needs at runtime, and the examples that enable it. The
-# locks are added from backends.txt.
+# locks are added from backends.txt, and the commands from lib.sh's
+# ML_COMMANDS, so a command the installer links cannot be left out of the
+# release while this list stays green.
 PROFILE_FILES = (
     "server-profile", "profiles/ml/install.sh", "profiles/ml/lib.sh", "profiles/ml/check.py",
     "profiles/ml/backends.txt", "profiles/ml/requirements.in", "profiles/ml/bin/ml-env",
@@ -133,6 +135,17 @@ def declared_locks(backends_text):
     return sorted(rows)
 
 
+def declared_commands(lib_text):
+    """profiles/ml/bin/<command> for each command lib.sh's ML_COMMANDS links."""
+    found = re.findall(r"(?m)^[ \t]*ML_COMMANDS=\(([^)]*)\)", lib_text)
+    if len(found) != 1:
+        fail("profiles/ml/lib.sh: expected exactly one ML_COMMANDS=(...) assignment")
+    commands = found[0].split()
+    if not commands or not all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", c) for c in commands):
+        fail(f"profiles/ml/lib.sh: ML_COMMANDS is not a list of command names: {found[0]!r}")
+    return [f"profiles/ml/bin/{command}" for command in commands]
+
+
 def profiles_object(read):
     """The manifest's profiles object, from files read through read(path) -> bytes or None."""
     backends = read("profiles/ml/backends.txt")
@@ -161,7 +174,9 @@ def release_set():
 def required(paths):
     backends = read_tree("profiles/ml/backends.txt")
     locks = [row[4] for row in declared_locks(backends.decode())] if backends else []
-    return list(PROFILE_FILES) + locks
+    lib = read_tree("profiles/ml/lib.sh")
+    commands = declared_commands(lib.decode()) if lib else []
+    return list(dict.fromkeys(list(PROFILE_FILES) + commands + locks))
 
 
 if action == "built":

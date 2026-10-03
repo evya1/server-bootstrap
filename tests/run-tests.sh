@@ -4507,6 +4507,35 @@ ra_out="$(release_build "$ra_fx")" && ra_rc=0 || ra_rc=$?
     && [[ ! -e "$ra_fx/release/dist/server-bootstrap-$RA_VERSION.tar.gz" ]] \
     && ok "the release build stops before packaging when a declared lock is missing" \
     || bad "the build packaged a release without a declared lock (rc=$ra_rc)"
+# The required list is not a hand-kept subset (#67): every tracked file under
+# profiles/ is in it, so untracking any of them later fails the release gates,
+# and each command lib.sh's ML_COMMANDS links is derived from lib.sh itself.
+ra_unlisted="$(comm -23 <(git ls-files -- profiles | LC_ALL=C sort) <(LC_ALL=C sort <<< "$ra_required"))"
+[[ -n "$ra_required" && -z "$ra_unlisted" ]] \
+    && ok "every tracked file under profiles/ is required in the release" \
+    || bad "tracked under profiles/ but not required by release/release-assets.sh: $(tr '\n' ' ' <<< "$ra_unlisted")"
+ra_commands="$(sed -n 's/^[[:space:]]*ML_COMMANDS=(\(.*\))$/\1/p' profiles/ml/lib.sh)"
+ra_cmd_missing=""
+for ra_cmd in $ra_commands; do
+    grep -qxF "profiles/ml/bin/$ra_cmd" <<< "$ra_required" || ra_cmd_missing+=" $ra_cmd"
+done
+[[ -n "$ra_commands" && -z "$ra_cmd_missing" ]] \
+    && ok "every command lib.sh links is required in the release" \
+    || bad "commands lib.sh links but the release does not require:${ra_cmd_missing:- (no ML_COMMANDS found)}"
+# A command wired into ML_COMMANDS whose file exists only on disk, never in
+# the release set: the shape of a forgotten 'git add'. Every gate used to pass
+# it, and the archives shipped a lib.sh naming a command they did not carry.
+ra_fx="$(release_build_fixture)"
+sed -i 's/^\([[:space:]]*ML_COMMANDS=(.*\))$/\1 ml-unshipped)/' "$ra_fx/profiles/ml/lib.sh"
+cp -p "$ra_fx/profiles/ml/bin/ml-status" "$ra_fx/profiles/ml/bin/ml-unshipped"
+bash release/release-assets.sh --root "$ra_fx" required >/dev/null 2>"$TMP/ra-required.err" \
+    && bad "release-assets required accepted a command lib.sh links but the release does not ship" \
+    || { grep -q 'not in the release set: profiles/ml/bin/ml-unshipped' "$TMP/ra-required.err" \
+        && ok "a command lib.sh links but the release set lacks is refused" || bad "unshipped command: $(cat "$TMP/ra-required.err")"; }
+ra_out="$(release_build "$ra_fx")" && ra_rc=0 || ra_rc=$?
+(( ra_rc != 0 )) && grep -qF 'required by the ml profile but not in the release set: profiles/ml/bin/ml-unshipped' <<< "$ra_out" \
+    && ok "the release build fails when lib.sh links a command the archives do not carry" \
+    || bad "the build passed a release missing a command lib.sh links (rc=$ra_rc)"
 
 # One real build (scans off, suite skipped, as above) for everything below.
 ra_fx="$(release_build_fixture)"
