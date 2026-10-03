@@ -3,7 +3,7 @@
 # candidate archive ships it, in a fresh stock ubuntu:24.04 container on
 # GitHub-hosted x86-64 and ARM64 runners with no GPU; then the installed stack,
 # an identical repeat, and the stack again. The candidate is named in
-# validation/candidate.env. Lives only on its validation branch; never merged.
+# validation/candidate.conf. Lives only on its validation branch; never merged.
 name: rc-validation
 
 on:
@@ -30,7 +30,13 @@ jobs:
           persist-credentials: false
 
       - name: Load the candidate
-        run: grep -E '^[A-Z_]+=[0-9a-f]*$' validation/candidate.env | tee -a "$GITHUB_ENV"
+        run: |
+          set -Eeuo pipefail
+          grep -E '^[A-Z_]+=[0-9a-f]*$' validation/candidate.conf > "$RUNNER_TEMP/candidate"
+          for k in CANDIDATE_RUN SB_CAND_SHA SB_CAND_SUMS_SHA; do
+            grep -qE "^$k=[0-9a-f]+$" "$RUNNER_TEMP/candidate" || { echo "validation/candidate.conf has no $k" >&2; exit 1; }
+          done
+          tee -a "$GITHUB_ENV" < "$RUNNER_TEMP/candidate"
 
       # The foundation-only plan's acceptance check wants 50 GB free.
       - name: Free runner disk for the container
