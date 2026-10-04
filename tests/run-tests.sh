@@ -3,14 +3,14 @@ set -Euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT"
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 # Set by the checksums/SHA256SUMS assertion, read by the Results section. See #41.
 MANIFEST_STALE=0
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 ok(){ printf '  ok:   %s\n' "$1"; PASS=$((PASS+1)); }
 bad(){ printf '  FAIL: %s\n' "$1"; FAIL=$((FAIL+1)); }
 section(){ printf '\n== %s ==\n' "$1"; }
-skip(){ printf '  skip: %s\n' "$1"; }
+skip(){ printf '  skip: %s\n' "$1"; SKIP=$((SKIP+1)); }
 
 section "Syntax and structure"
 while IFS= read -r file; do
@@ -2163,7 +2163,7 @@ PLAN
         bad "full provision integration"
     fi
 else
-    ok "full provision integration skipped without root"
+    skip "full provision integration (requires root)"
 fi
 
 section "Remote bundles: checksum-pinned HTTPS sources"
@@ -2546,7 +2546,7 @@ PLAN
         && ok "local archives beside a remote bundle are still deleted after success" \
         || bad "local archive cleanup in a mixed plan"
 else
-    ok "remote provision integration skipped without root"
+    skip "remote provision integration (requires root)"
 fi
 
 section "VS Code extension helper"
@@ -3601,7 +3601,7 @@ FAKEBOOT
         && ok "a profile missing from the archive stops the run before the foundation installs" \
         || bad "missing profile was not refused before bootstrap (exit $pcode)"
 else
-    ok "profile provision integration skipped without root"
+    skip "profile provision integration (requires root)"
 fi
 
 section "ML profile: locks"
@@ -5687,7 +5687,7 @@ done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"
 
 section "Results"
-printf 'PASS: %d   FAIL: %d\n' "$PASS" "$FAIL"
+printf 'PASS: %d   FAIL: %d   SKIP: %d\n' "$PASS" "$FAIL" "$SKIP"
 # A stale manifest is the one failure here that is routine, mechanical, and not
 # a defect in the change under test: a bot edits a tracked workflow file and
 # cannot run the regeneration command. See #41. The message exists further up in

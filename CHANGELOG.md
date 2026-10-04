@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Root-only tests are reported as skipped when they do not run.** The full,
+  remote and profile provision integrations no longer inflate an unprivileged
+  suite's pass count, and the summary reports skips separately. CI now also
+  runs the complete suite as root in fresh `ubuntu:24.04` containers on x86-64
+  and ARM64, exercising those integrations and the README install block.
+  ([#80](https://github.com/evya1/server-bootstrap/issues/80))
+
 - **The install blocks wait for another apt process.** On an image without
   `wget` or a CA bundle, such as the stock `ubuntu:24.04` image, the lines
   before the download run apt themselves, and every apt call gave up at once
