@@ -117,8 +117,11 @@ DELETE_ARCHIVES_AFTER_SUCCESS=1
 ```
 
 For each local archive, both the archive and its checksum sidecar are deleted
-after installation and state recording succeed. They remain in place after a
-checksum, extraction, installer, or policy failure.
+after installation and state recording succeed. A bundle archive remains in
+place after any failure of its own installation or of an earlier stage. The
+bootstrap archive is deleted as soon as the bootstrap succeeds, before the
+acceptance check, so an acceptance (policy) rejection leaves it deleted; a
+checksum, extraction or bootstrap failure leaves it in place.
 
 For one debugging run:
 

@@ -36,15 +36,17 @@ The short version of what is now true that was not before:
   register checksum-pinned remote bundles.
 - **Safer hosts.** Unsupported hosts are refused before anything is created, a
   required package that cannot be installed fails the run, and apt steps
-  never change installed NVIDIA driver or CUDA packages.
+  refuse a transaction whose plan would change an installed NVIDIA driver or
+  CUDA package.
 - **`base-python` runs the base environment's interpreter** instead of the
   system one.
 - **Pins:** `gh` `2.102.0`, uv `0.12.23`, Claude Code `2.1.289`, Codex
   `0.160.0`, pi `1.0.2`, Node.js `24.21.0`, ngrok `3.39.11`.
 
-Validated from the release artifacts on clean Ubuntu 24.04 hosts: the full,
-foundation-only and ML plans, each installed and repeated, on x86-64 and
-ARM64, and the full plan with `cu130` on a GeForce RTX 5060 Ti.
+Validated from the release candidate's artifacts in clean `ubuntu:24.04`
+containers: the full, foundation-only and ML plans, each installed and
+repeated, on GitHub-hosted x86-64 and ARM64 runners, and the full plan with
+`cu130` on a GeForce RTX 5060 Ti host.
 
 ### Added
 
@@ -233,40 +235,23 @@ ARM64, and the full plan with `cu130` on a GeForce RTX 5060 Ti.
 
 ### Changed
 
-- **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`
-  `2.100.0` → `2.101.0`, uv `0.12.13` → `0.12.17`, Claude Code `2.1.269` →
-  `2.1.280`, Codex `0.154.0` → `0.156.0` and pi `0.85.1` → `0.87.1`. The new
-  `gh` and uv SHA-256 values come from each publisher's own checksum manifest;
-  the three agent CLIs remain exact-version npm installs with no repository
-  checksum. Node.js `24.21.0` was already current. The Oh My Zsh branch head
-  stays at `c6e66ede` although upstream has moved; `--all` was not used.
-  ([#51][])
+- **Five release pins refreshed** since 2.2.3, with
+  `tools/refresh-pins.sh --write`: `gh` `2.100.0` → `2.102.0`, uv `0.12.13` →
+  `0.12.23`, Claude Code `2.1.269` → `2.1.289`, Codex `0.154.0` → `0.160.0`
+  and pi `0.85.1` → `1.0.2`. The new `gh` and uv SHA-256 values come from each
+  publisher's own checksum manifest; the three agent CLIs remain exact-version
+  npm installs with no repository checksum. `gh` `2.102.0` carries upstream
+  fixes for four security advisories. pi `1.0.2` keeps the `pi` command, the
+  Node `22.19` minimum, `models.json` and the `PI_TELEMETRY` and
+  `PI_SKIP_VERSION_CHECK` variables, but no longer ships an
+  `npm-shrinkwrap.json`, so npm resolves its transitive dependencies at
+  install time. Node.js `24.21.0` was already current. The Oh My Zsh branch
+  head stays at `c6e66ede` although upstream has moved; `--all` was not used.
+  The committed `ml` locks are unchanged: they were resolved with uv `0.12.17`
+  and install, hash-checked, with uv `0.12.23`. ([#51][], [#73][])
 
 [#51]: https://github.com/evya1/server-bootstrap/issues/51
-
-- **Five release pins refreshed again** with `tools/refresh-pins.sh --write`:
-  `gh` `2.101.0` → `2.102.0`, uv `0.12.17` → `0.12.23`, Claude Code
-  `2.1.280` → `2.1.288`, Codex `0.156.0` → `0.160.0` and pi `0.87.1` →
-  `1.0.1`. The new `gh` and uv SHA-256 values come from each publisher's own
-  checksum manifest; the three agent CLIs remain exact-version npm installs
-  with no repository checksum. `gh` `2.102.0` carries upstream fixes for four
-  security advisories. pi `1.0.1` keeps the `pi` command, the Node `22.19`
-  minimum, `models.json` and the `PI_TELEMETRY` and `PI_SKIP_VERSION_CHECK`
-  variables, but no longer ships an `npm-shrinkwrap.json`, so npm resolves its
-  transitive dependencies at install time. Node.js `24.21.0` and ngrok
-  `3.39.11` were already current. The Oh My Zsh branch head stays at
-  `c6e66ede` although upstream has moved; `--all` was not used. The committed
-  `ml` locks are unchanged: they were resolved with uv `0.12.17` and install,
-  hash-checked, with uv `0.12.23`. ([#73][])
-
 [#73]: https://github.com/evya1/server-bootstrap/issues/73
-
-- **Two agent CLI pins refreshed** with `tools/refresh-pins.sh --write`:
-  Claude Code `2.1.288` → `2.1.289` and pi `1.0.1` → `1.0.2`. Both remain
-  exact-version npm installs with no repository checksum. For both packages
-  the `bin` names, Node engine range and install scripts are unchanged from
-  the previous pin, and pi still ships no `npm-shrinkwrap.json`. The Oh My
-  Zsh branch head stays at `c6e66ede`; `--all` was not used.
 
 - **An installed remote bundle is no longer downloaded again.** The shared
   bundle engine now compares the recorded version and checksum with an

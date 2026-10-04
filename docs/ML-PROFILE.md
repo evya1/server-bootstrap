@@ -18,7 +18,7 @@ downloads no model or dataset and starts no service.
 The README's [first install block](../README.md#install) enables this profile
 as part of the complete built-in stack, with
 `provision-plan.full.example.sh`. `provision-plan.ml.example.sh` is the plan
-for the foundation and this profile. A release with the profile publishes
+for the foundation and this profile. Each release publishes
 both beside its archive and ships them inside it, under `examples/`. Each
 installs the foundation and enables this profile from the one release it
 names. The profile is part of that archive, so neither plan carries an ML URL,
@@ -121,10 +121,12 @@ Python 3.12:
 | `cpu` | x86-64, ARM64 | nothing | x86-64: installed and diagnosed. ARM64: installed and diagnosed in a fresh `ubuntu:24.04` container on a GitHub-hosted ARM64 runner (Arm Neoverse N2) |
 | `cu130` | x86-64 | an NVIDIA driver that reports CUDA 13.0 or newer; a GPU of compute capability 7.5 or newer | GeForce RTX 3060 (compute capability 8.6), driver 595.91.07; GeForce RTX 5060 Ti (compute capability 12.0), driver 595.84 |
 
-The `cu130` build also carries code for Hopper and data-center Blackwell
-GPUs (`sm_90`, `sm_100`). It has not been run on them, and passing on the
-RTX 3060 and RTX 5060 Ti says nothing about those GPUs; run `ml-doctor` on
-such a host before relying on it. No CUDA backend is locked for ARM64.
+`cu130` has been run only at compute capability 8.6 (RTX 3060) and 12.0
+(RTX 5060 Ti). It accepts any GPU of compute capability 7.5 or newer, and the
+build also carries code for Hopper and data-center Blackwell (`sm_90`,
+`sm_100`), but it has not been run on Turing (7.5), A100 (8.0), Ada (8.9),
+Hopper or data-center Blackwell; run `ml-doctor` on such a host before relying
+on it. No CUDA backend is locked for ARM64.
 
 `--backend auto` chooses:
 
