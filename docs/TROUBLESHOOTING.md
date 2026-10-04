@@ -168,12 +168,19 @@ name to `[optional]`, drop it with `SKIP_PACKAGES`, and rerun.
 
 ## apt or dpkg is locked
 
-The bootstrap waits for existing package operations and attempts interrupted
-`dpkg` recovery. If the timeout is reached, identify the holder with:
+At first boot another process often holds the apt or dpkg lock: cloud-init,
+`apt-daily`, or a provider's container entrypoint installing its own packages.
+The bootstrap waits for it before each apt transaction, up to 600 seconds in
+all for the run, and logs the process it is waiting for:
 
-```bash
-fuser /var/lib/dpkg/lock-frontend
+```text
+waiting for another apt/dpkg process: 1234 (apt) holds /var/lib/dpkg/lock-frontend
 ```
+
+It finds the holder by its lock, as apt does, so it needs no `fuser`, which a
+bare image lacks. If the wait runs out, the run fails with `apt lock held
+longer than 600s` and the same names; let that process finish, then rerun.
+The bootstrap also attempts interrupted `dpkg` recovery.
 
 ## CI fails with `release-files: stale hash`
 

@@ -1677,7 +1677,9 @@ cat > "$APTX/bin/dpkg-query" <<'STUB'
 #!/usr/bin/env bash
 cat -- "$APT_FIX/dpkg-status" 2>/dev/null || true
 STUB
-printf '#!/usr/bin/env bash\nexit 1\n' > "$APTX/bin/fuser"
+# fuser is psmisc, which a bare image lacks: the lock wait must not need it. This
+# one reports every file as held, and a run that consulted it would never start.
+printf '#!/usr/bin/env bash\nprintf "FUSER %%s\\n" "$*" >> "$APT_FIX/calls"\nexit 0\n' > "$APTX/bin/fuser"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$APTX/bin/git"
 chmod 0755 "$APTX/bin/"*
 cat > "$APTX/manifest.txt" <<'MANIFEST'
@@ -1696,13 +1698,40 @@ set -Eeuo pipefail
 trap 'echo "ERR trap: line $LINENO: $BASH_COMMAND" >&2' ERR
 source "$REPO/lib/core.sh"
 source "$REPO/lib/bootstrap/packages.sh"
-sleep() { :; }
+# The scenario's own file stands in for every apt and dpkg lock.
+BOOTSTRAP_APT_LOCK_FILES=("$APT_FIX/lock")
+BOOTSTRAP_APT_LOCK_WAIT="${APT_LOCK_WAIT:-$BOOTSTRAP_APT_LOCK_WAIT}"
+# Nothing really sleeps. With APT_HOLDER set, sleep number APT_RELEASE_AFTER
+# ends that process, which holds the lock open, and logs RELEASED among the calls.
+sleeps=0
+sleep() {
+    sleeps=$((sleeps + 1))
+    if [[ -n "${APT_HOLDER:-}" ]] && (( sleeps == ${APT_RELEASE_AFTER:-0} )); then
+        kill "$APT_HOLDER" 2>/dev/null || true
+        while [[ -n "$(bootstrap_apt_lock_holders)" ]]; do :; done
+        printf 'RELEASED after %s waits\n' "$sleeps" >> "$APT_FIX/calls"
+    fi
+}
 bootstrap_packages
 DRIVER
 
 apt_scenario() {  # name; then set up $APT_FIX before apt_run
     APT_FIX="$APTX/$1"; mkdir -p "$APT_FIX/sim" "$APT_FIX/unavailable" "$APT_FIX/fail-run" "$APT_FIX/localbin"
 }
+# apt_hold FILE: a background process takes an fcntl write lock on FILE, the
+# lock apt and dpkg take, and keeps it; sets apt_holder once the lock is taken.
+# The caller ends it.
+apt_hold() {
+    local _
+    : > "$1"; rm -f "$1.ready"
+    python3 -c 'import fcntl, sys, time
+lock = open(sys.argv[1], "a"); fcntl.lockf(lock, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close(); time.sleep(300)' "$1" "$1.ready" &
+    apt_holder=$!
+    for _ in $(seq 200); do [[ ! -e "$1.ready" ]] || return 0; command sleep 0.05; done
+    return 1
+}
+apt_release() { kill "$apt_holder" 2>/dev/null; wait "$apt_holder" 2>/dev/null || true; }
 apt_run() {  # [VAR=value...]; sets aout, acode, acalls
     aout="$(env PATH="$APTX/bin:$PATH" APT_FIX="$APT_FIX" REPO="$ROOT" \
         PACKAGES_FILE="$APTX/manifest.txt" RUN_APT_UPGRADE=0 \
@@ -1889,6 +1918,74 @@ apt_run
 [[ "$acode" == 0 ]] && has_call "DPKG --configure -a" \
     && ok "dpkg --configure -a still finishes an interrupted run that leaves no driver package pending" \
     || bad "dpkg recovery (exit $acode): $aout"
+
+# Another apt or dpkg process at first boot, such as a provider's container
+# entrypoint installing its own packages, holds a lock when the bootstrap
+# starts. It is found by its fcntl lock, without fuser, which a bare
+# ubuntu:24.04 image does not have, and nothing runs until it lets go.
+probe_lock="$APTX/probe-lock"
+if apt_hold "$probe_lock"; then
+    probe_held="$( BOOTSTRAP_APT_LOCK_FILES=("$probe_lock" "$APTX/absent-lock"); bootstrap_apt_lock_holders )"
+    apt_release
+    probe_after="$( BOOTSTRAP_APT_LOCK_FILES=("$probe_lock" "$APTX/absent-lock"); bootstrap_apt_lock_holders )"
+    [[ "$probe_held" == "$apt_holder ("*") holds $probe_lock" && -z "$probe_after" ]] \
+        && ok "the lock probe names the process holding an fcntl lock on a lock file, and nothing once it exits" \
+        || bad "the lock probe: while held [$probe_held], after [$probe_after]"
+else
+    bad "the lock probe scenario could not take a lock"
+fi
+# A file that is only open, not locked, holds nothing up: apt would take it.
+: > "$probe_lock"
+command sleep 300 3< "$probe_lock" &
+probe_opener=$!
+command sleep 0.2
+probe_open="$( BOOTSTRAP_APT_LOCK_FILES=("$probe_lock"); bootstrap_apt_lock_holders )"
+kill "$probe_opener" 2>/dev/null; wait "$probe_opener" 2>/dev/null
+[[ -z "$probe_open" ]] \
+    && ok "a lock file another process only has open, unlocked, is not waited for" \
+    || bad "the lock probe reported an unlocked open file: $probe_open"
+probe_noperl="$(env PATH="$APTX/bin" /bin/bash -c 'source lib/core.sh; source lib/bootstrap/packages.sh; bootstrap_wait_for_apt; echo "exit=$?"' 2>&1)"
+[[ "$probe_noperl" == *"perl is missing, so other apt and dpkg processes are not waited for"*"exit=0" ]] \
+    && ok "without perl the lock wait says it cannot wait, rather than skipping in silence" \
+    || bad "lock wait without perl: $probe_noperl"
+apt_scenario lock-held
+if apt_hold "$APT_FIX/lock"; then
+    apt_run APT_HOLDER="$apt_holder" APT_RELEASE_AFTER=4
+    apt_release
+    [[ "$acode" == 0 && "$aout" == *"waiting for another apt/dpkg process: $apt_holder ("*") holds $APT_FIX/lock"* \
+        && "$(head -n 2 <<< "$acalls")" == "RELEASED after 4 waits"$'\n'"DPKG --configure -a" ]] \
+        && has_call "RUN update" && has_call "RUN $INSTALL alpha bravo charlie" && no_call_matching '^FUSER' \
+        && ok "the bootstrap waits for a process holding an apt lock, without fuser, and runs nothing until it lets go" \
+        || bad "bootstrap with an apt lock held at start (exit $acode): $acalls"
+else
+    bad "lock-held scenario: no holder"
+fi
+apt_scenario lock-stays-held
+if apt_hold "$APT_FIX/lock"; then
+    apt_run APT_LOCK_WAIT=12
+    apt_release
+    [[ "$acode" != 0 && "$aout" == *"apt lock held longer than 12s: $apt_holder ("*") holds $APT_FIX/lock"* && -z "$acalls" ]] \
+        && ok "a lock held past the wait fails the bootstrap, naming the holder, before any apt or dpkg call" \
+        || bad "bootstrap with an apt lock that stays held (exit $acode): $aout | $acalls"
+else
+    bad "lock-stays-held scenario: no holder"
+fi
+# The wait is one budget for the run: once it is spent, a lock found later
+# fails that transaction at once rather than starting a new wait.
+# The probe runs in a subshell, so it counts its calls in a file.
+lock_budget="$(bash -c '
+    source lib/core.sh; source lib/bootstrap/packages.sh
+    BOOTSTRAP_APT_LOCK_WAIT=6; sleep() { :; }
+    probes="$1"; : > "$probes"
+    bootstrap_apt_lock_holders() { echo . >> "$probes"; (( $(wc -l < "$probes") > 2 )) || echo "1 (apt) holds lock"; }
+    bootstrap_wait_for_apt; first=$?
+    : > "$probes"
+    bootstrap_wait_for_apt 2>/dev/null; second=$?
+    echo "first=$first second=$second waited=$BOOTSTRAP_APT_WAITED probes=$(wc -l < "$probes")"
+' _ "$APTX/budget-probes" 2>&1 | tail -n 1)"
+[[ "$lock_budget" == "first=0 second=1 waited=6 probes=1" ]] \
+    && ok "time spent waiting for apt locks is counted across the run, so the bound holds for the whole run" \
+    || bad "apt lock wait budget: $lock_budget"
 [[ -z "$APT_TRAPPED" ]] \
     && ok "no scenario sets off the entry point's ERR trap, which would record the run as failed" \
     || bad "the ERR trap fired in: $APT_TRAPPED"
