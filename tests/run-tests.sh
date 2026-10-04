@@ -2108,10 +2108,13 @@ root=sys.argv[1]
 with tarfile.open(os.path.join(root,'traversal.tar.gz'),'w:gz') as t:
     data=b'x'; info=tarfile.TarInfo('../escape'); info.size=len(data); t.addfile(info,io.BytesIO(data))
 with tarfile.open(os.path.join(root,'symlink.tar.gz'),'w:gz') as t:
-    d=tarfile.TarInfo('pkg'); d.type=tarfile.DIRTYPE; t.addfile(d)
+    d=tarfile.TarInfo('pkg'); d.type=tarfile.DIRTYPE; d.mode=0o755; t.addfile(d)
     v=b'1.0.0\n'; vi=tarfile.TarInfo('pkg/VERSION'); vi.size=len(v); t.addfile(vi,io.BytesIO(v))
     i=b'#!/usr/bin/env bash\nexit 0\n'; ii=tarfile.TarInfo('pkg/install.sh'); ii.mode=0o755; ii.size=len(i); t.addfile(ii,io.BytesIO(i))
     s=tarfile.TarInfo('pkg/escape'); s.type=tarfile.SYMTYPE; s.linkname='../../etc/passwd'; t.addfile(s)
+with tarfile.open(os.path.join(root,'restricted.tar.gz'),'w:gz') as t:
+    d=tarfile.TarInfo('pkg'); d.type=tarfile.DIRTYPE; d.mode=0o644; t.addfile(d)
+    data=b'payload'; info=tarfile.TarInfo('pkg/payload'); info.size=len(data); t.addfile(info,io.BytesIO(data))
 PY
 mkdir -p "$TMP/xz-src/pkg"; printf 'ok\n' > "$TMP/xz-src/pkg/value.txt"
 tar -cJf "$TMP/valid.tar.xz" -C "$TMP/xz-src" pkg
@@ -2127,6 +2130,32 @@ for kind in traversal symlink; do
         bad "$kind archive accepted"
     else ok "$kind archive rejected"; fi
 done
+
+# Exercise cleanup without root's permission bypass, including in root CI.
+if (( EUID != 0 )) || command -v setpriv >/dev/null 2>&1; then
+    bundle_user=()
+    restricted="$TMP/restricted-bundle"; mkdir -p "$restricted/tmp" "$restricted/state"
+    if (( EUID == 0 )); then
+        bundle_user=(setpriv --reuid=65534 --regid=65534 --clear-groups)
+        chmod a+rx "$TMP" "$restricted"
+        chmod a+r "$TMP/restricted.tar.gz"
+        chmod 0777 "$restricted/tmp" "$restricted/state"
+    fi
+    restricted_sha="$(sha256sum "$TMP/restricted.tar.gz" | awk '{print $1}')"
+    if TMPDIR="$restricted/tmp" "${bundle_user[@]}" ./server-bundle-install \
+        --name restricted --version 1.0.0 --archive "$TMP/restricted.tar.gz" \
+        --sha256 "$restricted_sha" --installer missing.sh --state-root "$restricted/state" \
+        >"$restricted/out" 2>&1; then
+        bad "a restricted archive with no installer was accepted"
+    elif [[ -z "$(find "$restricted/tmp" -mindepth 1 -print -quit)" \
+        && -f "$TMP/restricted.tar.gz" && ! -e "$restricted/state/bundles/restricted" ]]; then
+        ok "a rejected archive with a mode-0644 directory leaves no temporary bundle tree"
+    else
+        bad "restricted archive cleanup leaked a temporary tree or wrote install state"
+    fi
+else
+    skip "restricted archive cleanup needs an unprivileged caller or setpriv"
+fi
 
 section "Provision plan parsing"
 PLAN_DIR="$TMP/plan"; mkdir -p "$PLAN_DIR"
