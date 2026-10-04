@@ -89,9 +89,9 @@ to it would install a second, unpinned copy.
 SHA-256 per architecture, then linked at `/usr/local/bin/gh` with its man pages:
 
 ```bash
-GH_VERSION=2.101.0
-GH_SHA256_X64=9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
-GH_SHA256_ARM64=b57e8063f18862647c9d22727c32e9da1b963f8bf9db648fe123a6975695640f
+GH_VERSION=2.102.0
+GH_SHA256_X64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
 ```
 
 The distribution package lags upstream by many minor versions and is missing
@@ -158,10 +158,10 @@ system prefix, in one npm transaction:
 ```bash
 AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
-CLAUDE_CODE_VERSION=2.1.280
+CLAUDE_CODE_VERSION=2.1.288
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
-CODEX_VERSION=0.156.0
-PI_VERSION=0.87.1
+CODEX_VERSION=0.160.0
+PI_VERSION=1.0.1
 ```
 
 These are exact-version npm installs. Unlike Node.js, uv, `gh` and ngrok,

@@ -1,5 +1,5 @@
 # Pinned GitHub CLI release used by server-bootstrap 2.2.3.
-# Assets: gh_2.101.0_linux_amd64.tar.gz / gh_2.101.0_linux_arm64.tar.gz
-# Source: https://github.com/cli/cli/releases/download/v2.101.0/gh_2.101.0_checksums.txt
-linux-amd64 9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
-linux-arm64 b57e8063f18862647c9d22727c32e9da1b963f8bf9db648fe123a6975695640f
+# Assets: gh_2.102.0_linux_amd64.tar.gz / gh_2.102.0_linux_arm64.tar.gz
+# Source: https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_checksums.txt
+linux-amd64 bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+linux-arm64 7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
