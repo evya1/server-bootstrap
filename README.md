@@ -140,7 +140,7 @@ Nothing else starts on its own: no workload, no model download, no public port.
 | **Transfer** | `rclone` for file transfer and S3-compatible object storage, installed only: no remote, credential or transfer is set up |
 | **Tunnels** | Checksum-verified ngrok 3.39.11 agent CLI (`ngrok`), installed only: no auth token, tunnel or service is set up |
 | **Node** | Checksum-verified Node.js 24.21.0 LTS, x64 or ARM64 |
-| **Agents** | Claude Code 2.1.288, OpenAI Codex 0.160.0 and pi 1.0.1, isolated in `/opt/ai-cli` |
+| **Agents** | Claude Code 2.1.289, OpenAI Codex 0.160.0 and pi 1.0.2, isolated in `/opt/ai-cli` |
 | **API keys** | One root-only `secrets.env` (mode 0600) loaded into every login shell, managed with `server-secrets` |
 | **Python** | uv, plus an isolated base environment |
 | **Editor** | 49 VS Code extensions for the Remote-SSH host |
