@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Nothing merged since 2.3.1.
+
+## 2.3.1
+
+*Released 2026-10-05.*
+
+A patch release for installs that run while another apt or dpkg process is
+busy, including container startup scripts. The install blocks and bootstrap
+wait within a bounded budget before running apt. This release also makes
+archive modes reproducible across checkout permissions, verifies the release
+manifest in both build passes, preserves configured paths in generated
+wrappers, cleans up rejected bundles with restrictive directory modes, and
+runs the root integration suite in CI on x86-64 and ARM64.
+
 ### Fixed
 
 - **Release archive modes no longer depend on the builder's umask.** All four

@@ -35,7 +35,7 @@ driver or CUDA package is refused
 are in the notes below the block.
 
 ```bash
-V=2.3.0
+V=2.3.1
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \
@@ -106,7 +106,7 @@ and the run exits non-zero. It deletes the archive once the foundation has
 installed:
 
 ```bash
-V=2.3.0
+V=2.3.1
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \
@@ -243,8 +243,8 @@ green with nothing else downloaded. To add a workload, put its archive and
 ```text
 server-provision.sh
 provision-plan.example.sh
-server-bootstrap-2.3.0.tar.gz
-server-bootstrap-2.3.0.tar.gz.sha256
+server-bootstrap-2.3.1.tar.gz
+server-bootstrap-2.3.1.tar.gz.sha256
 <workload>-<version>.tar.gz
 <workload>-<version>.tar.gz.sha256
 ```

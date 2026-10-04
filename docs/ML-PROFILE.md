@@ -25,7 +25,7 @@ names. The profile is part of that archive, so neither plan carries an ML URL,
 version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
 
 ```bash
-V=2.3.0
+V=2.3.1
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \

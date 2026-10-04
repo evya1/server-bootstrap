@@ -50,8 +50,8 @@ export INSTALL_SECRETS_FILE=1
 export INSTALL_PI_MODELS_TEMPLATE=1
 
 register_bootstrap \
-  "./server-bootstrap-2.3.0.tar.gz" \
-  "./server-bootstrap-2.3.0.tar.gz.sha256"
+  "./server-bootstrap-2.3.1.tar.gz" \
+  "./server-bootstrap-2.3.1.tar.gz.sha256"
 
 # Every built-in profile. ml ships inside that archive, with its frozen locks:
 # no separate URL, version, archive or checksum. auto installs the CPU backend
