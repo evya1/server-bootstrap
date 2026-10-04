@@ -102,6 +102,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           test "$(id -u)" -eq 0
+          # The mounted workspace belongs to the runner user, not container root.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           bash tests/run-tests.sh
 
   release-build:
