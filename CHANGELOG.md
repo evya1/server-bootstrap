@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **The release manifest is generated and compared in both build passes.**
+  Its profile metadata and archive hashes are included in the reproducibility
+  check, and it is re-hashed after scanning along with the archives. A
+  host-specific manifest field or later tampering fails the build.
+  ([#82](https://github.com/evya1/server-bootstrap/issues/82))
+- **Generated activation and Claude wrappers take configured paths literally.**
+  Bash quoting preserves spaces, dollar signs, quotes, backticks and backslashes
+  in `BASE_PYTHON_ENV` and `AI_CLI_PREFIX`; runtime tests check activation,
+  argument forwarding, exit status and the disabled auto-updater policy.
+  ([#82](https://github.com/evya1/server-bootstrap/issues/82))
+
 - **The install blocks wait for another apt process.** On an image without
   `wget` or a CA bundle, such as the stock `ubuntu:24.04` image, the lines
   before the download run apt themselves, and every apt call gave up at once
