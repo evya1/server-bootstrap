@@ -261,6 +261,13 @@ ARM64, and the full plan with `cu130` on a GeForce RTX 5060 Ti.
 
 [#73]: https://github.com/evya1/server-bootstrap/issues/73
 
+- **Two agent CLI pins refreshed** with `tools/refresh-pins.sh --write`:
+  Claude Code `2.1.288` → `2.1.289` and pi `1.0.1` → `1.0.2`. Both remain
+  exact-version npm installs with no repository checksum. For both packages
+  the `bin` names, Node engine range and install scripts are unchanged from
+  the previous pin, and pi still ships no `npm-shrinkwrap.json`. The Oh My
+  Zsh branch head stays at `c6e66ede`; `--all` was not used.
+
 - **An installed remote bundle is no longer downloaded again.** The shared
   bundle engine now compares the recorded version and checksum with an
   `https://` source before fetching it: the same pair is skipped, and the same

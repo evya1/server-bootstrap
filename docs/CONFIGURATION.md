@@ -158,10 +158,10 @@ system prefix, in one npm transaction:
 ```bash
 AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
-CLAUDE_CODE_VERSION=2.1.288
+CLAUDE_CODE_VERSION=2.1.289
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
 CODEX_VERSION=0.160.0
-PI_VERSION=1.0.1
+PI_VERSION=1.0.2
 ```
 
 These are exact-version npm installs. Unlike Node.js, uv, `gh` and ngrok,
