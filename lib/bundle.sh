@@ -107,7 +107,10 @@ sb_install_bundle() (
     fi
 
     temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/server-bundle.XXXXXX")"
-    trap 'rm -rf -- "$temp_dir"' EXIT
+    # Archive modes can leave directories unsearchable by an unprivileged
+    # caller. Restore owner access before removing our temporary tree. chmod
+    # does not follow symlinks encountered during recursive traversal.
+    trap 'chmod -R u+rwX -- "$temp_dir" 2>/dev/null || true; rm -rf -- "$temp_dir"' EXIT
     sb_bundle_materialize "$source_ref" "$expected" "$temp_dir" archive || return
     actual="$(sb_sha256 "$archive")"
 

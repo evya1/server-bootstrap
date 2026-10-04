@@ -9,11 +9,19 @@
   check, and it is re-hashed after scanning along with the archives. A
   host-specific manifest field or later tampering fails the build.
   ([#82](https://github.com/evya1/server-bootstrap/issues/82))
+
 - **Generated activation and Claude wrappers take configured paths literally.**
   Bash quoting preserves spaces, dollar signs, quotes, backticks and backslashes
   in `BASE_PYTHON_ENV` and `AI_CLI_PREFIX`; runtime tests check activation,
   argument forwarding, exit status and the disabled auto-updater policy.
   ([#82](https://github.com/evya1/server-bootstrap/issues/82))
+
+- **Rejected bundles clean up restrictive archive modes.** Temporary extraction
+  directories regain owner read, write and search access before removal, so
+  an unprivileged caller leaves no `server-bundle.*` tree behind when an
+  archive contains a mode-0644 directory. The symlink safety fixture now has
+  a searchable directory and exercises the symlink rejection directly.
+  ([#83](https://github.com/evya1/server-bootstrap/issues/83))
 
 - **The install blocks wait for another apt process.** On an image without
   `wget` or a CA bundle, such as the stock `ubuntu:24.04` image, the lines
