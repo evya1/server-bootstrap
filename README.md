@@ -4,7 +4,7 @@
 
 **One command turns a fresh Ubuntu server, VM, or container into a working development environment.**
 
-Checks the host against its declared specification, installs a pinned toolchain, and starts nothing on its own.
+Runs a hardware acceptance check, installs a pinned toolchain, and starts nothing on its own.
 
 [![ci](https://github.com/evya1/server-bootstrap/actions/workflows/ci.yml/badge.svg)](https://github.com/evya1/server-bootstrap/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/evya1/server-bootstrap?color=2563eb&label=release)](https://github.com/evya1/server-bootstrap/releases/latest)
@@ -21,6 +21,15 @@ Paste this whole block into a fresh Ubuntu 24.04 server, VM, or container, as
 root. It installs the complete built-in stack: the foundation
 [listed below](#what-the-run-installs), including the ngrok CLI, and the
 optional `ml` environment.
+
+Requirements: Ubuntu 24.04 on x86-64 or ARM64 (the provisioner checks this
+before it installs anything), root, and outbound HTTPS. Fresh hosts and
+containers often give you a root shell and no `sudo`; put `sudo` before
+`./server-provision.sh` only if you are not root. An NVIDIA driver is optional
+and is not part of the install; an apt plan that would change an installed
+driver or CUDA package is refused
+([details](docs/CONFIGURATION.md#nvidia-driver-and-cuda-packages)). Disk needs
+are in the notes below the block.
 
 > [!IMPORTANT]
 > No published release ships this block's plan yet. v2.2.3, the latest
@@ -49,35 +58,47 @@ command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt
   && ./server-provision.sh --plan ./provision-plan.full.example.sh
 ```
 
-That is the whole installation. Each command runs only if the one before it
-succeeded, so nothing is installed unless all four files downloaded and the
-archive matches its SHA-256. A bare container image such as `ubuntu:24.04` has
-no `wget` or CA certificates; the lines before the download install just those
-two, and only when one is missing. They simulate the install first and stop
-without installing if the simulation fails or if apt's plan would also touch
-an NVIDIA driver or CUDA package, the same packages the provisioner protects,
-and they never remove a package (`--no-remove`). The foundation takes roughly five minutes, most of it
-`apt`; the `ml` environment then adds its own download, several gigabytes on a
-CUDA host.
+That is the whole installation:
+
+- Each command runs only if the one before it succeeded, so nothing is
+  installed unless all four files downloaded and the archive matches its
+  SHA-256.
+- A bare container image such as `ubuntu:24.04` has no `wget` or CA
+  certificates. The lines before the download install just those two, and only
+  when one is missing. They simulate the install first and stop without
+  installing if the simulation fails or if apt's plan would also touch an
+  NVIDIA driver or CUDA package, the same packages the provisioner protects.
+  They never remove a package (`--no-remove`).
+- The foundation takes roughly five minutes, most of it `apt`; the `ml`
+  environment then adds its own download, several gigabytes on a CUDA host.
+
+About the full plan:
 
 - The full plan enables every configurable installer and every built-in
   profile. `ml` uses `--backend auto`: CPU on a host without an NVIDIA GPU,
   CUDA 13.0 on one whose driver supports it and whose GPUs have compute
-  capability 7.5 or newer. On other NVIDIA hardware the `ml` step stops rather
-  than install CPU; see [ML-PROFILE](docs/ML-PROFILE.md).
+  capability 7.5 or newer. `auto` never falls back to CPU on NVIDIA hardware.
+  It fails when the driver is below CUDA 13.0, a GPU is below compute
+  capability 7.5, the host is ARM64 (no CUDA backend is locked for it), or
+  `nvidia-smi` is missing or failing. The provisioner then exits non-zero with
+  the foundation installed. To install the CPU backend there, run
+  `server-profile install ml --backend cpu`; see
+  [ML-PROFILE](docs/ML-PROFILE.md).
 - The `ml` profile needs 30 GB free for a CUDA backend and 10 GB for CPU,
   checked before it builds. A repeat that rebuilds nothing does not need it.
-- It keeps the verified archive. To repeat the install, run the last line
-  again; an up-to-date `ml` environment is not rebuilt.
-
-> [!NOTE]
-> Fresh hosts and containers often provide a root shell and ship without `sudo`.
-> Put `sudo` before `./server-provision.sh` only if you are not root.
+- It keeps the verified archive. To repeat the install, run
+  `./server-provision.sh --plan ./provision-plan.full.example.sh` again from
+  `/root`; an up-to-date `ml` environment is not rebuilt. Pasting the whole
+  block again would download second copies, which wget saves with a `.1`
+  suffix.
 
 ### Foundation-only install
 
 `provision-plan.example.sh` installs the foundation alone, without the `ml`
-profile, and deletes the archive after a successful run. v2.2.3 publishes it:
+profile. It needs 50 GB free at `/workspace` (`MIN_DISK_GB=50`). On a smaller
+disk the acceptance check rejects the host after the foundation has installed,
+and the run exits non-zero. It deletes the archive once the foundation has
+installed. v2.2.3 publishes it:
 
 ```bash
 V=2.2.3
@@ -103,6 +124,12 @@ command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt
 Start the new shell and paste your API keys once, into the one file every
 login shell loads:
 
+> [!IMPORTANT]
+> While `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set, `claude` and `codex`
+> bill per token through the API rather than using a Claude Pro/Max or ChatGPT
+> subscription. Run `aikeys off` to clear the keys from the current shell and
+> get subscription login back, `aikeys on` to reload them.
+
 ```bash
 exec zsh -l
 server-secrets set ANTHROPIC_API_KEY     # prompts, nothing reaches your history
@@ -122,19 +149,13 @@ pi
 
 Nothing else starts on its own: no workload, no model download, no public port.
 
-> [!IMPORTANT]
-> While `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set, `claude` and `codex`
-> bill per token through the API rather than using a Claude Pro/Max or ChatGPT
-> subscription. Run `aikeys off` to clear the keys from the current shell and
-> get subscription login back, `aikeys on` to reload them.
-
 ---
 
 ## What the run installs
 
 | Area | Component |
 | --- | --- |
-| **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear` and disk/mem/GPU aliases |
+| **Shell** | Zsh as login shell, pinned Oh My Zsh, `c` → `clear`, `disk` and `mem` aliases, plus `gpu` and `gpu-watch` when `nvidia-smi` is present |
 | **CLI toolkit** | ~96 apt packages from `config/packages.txt`: `ripgrep`, `fd`, `bat`, `jq`, `fzf`, `zoxide`, `direnv`, `tmux`, `htop`, `zstd`, `sqlite3`, `speedtest-cli`, network and build tooling |
 | **Git** | `git`, `git-lfs`, and checksum-verified GitHub CLI 2.102.0 (`gh`) |
 | **Transfer** | `rclone` for file transfer and S3-compatible object storage, installed only: no remote, credential or transfer is set up |
@@ -167,10 +188,11 @@ flowchart LR
   E --> F["built-in profiles,<br/>then bundles"]
 ```
 
-Acceptance runs **before** any workload. A rejected host stops provisioning, so
+Acceptance runs after the foundation installs and **before** any profile or
+workload. A rejected host stops there and the foundation stays installed, so
 you find out the disk is slow or the riser is x1 before any workload depends on
-it. A machine with no GPU is accepted normally — set `REQUIRE_ACCELERATOR=1`
-when the declared specification requires a GPU.
+it. A machine with no GPU is accepted normally; add `export REQUIRE_ACCELERATOR=1`
+to the plan when the declared specification requires a GPU.
 
 ---
 
@@ -187,7 +209,7 @@ when the declared specification requires a GPU.
 | Install or repair the VS Code extension list | `server-vscode-extensions` |
 | Paste, inspect or edit your API keys | `server-secrets` |
 | Add the optional ML environment to a host that has the foundation | `server-profile install ml` |
-| Preview a plan without touching anything | `server-provision --plan … --dry-run` |
+| Preview a plan without touching anything | `./server-provision.sh --plan … --dry-run` (needs no root) |
 
 > [!WARNING]
 > **Never execute a `provision-plan*.sh` file directly.** A plan is a data file,
@@ -197,9 +219,13 @@ when the declared specification requires a GPU.
 > one on its own exits with that reminder.
 
 `server-bootstrap.sh` inside the archive is the inner foundation installer.
-`server-provision.sh` verifies the archive, unpacks it, runs that script, runs the
-acceptance check, and only then installs workload bundles in plan order — which
-is why it, not the inner script, is the entry point on a new machine.
+`server-provision.sh` verifies the archive, unpacks it, runs that script, runs
+the acceptance check, and only then installs each profile and workload bundle in
+plan order, which is why it, not the inner script, is the entry point on a new
+machine. It deletes a local archive and its `.sha256` only when the plan sets
+`DELETE_ARCHIVES_AFTER_SUCCESS=1` (the foundation plan does; the full and `ml`
+plans do not), and only once that archive's own installation has succeeded: the
+bootstrap archive right after the bootstrap.
 
 ## Adding workload bundles
 
@@ -218,9 +244,6 @@ server-bootstrap-2.2.3.tar.gz.sha256
 
 Registering a bundle whose archive is not actually present aborts the run *after*
 the bootstrap has already installed, so add the files first.
-
-The provisioner installs the bootstrap, runs `server-accept`, installs each
-registered bundle in order, and deletes local archives only after success.
 
 ## Customizing what gets installed
 
@@ -251,6 +274,9 @@ the AI CLIs — are deliberately absent from the manifest. Adding one of them to
 it would install a second, unpinned copy.
 
 ### Keeping the pinned versions fresh
+
+These are maintainer tools. Run them from a git checkout or an extracted
+release archive; the bootstrap does not install them on the provisioned host.
 
 ```bash
 tools/refresh-pins.sh            # report drift against upstream
@@ -416,7 +442,9 @@ aikeys on       # reload them
 <br>
 
 The old single-add-on environment variables remain supported by
-`server-bootstrap.sh`. New multi-bundle setups should use a provision plan.
+`server-bootstrap.sh`; they are documented under
+[Legacy one-add-on interface](docs/CONFIGURATION.md#legacy-one-add-on-interface).
+New multi-bundle setups should use a provision plan.
 
 </details>
 
