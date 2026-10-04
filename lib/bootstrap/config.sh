@@ -2,7 +2,7 @@
 # Bootstrap defaults. All values can be overridden through the environment.
 
 bootstrap_load_config() {
-    BOOTSTRAP_VERSION="2.3.1"
+    BOOTSTRAP_VERSION="2.3.2"
 
     WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
     TOOLS_ROOT="${TOOLS_ROOT:-$WORKSPACE_ROOT/tools}"

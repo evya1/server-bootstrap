@@ -31,8 +31,8 @@ export DELETE_ARCHIVES_AFTER_SUCCESS=0
 export INSTALL_UV=1
 
 register_bootstrap \
-  "./server-bootstrap-2.3.1.tar.gz" \
-  "./server-bootstrap-2.3.1.tar.gz.sha256"
+  "./server-bootstrap-2.3.2.tar.gz" \
+  "./server-bootstrap-2.3.2.tar.gz.sha256"
 
 # The ml profile ships inside that archive, with its frozen locks: no separate
 # URL, version, archive or checksum. auto installs the CPU backend on a host

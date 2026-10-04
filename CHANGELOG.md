@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-Nothing merged since 2.3.1.
+Nothing merged since 2.3.2.
 
-## 2.3.1
+## 2.3.2
 
 *Released 2026-10-05.*
 
