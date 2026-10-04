@@ -22,12 +22,14 @@ root. It installs the complete built-in stack: the foundation
 [listed below](#what-the-run-installs), including the ngrok CLI, and the
 optional `ml` environment.
 
-It needs root (fresh hosts and containers often provide a root shell and ship
-without `sudo`; put `sudo` before `./server-provision.sh` only if you are not
-root), Ubuntu 24.04 on x86-64 or ARM64, which the provisioner checks before it
-installs anything, and outbound HTTPS. An NVIDIA driver is optional, and the
-bootstrap never installs, upgrades, or removes one. Disk needs are in the notes
-below the block.
+Requirements: Ubuntu 24.04 on x86-64 or ARM64 (the provisioner checks this
+before it installs anything), root, and outbound HTTPS. Fresh hosts and
+containers often give you a root shell and no `sudo`; put `sudo` before
+`./server-provision.sh` only if you are not root. An NVIDIA driver is optional
+and is not part of the install; an apt plan that would change an installed
+driver or CUDA package is refused
+([details](docs/CONFIGURATION.md#nvidia-driver-and-cuda-packages)). Disk needs
+are in the notes below the block.
 
 > [!IMPORTANT]
 > No published release ships this block's plan yet. v2.2.3, the latest
@@ -63,13 +65,14 @@ That is the whole installation:
   SHA-256.
 - A bare container image such as `ubuntu:24.04` has no `wget` or CA
   certificates. The lines before the download install just those two, and only
-  when one is missing.
-- They simulate the install first and stop without installing if the
-  simulation fails or if apt's plan would also touch an NVIDIA driver or CUDA
-  package, the same packages the provisioner protects. They never remove a
-  package (`--no-remove`).
+  when one is missing. They simulate the install first and stop without
+  installing if the simulation fails or if apt's plan would also touch an
+  NVIDIA driver or CUDA package, the same packages the provisioner protects.
+  They never remove a package (`--no-remove`).
 - The foundation takes roughly five minutes, most of it `apt`; the `ml`
   environment then adds its own download, several gigabytes on a CUDA host.
+
+About the full plan:
 
 - The full plan enables every configurable installer and every built-in
   profile. `ml` uses `--backend auto`: CPU on a host without an NVIDIA GPU,
@@ -239,8 +242,8 @@ server-bootstrap-2.2.3.tar.gz.sha256
 <workload>-<version>.tar.gz.sha256
 ```
 
-Bundles install in registration order, after acceptance; the plan's own
-comments explain what happens when a registered archive is missing.
+Registering a bundle whose archive is not actually present aborts the run *after*
+the bootstrap has already installed, so add the files first.
 
 ## Customizing what gets installed
 
