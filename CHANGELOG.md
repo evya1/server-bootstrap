@@ -2,7 +2,21 @@
 
 ## Unreleased
 
-Nothing merged since 2.3.0.
+### Fixed
+
+- **The bootstrap waits for another apt or dpkg process on a bare image.** Its
+  lock wait polled `fuser`, which is psmisc, and a stock `ubuntu:24.04` image
+  has none until the bootstrap installs it, so the wait was skipped without a
+  word, and the first `apt-get update` gave up after about 15 seconds of
+  retries. Even with psmisc installed, `fuser` stopped seeing a running
+  `apt-get` in a container a few seconds after it started. The holder is now
+  found by its lock, as apt itself finds it (fcntl `F_GETLK`, through the
+  `perl` every Ubuntu has), on all four apt and dpkg lock files, before every
+  apt transaction and each `apt-get update` attempt, and logged by PID and
+  name. The wait is one budget of 600 seconds for the run, after which it
+  fails naming the holder. ([#79][])
+
+[#79]: https://github.com/evya1/server-bootstrap/issues/79
 
 ## 2.3.0
 

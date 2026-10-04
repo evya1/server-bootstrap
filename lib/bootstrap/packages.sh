@@ -1,14 +1,55 @@
 #!/usr/bin/env bash
 
+# --- Other apt and dpkg processes -------------------------------------------
+# apt-get and dpkg give up at once on a lock another process holds. At first
+# boot one often does: cloud-init, apt-daily, or a provider's container
+# entrypoint installing its own packages. These are the files they lock: the
+# dpkg frontend and database, the package lists, and the downloaded archives.
+BOOTSTRAP_APT_LOCK_FILES=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+    /var/lib/apt/lists/lock /var/cache/apt/archives/lock)
+# Seconds one run waits for them in all, however many transactions are left.
+BOOTSTRAP_APT_LOCK_WAIT=600
+BOOTSTRAP_APT_WAITED=0
+
+# Prints "PID (COMMAND) holds FILE" for each of those files another process
+# has locked. apt and dpkg take fcntl write locks, and F_GETLK names the holder
+# without taking the lock. The wait used fuser before: that is psmisc, which a
+# bare ubuntu:24.04 image lacks, and even installed it stops seeing a running
+# apt-get in a container a few seconds in, while F_GETLK still names it.
+# perl-base is essential on Ubuntu, and struct flock has this one layout on
+# both supported architectures, x86-64 and arm64.
+bootstrap_apt_lock_holders() {
+    perl -MFcntl=F_GETLK,F_WRLCK,F_UNLCK,SEEK_SET -e '
+        for my $file (@ARGV) {
+            open(my $fh, "<", $file) or next;
+            my $lock = pack("s s x4 q q l x4", F_WRLCK, SEEK_SET, 0, 0, 0);
+            fcntl($fh, F_GETLK, $lock) or next;
+            my ($type, $pid) = (unpack("s s x4 q q l x4", $lock))[0, 4];
+            next if $type == F_UNLCK;
+            my $name = "?";
+            if (open(my $comm, "<", "/proc/$pid/comm")) { $name = <$comm> // "?"; chomp $name; }
+            print "$pid ($name) holds $file\n";
+        }' "${BOOTSTRAP_APT_LOCK_FILES[@]}"
+}
+
 bootstrap_wait_for_apt() {
-    local waited=0
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 \
-        || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-        (( waited == 0 )) && sb_log "waiting for another apt/dpkg process"
-        sleep 3; waited=$((waited + 3))
-        (( waited < 600 )) || { sb_warn "apt lock held longer than 600s"; return 1; }
+    local holders logged=0
+    if ! command -v perl >/dev/null 2>&1; then
+        sb_warn "perl is missing, so other apt and dpkg processes are not waited for"
+        return 0
+    fi
+    while holders="$(bootstrap_apt_lock_holders)"; [[ -n "$holders" ]]; do
+        if (( BOOTSTRAP_APT_WAITED >= BOOTSTRAP_APT_LOCK_WAIT )); then
+            sb_warn "apt lock held longer than ${BOOTSTRAP_APT_LOCK_WAIT}s: ${holders//$'\n'/; }"
+            return 1
+        fi
+        (( logged )) || { sb_log "waiting for another apt/dpkg process: ${holders//$'\n'/; }"; logged=1; }
+        sleep 3; BOOTSTRAP_APT_WAITED=$((BOOTSTRAP_APT_WAITED + 3))
     done
 }
+
+# apt-get update does not wait for the lists lock, so each attempt waits first.
+bootstrap_apt_update() { bootstrap_wait_for_apt && apt-get update; }
 
 # --- NVIDIA driver and CUDA packages ---------------------------------------
 # The bootstrap does not run an apt transaction whose plan would upgrade,
@@ -48,10 +89,14 @@ bootstrap_apt_protected_changes() {
 # simulation succeeded and changes no installed NVIDIA driver or CUDA package: a
 # failed attempt can leave apt with a different plan for the next one. A
 # refusal or a failed simulation ends the retries before the real attempt.
+# Each attempt first waits for other apt and dpkg processes: a simulation takes
+# no lock and would read a half-finished transaction, and the real attempt would
+# fail on its lock.
 # Returns BOOTSTRAP_APT_REFUSED for a refusal and 1 for any other failure.
 bootstrap_apt_guarded() {
     local attempts="$1" plan changes n=1 delay=5; shift
     while true; do
+        bootstrap_wait_for_apt || return 1
         if ! plan="$(apt-get -s "$@" 2>&1)"; then
             sb_warn "apt-get $* cannot be resolved:"
             printf '%s\n' "$plan" | grep -E '^(E|W):' | head -n 5 >&2 || true
@@ -189,7 +234,7 @@ bootstrap_packages() {
     bootstrap_wait_for_apt
     bootstrap_dpkg_recover
     bootstrap_apt_repair
-    sb_retry 3 apt-get update
+    sb_retry 3 bootstrap_apt_update
 
     # Every required package must end up installed. The per-package pass after
     # a failed batch installs what it can and names exactly what is missing.
