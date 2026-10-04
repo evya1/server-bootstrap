@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **The install blocks wait for another apt process.** On an image without
+  `wget` or a CA bundle, such as the stock `ubuntu:24.04` image, the lines
+  before the download run apt themselves, and every apt call gave up at once
+  on a lock another process held. Used as a container's startup script on a
+  GPU cloud host whose entrypoint runs `apt update` and `apt install` at the
+  same moment, the README's first block stopped with exit 100 and installed
+  nothing. Now each `apt-get update` attempt first waits up to 10 seconds
+  for dpkg's locks (`apt-get -o DPkg::Lock::Timeout=10 check`), and a failed
+  check or update, as when another process holds the package lists, which
+  apt never waits for, is retried 5 seconds later, 40 times at most: about
+  ten minutes. Waiting for dpkg's lock first also keeps the update from
+  running while the other process downloads packages, which the stock
+  image's `docker-clean` hook would then delete under it. The install waits
+  up to ten minutes for dpkg's locks (`-o DPkg::Lock::Timeout=600`). The
+  simulation, the NVIDIA/CUDA refusal, `--no-remove` and stopping at the
+  first failure are unchanged, in the README's two blocks and the ML
+  guide's. ([#79][])
+
 - **The bootstrap waits for another apt or dpkg process on a bare image.** Its
   lock wait polled `fuser`, which is psmisc, and a stock `ubuntu:24.04` image
   has none until the bootstrap installs it, so the wait was skipped without a

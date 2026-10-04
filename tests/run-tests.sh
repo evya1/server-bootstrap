@@ -5220,14 +5220,25 @@ def steps(body):
 # against the provisioner's own protected pattern, so a change there reaches
 # this line too. The simulation is captured before it is filtered: a pasted
 # block has no pipefail, so a pipe into awk would hide its failure.
+# Another apt process may hold the lock when the block runs, as a provider's
+# container entrypoint does at boot when the block is the startup script (#79).
+# apt-get update never waits for the lists lock, so a failed update is retried
+# 5 s later, 40 times at most. Before each attempt apt-get check waits up to
+# 10 s for dpkg's locks (DPkg::Lock::Timeout): an update while another apt
+# install downloads would let the stock image's docker-clean hook delete that
+# install's packages. The install waits up to 600 s for dpkg's locks; the
+# simulation takes no lock.
 PROTECTED = re.search(r"^BOOTSTRAP_APT_PROTECTED_PATTERN='([^']*)'$",
                       pathlib.Path("lib/bootstrap/packages.sh").read_text(), re.M).group(1)
-PREREQ = ("command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update "
+PREREQ = ("command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; "
+          "until apt-get -o DPkg::Lock::Timeout=10 check >/dev/null && apt-get update; "
+          "do tries=$((tries + 1)); [ \"$tries\" -lt 40 ] || break; sleep 5; done "
+          "&& [ \"$tries\" -lt 40 ] "
           "&& plan=\"$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)\" "
           "&& printf '%s\\n' \"$plan\" | awk -v p='" + PROTECTED + "' "
           "'/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, \"\", n); if (n ~ p) "
           "{ print \"not installing wget: apt would also change \" n; s = 1 } } END { exit s }' "
-          "&& DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; }")
+          "&& DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove wget ca-certificates; }")
 
 def expected(plan):
     return [
@@ -5288,13 +5299,37 @@ fi
 # nothing is installed on this host.
 if [[ -s "$RXB/prereq.sh" ]]; then
     PQ="$TMP/readme-prereq"; mkdir -p "$PQ/bare" "$PQ/full"
-    printf '#!/bin/bash\nprintf "%%s|%%s\\n" "${DEBIAN_FRONTEND:-}" "$*" >> "%s/apt.log"\n[[ "$1" != -s ]] || { printf "%%s\\n" "$(< "%s/plan")"; exit "$(< "%s/sim-exit")"; }\n' "$PQ" "$PQ" "$PQ" > "$PQ/bare/apt-get"
+    # Builtins only: PATH holds nothing else. Each call is logged as
+    # DEBIAN_FRONTEND|arguments. update fails, as when another process holds
+    # the lists lock, until more than update-fails updates have been made;
+    # check fails likewise, as when dpkg's lock stays held past its wait, until
+    # more than check-fails checks; a simulation prints plan and exits sim-exit.
+    cat > "$PQ/bare/apt-get" <<'STUB'
+#!/bin/bash
+pq="${0%/*}/.."
+printf '%s|%s\n' "${DEBIAN_FRONTEND:-}" "$*" >> "$pq/apt.log"
+held() {  # KIND LINE: is this call still within KIND-fails calls?
+    local fails=0 calls=0 line
+    [[ ! -f "$pq/$1-fails" ]] || fails="$(< "$pq/$1-fails")"
+    while IFS= read -r line; do [[ "$line" != "$2" ]] || calls=$((calls + 1)); done < "$pq/apt.log"
+    (( calls <= fails ))
+}
+case "$*" in
+    update) ! held update '|update' || { echo "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1 (apt)" >&2; exit 100; } ;;
+    *' check') ! held check "|$*" || { echo "E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?" >&2; exit 100; } ;;
+    '-s '*) printf '%s\n' "$(< "$pq/plan")"; exit "$(< "$pq/sim-exit")" ;;
+esac
+exit 0
+STUB
+    printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "${0%%/*}/../sleep.log"\n' > "$PQ/bare/sleep"
     printf '0\n' > "$PQ/sim-exit"
     cp "$PQ/bare/apt-get" "$PQ/full/apt-get"; printf '#!/bin/sh\nexit 0\n' > "$PQ/full/wget"
-    chmod 0755 "$PQ/bare/apt-get" "$PQ/full/apt-get" "$PQ/full/wget"
+    chmod 0755 "$PQ/bare/apt-get" "$PQ/bare/sleep" "$PQ/full/apt-get" "$PQ/full/wget"
     ln -s "$(command -v awk)" "$PQ/bare/awk"; ln -s "$(command -v awk)" "$PQ/full/awk"
+    pq_check='|-o DPkg::Lock::Timeout=10 check'
+    pq_wait="$pq_check"$'\n''|update'
     pq_sim='|-s install --no-install-recommends --no-remove wget ca-certificates'
-    pq_real='noninteractive|install -y --no-install-recommends --no-remove wget ca-certificates'
+    pq_real='noninteractive|-o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove wget ca-certificates'
     # A plain bare-image plan: a dependency upgrade and two fresh installs.
     printf '%s\n' 'Inst libssl3t64 [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-updates [amd64])' \
         'Inst ca-certificates (20240203 Ubuntu:24.04/noble [all])' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])' \
@@ -5302,7 +5337,7 @@ if [[ -s "$RXB/prereq.sh" ]]; then
         > "$PQ/plan"
     # CI runners export DEBIAN_FRONTEND; unset it so only what the line sets is seen.
     env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
-    [[ "$pq_code" == 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "|update"$'\n'"$pq_sim"$'\n'"$pq_real" ]] \
+    [[ "$pq_code" == 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "$pq_wait"$'\n'"$pq_sim"$'\n'"$pq_real" ]] \
         && ok "without wget, the README's prerequisite line simulates, then installs only wget and ca-certificates, removing nothing" \
         || bad "README prerequisite line without wget (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
     rm -f "$PQ/apt.log"
@@ -5311,7 +5346,7 @@ if [[ -s "$RXB/prereq.sh" ]]; then
     for pq_plan in '' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])'; do
         printf '%s\n' "$pq_plan" > "$PQ/plan"; printf '100\n' > "$PQ/sim-exit"
         env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
-        [[ "$pq_code" != 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "|update"$'\n'"$pq_sim" ]] \
+        [[ "$pq_code" != 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "$pq_wait"$'\n'"$pq_sim" ]] \
             && ok "the README's prerequisite line runs no real install after a failed simulation ($([[ -n "$pq_plan" ]] && echo 'with a harmless plan' || echo 'no plan'))" \
             || bad "README prerequisite line after a failed simulation (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
         rm -f "$PQ/apt.log"
@@ -5323,11 +5358,39 @@ if [[ -s "$RXB/prereq.sh" ]]; then
         printf '%s\n' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])' "$pq_line" > "$PQ/plan"
         pq_out="$(env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" 2>&1)"; pq_code=$?
         pq_name="${pq_line#* }"; pq_name="${pq_name%% *}"; pq_name="${pq_name%%:*}"
-        [[ "$pq_code" != 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "|update"$'\n'"$pq_sim" \
+        [[ "$pq_code" != 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "$pq_wait"$'\n'"$pq_sim" \
             && "$pq_out" == *"apt would also change $pq_name"* ]] \
             && ok "the README's prerequisite line installs nothing when apt would also change $pq_name (${pq_line%% *})" \
             || bad "README prerequisite line with $pq_name in apt's plan (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
         rm -f "$PQ/apt.log"
+    done
+    # Another apt process holds a lock, as a provider's container entrypoint
+    # can while the block runs as the startup script (#79). Each update attempt
+    # comes after a check, and a failed check or update is retried 5 s later:
+    # the lists lock held for two updates, dpkg's lock held past two checks.
+    pq_lock() { if [[ "$1" == update ]]; then echo "the package lists lock"; else echo "dpkg's lock"; fi; }
+    printf '%s\n' 'Inst wget (1.21.4-1ubuntu4.1 Ubuntu:24.04/noble-updates [amd64])' > "$PQ/plan"
+    for pq_kind in update check; do
+        printf '2\n' > "$PQ/$pq_kind-fails"
+        env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
+        if [[ "$pq_kind" == update ]]; then pq_retries="$pq_wait"$'\n'"$pq_wait"; else pq_retries="$pq_check"$'\n'"$pq_check"; fi
+        [[ "$pq_code" == 0 && "$(cat "$PQ/apt.log" 2>/dev/null)" == "$pq_retries"$'\n'"$pq_wait"$'\n'"$pq_sim"$'\n'"$pq_real" \
+            && "$(cat "$PQ/sleep.log" 2>/dev/null)" == "5"$'\n'"5" ]] \
+            && ok "the README's prerequisite line retries 5 s later while another process holds $(pq_lock "$pq_kind"), checking dpkg's lock before every update, then installs" \
+            || bad "README prerequisite line with $(pq_lock "$pq_kind") held twice (exit $pq_code): $(tr '\n' ' ' < "$PQ/apt.log" 2>/dev/null)"
+        rm -f "$PQ/apt.log" "$PQ/sleep.log" "$PQ/$pq_kind-fails"
+    done
+    # Held for good, it gives up after 40 attempts, about ten minutes with
+    # each check's own wait, and runs no simulation or install.
+    for pq_kind in update check; do
+        printf '1000\n' > "$PQ/$pq_kind-fails"
+        env -u DEBIAN_FRONTEND PATH="$PQ/bare" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
+        pq_counts="checks=$(grep -cxF -- "$pq_check" "$PQ/apt.log") updates=$(grep -cxF '|update' "$PQ/apt.log") others=$(grep -cvxF -e "$pq_check" -e '|update' "$PQ/apt.log") sleeps=$(grep -c . "$PQ/sleep.log")"
+        if [[ "$pq_kind" == update ]]; then pq_want="checks=40 updates=40 others=0 sleeps=39"; else pq_want="checks=40 updates=0 others=0 sleeps=39"; fi
+        [[ "$pq_code" != 0 && "$pq_counts" == "$pq_want" ]] \
+            && ok "the README's prerequisite line gives up after 40 attempts with $(pq_lock "$pq_kind") held for good, with no simulation or install" \
+            || bad "README prerequisite line with $(pq_lock "$pq_kind") held for good (exit $pq_code): $pq_counts"
+        rm -f "$PQ/apt.log" "$PQ/sleep.log" "$PQ/$pq_kind-fails"
     done
     if [[ -s /etc/ssl/certs/ca-certificates.crt ]]; then
         env -u DEBIAN_FRONTEND PATH="$PQ/full" /bin/bash "$RXB/prereq.sh" > /dev/null 2>&1; pq_code=$?
@@ -5345,14 +5408,19 @@ fi
 # file), so the prerequisite runs; apt-get, wget, sha256sum and the
 # provisioner are stubs that log their calls, so nothing is downloaded or
 # installed. A failed simulation must stop the block before wget; a successful
-# one must still reach the provisioner. Each run gets a fresh home.
+# one must still reach the provisioner. apt-get update fails while fewer than
+# PB_FAILS+1 updates have run, as when another process holds the lists lock:
+# the block must check dpkg's lock before every update, retry 5 s later and go
+# on, or give up after 40 tries before wget. Each run gets a fresh home.
 PB="$TMP/pasted-blocks"; mkdir -p "$PB/stub"
 cat > "$PB/stub/apt-get" <<'STUB'
 #!/bin/sh
 echo "apt-get $*" >> "$PB_LOG"
 [ "$1" = -s ] && exit "$PB_SIM"
+[ "$*" = update ] && [ "$(grep -c '^apt-get update$' "$PB_LOG")" -le "$PB_FAILS" ] && exit 100
 exit 0
 STUB
+printf '#!/bin/sh\necho "sleep $*" >> "$PB_LOG"\n' > "$PB/stub/sleep"
 cat > "$PB/stub/wget" <<'STUB'
 #!/bin/sh
 echo wget >> "$PB_LOG"
@@ -5386,16 +5454,17 @@ while read -r pb_block pb_where pb_ca; do
     [[ "$pb_ca" == 1 ]] || { bad "pasted block $pb_where: the CA bundle path appears $pb_ca times, not once"; continue; }
     for pb_sh in "${pb_shells[@]}"; do
         pb_result=""
-        for pb_sim in 100 0; do
+        for pb_case in 100:0 0:0 0:2 0:1000; do
+            pb_sim="${pb_case%%:*}"; pb_fails="${pb_case#*:}"
             pb_home="$(mktemp -d "$PB/home.XXXXXX")"; pb_log="$pb_home.log"; : > "$pb_log"
-            ( cd "$pb_home" && env PB_LOG="$pb_log" PB_SIM="$pb_sim" PB_HOME="$pb_home" PATH="$PB/stub:/usr/bin:/bin" \
+            ( cd "$pb_home" && env PB_LOG="$pb_log" PB_SIM="$pb_sim" PB_FAILS="$pb_fails" PB_HOME="$pb_home" PATH="$PB/stub:/usr/bin:/bin" \
                 "$pb_sh" -c 'cd() { if [ "$#" = 1 ] && [ "$1" = /root ]; then command cd "$PB_HOME"; else command cd "$@"; fi; }
                              . "$1"' _ "$PB/$pb_block.sh" ) > "$pb_home.out" 2>&1
             pb_code=$?
-            pb_result+="sim=$pb_sim exit=$pb_code wget=$(grep -c '^wget' "$pb_log") provisioner=$(grep -c '^provisioner' "$pb_log") install=$(grep -c '^apt-get install -y' "$pb_log"); "
+            pb_result+="sim=$pb_sim fails=$pb_fails exit=$pb_code checks=$(grep -cxF 'apt-get -o DPkg::Lock::Timeout=10 check' "$pb_log") updates=$(grep -c '^apt-get update$' "$pb_log") sleeps=$(grep -c '^sleep 5$' "$pb_log") wget=$(grep -c '^wget' "$pb_log") provisioner=$(grep -c '^provisioner' "$pb_log") install=$(grep -c '^apt-get .*install -y' "$pb_log"); "
         done
-        [[ "$pb_result" =~ ^"sim=100 exit=100 wget=0 provisioner=0 install=0; sim=0 exit=0 wget=1 provisioner="[12]" install=1; "$ ]] \
-            && ok "pasted block $pb_where under $pb_sh: a failed apt simulation stops it before wget; a successful one reaches the provisioner" \
+        [[ "$pb_result" =~ ^"sim=100 fails=0 exit=100 checks=1 updates=1 sleeps=0 wget=0 provisioner=0 install=0; sim=0 fails=0 exit=0 checks=1 updates=1 sleeps=0 wget=1 provisioner="[12]" install=1; sim=0 fails=2 exit=0 checks=3 updates=3 sleeps=2 wget=1 provisioner="[12]" install=1; sim=0 fails=1000 exit=1 checks=40 updates=40 sleeps=39 wget=0 provisioner=0 install=0; "$ ]] \
+            && ok "pasted block $pb_where under $pb_sh: a failed apt simulation stops it before wget; a held lists lock is retried, then given up on before wget; a successful run reaches the provisioner" \
             || bad "pasted block $pb_where under $pb_sh: $pb_result"
     done
 done <<< "$pb_blocks"

@@ -28,11 +28,13 @@ version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
 V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
-command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \
+  until apt-get -o DPkg::Lock::Timeout=10 check >/dev/null && apt-get update; do tries=$((tries + 1)); [ "$tries" -lt 40 ] || break; sleep 5; done \
+  && [ "$tries" -lt 40 ] \
   && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
   && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
     '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; } \
+  && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove wget ca-certificates; } \
   && wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.ml.example.sh" \
@@ -46,7 +48,8 @@ command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt
 
 Each command runs only if the one before it succeeded. On a bare image without
 `wget` or CA certificates, the lines before the download install just those
-two, as in the [README](../README.md#install), and stop without installing if
+two, as in the [README](../README.md#install), waiting first for any other
+apt process to finish, and stop without installing if
 the simulation fails or if apt's plan would also touch an NVIDIA driver or
 CUDA package. The dry run
 lists the archive and `ml --backend auto` and changes nothing. The real run
