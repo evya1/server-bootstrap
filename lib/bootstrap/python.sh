@@ -21,6 +21,13 @@ bootstrap_install_base_python_launcher() {
     fi
 }
 
+# Write the configured activation path as one literal Bash word.
+bootstrap_write_base_python_env() {  # venv, target
+    # shellcheck disable=SC2016  # SHELL is expanded when the wrapper runs
+    printf '#!/usr/bin/env bash\nsource %q\nexec "${SHELL:-/bin/bash}"\n' \
+        "$1/bin/activate" > "$2" && chmod 0755 "$2"
+}
+
 bootstrap_base_python() {
     NUMPY_VERSION="(not installed)"
     [[ "$INSTALL_BASE_PYTHON_ENV" == 1 ]] || return 0
@@ -34,12 +41,7 @@ bootstrap_base_python() {
         sb_retry 3 "$BASE_PYTHON_ENV/bin/python" -m pip install $BASE_PYTHON_PACKAGES
     fi
     bootstrap_install_base_python_launcher "$BASE_PYTHON_ENV" /usr/local/bin/base-python
-    cat > /usr/local/bin/base-python-env <<PYEOF
-#!/usr/bin/env bash
-source "$BASE_PYTHON_ENV/bin/activate"
-exec "\${SHELL:-/bin/bash}"
-PYEOF
-    chmod 0755 /usr/local/bin/base-python-env
+    bootstrap_write_base_python_env "$BASE_PYTHON_ENV" /usr/local/bin/base-python-env
     NUMPY_VERSION="$("$BASE_PYTHON_ENV/bin/python" -c 'import numpy; print(numpy.__version__)' 2>/dev/null || echo unknown)"
     sb_log "base Python environment ready (numpy $NUMPY_VERSION)"
 }

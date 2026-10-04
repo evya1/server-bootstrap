@@ -11,6 +11,25 @@
   and ARM64, exercising those integrations and the README install block.
   ([#80](https://github.com/evya1/server-bootstrap/issues/80))
 
+- **The release manifest is generated and compared in both build passes.**
+  Its profile metadata and archive hashes are included in the reproducibility
+  check, and it is re-hashed after scanning along with the archives. A
+  host-specific manifest field or later tampering fails the build.
+  ([#82](https://github.com/evya1/server-bootstrap/issues/82))
+
+- **Generated activation and Claude wrappers take configured paths literally.**
+  Bash quoting preserves spaces, dollar signs, quotes, backticks and backslashes
+  in `BASE_PYTHON_ENV` and `AI_CLI_PREFIX`; runtime tests check activation,
+  argument forwarding, exit status and the disabled auto-updater policy.
+  ([#82](https://github.com/evya1/server-bootstrap/issues/82))
+
+- **Release archive modes no longer depend on the builder's umask.** All four
+  archives use mode 0644 or 0755 according to Git's recorded executable set,
+  including when working-tree execute bits differ. An unpacked source bundle
+  preserves that normalised set when rebuilt. The suite compares builds from
+  umask-002 and umask-022 checkouts and checks every archived file's mode.
+  ([#81](https://github.com/evya1/server-bootstrap/issues/81))
+
 - **Rejected bundles clean up restrictive archive modes.** Temporary extraction
   directories regain owner read, write and search access before removal, so
   an unprivileged caller leaves no `server-bundle.*` tree behind when an

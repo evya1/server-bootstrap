@@ -367,10 +367,9 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 - Before each real apt attempt the bootstrap simulates it and refuses a plan
   that would change an installed NVIDIA driver or CUDA package. Another apt
   process can still change the plan between simulation and execution.
-- Release archives are byte-reproducible and verified twice on every build:
-  byte-identical for builders with the same umask. CI builds with umask 022
-  (the runner default); a builder with a different umask gets different mode
-  bits in the archives.
+- Release archives are byte-reproducible and verified twice on every build.
+  File modes are normalised to 0644 or 0755 from Git's executable flags, so
+  archive bytes do not depend on the checkout permissions or builder's umask.
 - Release staging trees and every extracted archive are secret-scanned, and
   `release/dist` is scanned again immediately before upload. It must then hold
   exactly the expected assets, each verified, or nothing is published.

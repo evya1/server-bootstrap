@@ -88,8 +88,29 @@ echo "==> Release file set: ${#RELEASE_FILES[@]} files (source: $RELEASE_SET_ORI
 echo "==> Refreshing in-bundle checksums"
 bash "$ROOT/release/release-files.sh" write
 
-# Every artifact a release publishes, built by one function so that each
-# reproducibility pass produces all of them. The source zip used to be built
+# Git records only regular-file modes 100644 and 100755. Derive archive modes
+# from that index, so checkout permissions and the builder's umask cannot
+# change them. An unpacked source bundle has no index; its executable bits
+# were already normalised by the build that produced it.
+declare -A RELEASE_MODES=()
+if [[ "$RELEASE_SET_ORIGIN" == git ]]; then
+    while IFS= read -r -d '' entry; do
+        file="${entry#*$'\t'}"
+        case "${entry%% *}" in
+            100644) RELEASE_MODES["$file"]=0644 ;;
+            100755) RELEASE_MODES["$file"]=0755 ;;
+            *) echo "ERROR: unsupported Git file mode: $file" >&2; exit 1 ;;
+        esac
+    done < <(git ls-files --stage -z)
+else
+    for file in "${RELEASE_FILES[@]}"; do
+        RELEASE_MODES["$file"]=0644
+        [[ ! -x "$file" ]] || RELEASE_MODES["$file"]=0755
+    done
+fi
+
+# All four archives are built by one function so each reproducibility pass
+# produces the same set. The source zip used to be built
 # once, after the comparison, which left a published asset outside the
 # reproducibility gate, the manifest, the human summary and the final
 # re-verification -- bytes could be appended to it after creation and the build
@@ -105,8 +126,13 @@ bash "$ROOT/release/release-files.sh" write
 build_archives() {
     local output="$1" outdir stage source_stage file
     outdir="$(mkdir -p "$output" && cd "$output" && pwd -P)"
+    source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
+    for file in "${RELEASE_FILES[@]}"; do
+        install -D -m "${RELEASE_MODES[$file]}" "$file" "$source_stage/$NAME/$file"
+    done
     tar --sort=name --mtime="@$SOURCE_DATE" --owner=0 --group=0 --numeric-owner \
         --transform "s,^,$NAME-$VERSION/," -cf "$outdir/$NAME-$VERSION.tar" \
+        -C "$source_stage/$NAME" \
         --null -T <(printf '%s\0' "${RELEASE_FILES[@]}")
     gzip -n -9 -c "$outdir/$NAME-$VERSION.tar" > "$outdir/$NAME-$VERSION.tar.gz"
     stage="$(scratch_dir)"
@@ -115,15 +141,8 @@ build_archives() {
     ( cd "$stage" && find . -type f | LC_ALL=C sort | TZ=UTC zip -X -q -@ "$outdir/$NAME-$VERSION.zip" )
     rm -rf "$stage"
 
-    # Source zip: a stable top-level directory, excluding built releases. The
-    # mode is copied from the working tree rather than left to install's 0755
-    # default: the tar stores each file's real mode, so anything else makes a
-    # rebuild from an unpacked source bundle differ from a rebuild from a
-    # checkout in every file's permission bits and nothing else.
-    source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
-    for file in "${RELEASE_FILES[@]}"; do
-        install -D -m "$(stat -c '%a' -- "$file")" "$file" "$source_stage/$NAME/$file"
-    done
+    # The source zip uses the same normalised files under its stable top-level
+    # directory. Rebuilding an unpacked source bundle preserves these modes.
     find "$source_stage" -exec touch -d "@$SOURCE_DATE" {} +
     # Scanned before the zip is written: a finding must stop the build rather
     # than produce an artifact that is then quarantined.
@@ -132,23 +151,48 @@ build_archives() {
     rm -rf "$source_stage"
 }
 
+build_manifest() {
+    local output="$1" sha_tar sha_tgz sha_zip sha_src PROFILES_JSON
+    sha_tar="$(artifact_sha256 "$output" "$NAME-$VERSION.tar")" || return
+    sha_tgz="$(artifact_sha256 "$output" "$NAME-$VERSION.tar.gz")" || return
+    sha_zip="$(artifact_sha256 "$output" "$NAME-$VERSION.zip")" || return
+    sha_src="$(artifact_sha256 "$output" "$NAME-$VERSION-source.zip")" || return
+    # Generate the profile metadata in each pass too, from the shipped files.
+    PROFILES_JSON="$(bash "$ROOT/release/release-assets.sh" profiles)"
+    cat > "$output/$NAME-$VERSION-release-manifest.json" <<JSON
+{
+  "name": "$NAME",
+  "version": "$VERSION",
+  "tar_sha256": "$sha_tar",
+  "tar_gz_sha256": "$sha_tgz",
+  "zip_sha256": "$sha_zip",
+  "source_zip_sha256": "$sha_src",
+  "tests": "$TESTS_STATUS",
+  "release_scan": "$SCAN_STATUS",
+  "reproducible": true,
+  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets", "server-profile"],
+  "profiles": $PROFILES_JSON
+}
+JSON
+}
+
 rm -rf "$DIST"; mkdir -p "$DIST"
-# The four release archives are hashed in both passes and compared. Naming them
-# in one list is what stops a new archive being added to the release without
-# being added to the gate -- which is how the source zip ended up outside it.
-#
-# Scope, stated exactly: this list is the four archives, not every asset
-# release.yml uploads (release/release-assets.sh upload). The others -- the
-# sidecars, the manifest and the standalone first-run files -- are derived from
-# or describe these, and are deliberately not double-built. See #47.
-ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" "$NAME-$VERSION-source.zip")
+# Compare the four archives and their release manifest in both passes. The
+# checksum sidecars and standalone first-run copies are verified separately by
+# release-assets.sh against these files and the tracked source.
+ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" \
+    "$NAME-$VERSION-source.zip" "$NAME-$VERSION-release-manifest.json")
+
+artifact_sha256() {  # directory, artifact name
+    [[ -f "$1/$2" ]] || { echo "ERROR: build produced no $2" >&2; return 1; }
+    sha256sum "$1/$2" | awk '{print $1}'
+}
 
 hash_artifacts() {  # directory -> "<name> <sha256>" per line, sorted by name
-    local dir="$1" artifact
+    local dir="$1" artifact digest
     for artifact in "${ARTIFACTS[@]}"; do
-        [[ -f "$dir/$artifact" ]] \
-            || { echo "ERROR: build produced no $artifact" >&2; exit 1; }
-        printf '%s %s\n' "$artifact" "$(sha256sum "$dir/$artifact" | awk '{print $1}')"
+        digest="$(artifact_sha256 "$dir" "$artifact")" || return
+        printf '%s %s\n' "$artifact" "$digest"
     done
 }
 
@@ -158,14 +202,16 @@ sha_of() {  # artifact name, "<name> <sha>" lines -> the sha
 
 echo "==> Reproducible archives, pass 1"
 build_archives "$DIST"
+build_manifest "$DIST"
 hashes_1="$(hash_artifacts "$DIST")"
 
 echo "==> Reproducible archives, pass 2"
 second="$(scratch_dir)"; build_archives "$second"
+build_manifest "$second"
 hashes_2="$(hash_artifacts "$second")"
 
 if [[ "$hashes_1" != "$hashes_2" ]]; then
-    echo "ERROR: release archives are not reproducible" >&2
+    echo "ERROR: release artifacts are not reproducible" >&2
     diff <(printf '%s\n' "$hashes_1") <(printf '%s\n' "$hashes_2") >&2 || true
     exit 1
 fi
@@ -186,26 +232,6 @@ sha_src_1="$(sha_of "$NAME-$VERSION-source.zip" "$hashes_1")"
 while IFS=$'\t' read -r standalone_name standalone_path standalone_mode; do
     install -m "$standalone_mode" "$standalone_path" "$DIST/$standalone_name"
 done < <(bash "$ROOT/release/release-assets.sh" standalone)
-
-# Which ml backends this release carries, and the digest of each lock, taken
-# from the files the archives were built from.
-PROFILES_JSON="$(bash "$ROOT/release/release-assets.sh" profiles)"
-
-cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
-{
-  "name": "$NAME",
-  "version": "$VERSION",
-  "tar_sha256": "$sha_tar_1",
-  "tar_gz_sha256": "$sha_tgz_1",
-  "zip_sha256": "$sha_zip_1",
-  "source_zip_sha256": "$sha_src_1",
-  "tests": "$TESTS_STATUS",
-  "release_scan": "$SCAN_STATUS",
-  "reproducible": true,
-  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets", "server-profile"],
-  "profiles": $PROFILES_JSON
-}
-JSON
 
 verify="$(scratch_dir)"
 tar -xzf "$DIST/$NAME-$VERSION.tar.gz" -C "$verify"
@@ -235,11 +261,11 @@ scan_release_tree "$unpack_src" "extracted $NAME-$VERSION-source.zip"
 # almost everything in it is an archive, so this pass descends into them.
 scan_release_tree "$DIST" "release/dist staging" scan-artifacts
 
-# Publication is only safe if the scans left the archives alone. Re-hashing the
+# Publication is only safe if scans left the archives and manifest alone. Re-hashing the
 # same list the gate used means a new archive cannot be published without this
 # check covering it either.
 if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then
-    echo "ERROR: release archives changed after the reproducibility gate" >&2
+    echo "ERROR: release artifacts changed after the reproducibility gate" >&2
     diff <(printf '%s\n' "$hashes_1") <(hash_artifacts "$DIST") >&2 || true
     exit 1
 fi

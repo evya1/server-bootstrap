@@ -198,13 +198,11 @@ grep -qF 'rm -rf "$DIST"' release/build-release.sh \
     && grep -qF 'discarding' release/build-release.sh \
     && ok "a failed scan discards the staged release" \
     || bad "a failed scan leaves release/dist in place"
-# Re-hashing after the scans now covers all four release archives, not the three
-# it used to name: the source zip was outside it, so bytes appended to that
-# asset after creation survived to upload. See #47.
-grep -qF 'release archives changed after the reproducibility gate' release/build-release.sh \
+# Re-hashing after the scans covers all four archives and their manifest.
+grep -qF 'release artifacts changed after the reproducibility gate' release/build-release.sh \
     && grep -qF 'hash_artifacts "$DIST"' release/build-release.sh \
-    && ok "all four release archives are re-verified after scanning" \
-    || bad "nothing re-verifies all four release archives after the scans"
+    && ok "release archives and their manifest are re-verified after scanning" \
+    || bad "nothing re-verifies release artifacts after the scans"
 grep -qF '"release_scan": "$SCAN_STATUS"' release/build-release.sh \
     && ok "the release manifest records the scan result" \
     || bad "the release manifest does not record the scan result"
@@ -574,6 +572,62 @@ fi
     && ok "both zip steps pin TZ=UTC" \
     || bad "a zip step in release/build-release.sh no longer pins TZ=UTC"
 
+# Checkouts made under different umasks also differ in their file modes.
+# Give each fixture an index before changing permissions, so the build must
+# preserve Git's executable set even when working-tree execute bits drift.
+mode_a="$(release_build_fixture)"; mode_b="$(release_build_fixture)"
+for fixture in "$mode_a" "$mode_b"; do
+    git -C "$fixture" init -q
+    git -C "$fixture" -c core.filemode=true add .
+done
+python3 - "$mode_a" "$mode_b" <<'PY'
+import pathlib, subprocess, sys
+for directory, mask in zip(sys.argv[1:], (0o002, 0o022)):
+    root = pathlib.Path(directory)
+    for entry in subprocess.check_output(["git", "-C", directory, "ls-files", "--stage", "-z"]).split(b"\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        mode = 0o777 if metadata.startswith(b"100755 ") else 0o666
+        (root / path.decode()).chmod(mode & ~mask)
+(pathlib.Path(sys.argv[1]) / "server-bootstrap.sh").chmod(0o644)
+(pathlib.Path(sys.argv[1]) / "README.md").chmod(0o775)
+PY
+( umask 002; release_build "$mode_a" ) >"$TMP/mode-a.out" 2>&1; mode_a_rc=$?
+( umask 022; release_build "$mode_b" ) >"$TMP/mode-b.out" 2>&1; mode_b_rc=$?
+if (( mode_a_rc == 0 && mode_b_rc == 0 )) \
+    && [[ -n "$(artifact_hashes "$mode_a")" && "$(artifact_hashes "$mode_a")" == "$(artifact_hashes "$mode_b")" ]]; then
+    ok "all four archives are byte-identical across umasks 002 and 022 and working-tree mode drift"
+else
+    bad "release archives depend on checkout modes or umask (exit $mode_a_rc/$mode_b_rc)"
+fi
+if python3 - "$mode_a" "$(tr -d '[:space:]' < VERSION)" <<'PY'
+import pathlib, subprocess, sys, tarfile, zipfile
+root = pathlib.Path(sys.argv[1]); version = sys.argv[2]
+expected = {}
+for entry in subprocess.check_output(["git", "-C", str(root), "ls-files", "--stage", "-z"]).split(b"\0"):
+    if entry:
+        metadata, path = entry.split(b"\t", 1)
+        expected[path.decode()] = 0o755 if metadata.startswith(b"100755 ") else 0o644
+for suffix in ("tar", "tar.gz", "zip", "source.zip"):
+    archive = root / "release/dist" / f"server-bootstrap-{version}.{suffix}"
+    if suffix == "source.zip":
+        archive = root / "release/dist" / f"server-bootstrap-{version}-source.zip"
+    prefix = "server-bootstrap/" if suffix == "source.zip" else f"server-bootstrap-{version}/"
+    if suffix.startswith("tar"):
+        with tarfile.open(archive) as handle:
+            actual = {m.name.removeprefix(prefix): m.mode & 0o777 for m in handle.getmembers()}
+    else:
+        with zipfile.ZipFile(archive) as handle:
+            actual = {m.filename.removeprefix(prefix): (m.external_attr >> 16) & 0o777 for m in handle.infolist()}
+    assert actual == expected, f"{suffix}: archive modes differ from Git's executable set"
+PY
+then
+    ok "every archive stores 0644 or 0755 exactly as Git records it"
+else
+    bad "release archive modes do not match the Git index"
+fi
+
 # 2. A source zip that differs between passes must fail the gate. Appending the
 #    output directory is deterministic and differs by construction: pass 1
 #    writes to release/dist, pass 2 to a scratch directory.
@@ -620,6 +674,38 @@ out="$(release_build "$fx")" && rc=0 || rc=$?
 (( rc != 0 )) && grep -qF 'changed after the reproducibility gate' <<< "$out" \
     && ok "source-zip tampering after the gate fails final verification" \
     || bad "source-zip tampering after the gate was not detected (rc=$rc)"
+
+# A host-specific field in the manifest must fail the same two-pass gate,
+# even while all four archives stay identical.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='  "name": "$NAME",\n'
+assert t.count(a)==1
+t=t.replace(a, a+'  "builder_directory": "$output",\n',1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'not reproducible' <<< "$out" \
+    && grep -qF 'release-manifest.json' <<< "$out" \
+    && ok "a manifest that differs between passes fails the reproducibility gate" \
+    || bad "a differing release manifest did not fail the gate (rc=$rc)"
+
+# The manifest is also re-hashed after scanning, before publication.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then'
+assert t.count(a)==1
+t=t.replace(a, 'printf TAMPER >> "$DIST/$NAME-$VERSION-release-manifest.json"\n'+a,1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'changed after the reproducibility gate' <<< "$out" \
+    && ok "manifest tampering after the gate fails final verification" \
+    || bad "manifest tampering after the gate was not detected (rc=$rc)"
 
 # 5. --skip-tests must never be reported as a suite that passed.
 fx="$(release_build_fixture)"
@@ -1467,6 +1553,41 @@ if python3 -m venv --without-pip "$BPY_FIX/venv" >/dev/null 2>&1; then
 else
     skip "base-python launcher (python3 -m venv unavailable)"
 fi
+
+section "Generated wrappers with literal configured paths"
+# Execute the generated scripts, with an environment variable set so an
+# unquoted dollar sign cannot accidentally select the intended path.
+WRAP_FIX="$TMP/generated-wrappers"
+WRAP_ODD="$WRAP_FIX/"'path with space-$SB_WRAPPER_PATH-"quote"-`unused`-\slash'
+mkdir -p "$WRAP_ODD/bin"
+cat > "$WRAP_ODD/bin/activate" <<'ACTIVATE'
+export SB_WRAPPER_ACTIVATED=literal-activation
+ACTIVATE
+cat > "$WRAP_FIX/shell" <<'SHELL'
+#!/usr/bin/env bash
+printf '%s\n' "${SB_WRAPPER_ACTIVATED:-unset}"
+exit 7
+SHELL
+cat > "$WRAP_ODD/bin/claude" <<'CLAUDE'
+#!/usr/bin/env bash
+printf '%s\n' "${DISABLE_AUTOUPDATER:-unset}" "$@"
+exit 23
+CLAUDE
+chmod 0755 "$WRAP_FIX/shell" "$WRAP_ODD/bin/claude"
+bootstrap_write_base_python_env "$WRAP_ODD" "$WRAP_FIX/base-python-env"
+wrapper_rc=0
+wrapper_out="$(SB_WRAPPER_PATH=expanded SHELL="$WRAP_FIX/shell" "$WRAP_FIX/base-python-env" 2>/dev/null)" || wrapper_rc=$?
+[[ "$wrapper_out" == literal-activation && "$wrapper_rc" == 7 ]] \
+    && ok "base-python-env activates the literal configured path and preserves the shell's status" \
+    || bad "base-python-env expanded its path or lost the shell's status (rc=$wrapper_rc)"
+# shellcheck source=/dev/null
+source lib/bootstrap/ai_cli.sh
+bootstrap_write_claude_wrapper "$WRAP_ODD" "$WRAP_FIX/claude"
+wrapper_rc=0
+wrapper_out="$(SB_WRAPPER_PATH=expanded "$WRAP_FIX/claude" 'first argument' 'second $arg' 2>/dev/null)" || wrapper_rc=$?
+[[ "$wrapper_out" == $'1\nfirst argument\nsecond $arg' && "$wrapper_rc" == 23 ]] \
+    && ok "the Claude wrapper runs the literal configured path, forwards arguments and disables updates" \
+    || bad "the Claude wrapper expanded its path or lost arguments, update policy or status (rc=$wrapper_rc)"
 
 section "Package manifest"
 PKG_FIX="$TMP/packages"; mkdir -p "$PKG_FIX"
