@@ -71,6 +71,41 @@ jobs:
         if: failure()
         run: bash tools/manifest-fix-hint.sh
 
+  # Run the same suite as root on fresh images, so the provision integrations
+  # and the pasted README block are exercised on every push and pull request.
+  root-suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ubuntu:24.04
+      options: --user 0
+    permissions:
+      contents: read
+    steps:
+      - name: Install test dependencies in the fresh image
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git nodejs perl procps python3 python3-venv unzip util-linux xz-utils zip zsh
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run the complete suite as root
+        shell: bash
+        env:
+          SB_CHECK_PUBLISHED_TAGS: 1
+        run: |
+          set -Eeuo pipefail
+          test "$(id -u)" -eq 0
+          # The mounted workspace belongs to the runner user, not container root.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash tests/run-tests.sh
+
   release-build:
     runs-on: ubuntu-latest
     permissions:
