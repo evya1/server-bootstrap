@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+Nothing merged since 2.3.0.
+
+## 2.3.0
+
+*Released 2026-10-04.*
+
+A feature release: an optional, built-in `ml` profile, and the complete
+built-in stack as the first install path. The profile ships inside the
+existing archives; there is no separate ML archive, sidecar, version or
+release. Nothing is enabled unless a plan or command asks for it, and nothing
+starts a workload, downloads a model or opens a port.
+
+The short version of what is now true that was not before:
+
+- **An optional `ml` profile, locked per backend.** `server-profile install ml`,
+  or a plan's `enable_profile "ml"`, builds a Python 3.12 environment from a
+  committed, hash-checked lock: `cpu` on x86-64 and ARM64, `cu130` on x86-64.
+  `--backend auto` picks CUDA 13.0 when the driver and GPU support it, CPU on
+  a host without an NVIDIA GPU, and stops rather than fall back on other
+  NVIDIA hardware. `ml-status`, `ml-doctor` and `ml-preflight` report what is
+  installed.
+- **The README's first install is the complete built-in stack.**
+  `provision-plan.full.example.sh` enables every configurable installer and
+  every built-in profile; `provision-plan.ml.example.sh` installs the
+  foundation and the profile. Both are published beside each archive and
+  shipped inside it. The foundation-only plan remains the secondary path.
+- **The profile is inside the release gates.** Every archive carries the
+  profile, every command `ML_COMMANDS` links and every lock `backends.txt`
+  declares, byte for byte; the manifest records each lock's SHA-256; and
+  `release/release-assets.sh verify` refuses any other set of published files.
+- **The pinned ngrok CLI is part of every bootstrap run**, and plans can
+  register checksum-pinned remote bundles.
+- **Safer hosts.** Unsupported hosts are refused before anything is created, a
+  required package that cannot be installed fails the run, and apt steps
+  refuse a transaction whose plan would change an installed NVIDIA driver or
+  CUDA package.
+- **`base-python` runs the base environment's interpreter** instead of the
+  system one.
+- **Pins:** `gh` `2.102.0`, uv `0.12.23`, Claude Code `2.1.289`, Codex
+  `0.160.0`, pi `1.0.2`, Node.js `24.21.0`, ngrok `3.39.11`.
+
+Validated from the release candidate's artifacts in clean `ubuntu:24.04`
+containers: the full, foundation-only and ML plans, each installed and
+repeated, on GitHub-hosted x86-64 and ARM64 runners, and the full plan with
+`cu130` on a GeForce RTX 5060 Ti host.
+
 ### Added
 
 - **The `ml` profile is covered by the main release gates.** It ships only
@@ -161,11 +207,12 @@
   it. The foundation itself only copies the profile files and installs
   `server-profile`. `tools/ml-lock.sh` generates the locks, verifies them
   offline, and with `--check-artifacts` downloads each lock's files for its
-  architecture and checks their hashes and wheel tags. Validated by a real
-  CPU install on x86-64 and a real `cu130` install on a GeForce RTX 3060 with
-  driver 595.91.07. The ARM64 lock's artifacts were downloaded and verified,
-  but it has not been run on ARM64 hardware, and the `cu130` build has not
-  been run on Hopper or Blackwell GPUs. ([#54][])
+  architecture and checks their hashes and wheel tags. Validated by real CPU
+  installs on x86-64 and on ARM64 (a GitHub-hosted Arm Neoverse N2 runner)
+  and real `cu130` installs on a GeForce RTX 3060 with driver 595.91.07 and a
+  GeForce RTX 5060 Ti (compute capability 12.0) with driver 595.84. The
+  `cu130` build has not been run on Hopper or data-center Blackwell GPUs.
+  ([#54][])
 
 [#54]: https://github.com/evya1/server-bootstrap/issues/54
 
@@ -188,40 +235,23 @@
 
 ### Changed
 
-- **Five release pins refreshed** with `tools/refresh-pins.sh --write`: `gh`
-  `2.100.0` → `2.101.0`, uv `0.12.13` → `0.12.17`, Claude Code `2.1.269` →
-  `2.1.280`, Codex `0.154.0` → `0.156.0` and pi `0.85.1` → `0.87.1`. The new
-  `gh` and uv SHA-256 values come from each publisher's own checksum manifest;
-  the three agent CLIs remain exact-version npm installs with no repository
-  checksum. Node.js `24.21.0` was already current. The Oh My Zsh branch head
-  stays at `c6e66ede` although upstream has moved; `--all` was not used.
-  ([#51][])
+- **Five release pins refreshed** since 2.2.3, with
+  `tools/refresh-pins.sh --write`: `gh` `2.100.0` → `2.102.0`, uv `0.12.13` →
+  `0.12.23`, Claude Code `2.1.269` → `2.1.289`, Codex `0.154.0` → `0.160.0`
+  and pi `0.85.1` → `1.0.2`. The new `gh` and uv SHA-256 values come from each
+  publisher's own checksum manifest; the three agent CLIs remain exact-version
+  npm installs with no repository checksum. `gh` `2.102.0` carries upstream
+  fixes for four security advisories. pi `1.0.2` keeps the `pi` command, the
+  Node `22.19` minimum, `models.json` and the `PI_TELEMETRY` and
+  `PI_SKIP_VERSION_CHECK` variables, but no longer ships an
+  `npm-shrinkwrap.json`, so npm resolves its transitive dependencies at
+  install time. Node.js `24.21.0` was already current. The Oh My Zsh branch
+  head stays at `c6e66ede` although upstream has moved; `--all` was not used.
+  The committed `ml` locks are unchanged: they were resolved with uv `0.12.17`
+  and install, hash-checked, with uv `0.12.23`. ([#51][], [#73][])
 
 [#51]: https://github.com/evya1/server-bootstrap/issues/51
-
-- **Five release pins refreshed again** with `tools/refresh-pins.sh --write`:
-  `gh` `2.101.0` → `2.102.0`, uv `0.12.17` → `0.12.23`, Claude Code
-  `2.1.280` → `2.1.288`, Codex `0.156.0` → `0.160.0` and pi `0.87.1` →
-  `1.0.1`. The new `gh` and uv SHA-256 values come from each publisher's own
-  checksum manifest; the three agent CLIs remain exact-version npm installs
-  with no repository checksum. `gh` `2.102.0` carries upstream fixes for four
-  security advisories. pi `1.0.1` keeps the `pi` command, the Node `22.19`
-  minimum, `models.json` and the `PI_TELEMETRY` and `PI_SKIP_VERSION_CHECK`
-  variables, but no longer ships an `npm-shrinkwrap.json`, so npm resolves its
-  transitive dependencies at install time. Node.js `24.21.0` and ngrok
-  `3.39.11` were already current. The Oh My Zsh branch head stays at
-  `c6e66ede` although upstream has moved; `--all` was not used. The committed
-  `ml` locks are unchanged: they were resolved with uv `0.12.17` and install,
-  hash-checked, with uv `0.12.23`. ([#73][])
-
 [#73]: https://github.com/evya1/server-bootstrap/issues/73
-
-- **Two agent CLI pins refreshed** with `tools/refresh-pins.sh --write`:
-  Claude Code `2.1.288` → `2.1.289` and pi `1.0.1` → `1.0.2`. Both remain
-  exact-version npm installs with no repository checksum. For both packages
-  the `bin` names, Node engine range and install scripts are unchanged from
-  the previous pin, and pi still ships no `npm-shrinkwrap.json`. The Oh My
-  Zsh branch head stays at `c6e66ede`; `--all` was not used.
 
 - **An installed remote bundle is no longer downloaded again.** The shared
   bundle engine now compares the recorded version and checksum with an

@@ -107,6 +107,8 @@ bash tests/run-tests.sh                # full suite, including the privacy guard
 bash tests/privacy-guard.sh            # credential names, key material, tracked output
 bash tools/check-pins.sh               # every pin recording agrees, offline
 bash tools/release-preflight.sh        # pinned Gitleaks, double build, artifact scan
+bash tools/gitleaks.sh scan-history    # full-history scan; refuses a shallow clone
+bash tools/verify-history-scan.sh      # proves the history scan finds a deleted secret
 ```
 
 Also run `bash tools/actionlint.sh run` when a workflow changes, and

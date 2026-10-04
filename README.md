@@ -23,24 +23,19 @@ root. It installs the complete built-in stack: the foundation
 optional `ml` environment.
 
 Requirements: Ubuntu 24.04 on x86-64 or ARM64 (the provisioner checks this
-before it installs anything), root, and outbound HTTPS. Fresh hosts and
-containers often give you a root shell and no `sudo`; put `sudo` before
-`./server-provision.sh` only if you are not root. An NVIDIA driver is optional
+before it installs anything), root, outbound HTTPS, and HTTP access to the
+host's apt mirrors (stock Ubuntu, including the `ubuntu:24.04` image, uses
+plain HTTP for `archive.ubuntu.com`, `security.ubuntu.com` and
+`ports.ubuntu.com`). Fresh hosts and containers often give you a root shell
+and no `sudo`. If you are not root, open a root shell first (`sudo -i`) and
+paste the block there. An NVIDIA driver is optional
 and is not part of the install; an apt plan that would change an installed
 driver or CUDA package is refused
 ([details](docs/CONFIGURATION.md#nvidia-driver-and-cuda-packages)). Disk needs
 are in the notes below the block.
 
-> [!IMPORTANT]
-> No published release ships this block's plan yet. v2.2.3, the latest
-> release, has neither `provision-plan.full.example.sh` nor the `ml` profile,
-> so today the download fails and the block installs nothing. The block names
-> 2.2.3 because that is still this repository's `VERSION`; the release that
-> ships the full plan replaces it. Until then, use the
-> [foundation-only install](#foundation-only-install), which works with v2.2.3.
-
 ```bash
-V=2.2.3
+V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
@@ -79,11 +74,12 @@ About the full plan:
   CUDA 13.0 on one whose driver supports it and whose GPUs have compute
   capability 7.5 or newer. `auto` never falls back to CPU on NVIDIA hardware.
   It fails when the driver is below CUDA 13.0, a GPU is below compute
-  capability 7.5, the host is ARM64 (no CUDA backend is locked for it), or
-  `nvidia-smi` is missing or failing. The provisioner then exits non-zero with
-  the foundation installed. To install the CPU backend there, run
-  `server-profile install ml --backend cpu`; see
-  [ML-PROFILE](docs/ML-PROFILE.md).
+  capability 7.5, the host is ARM64 with an NVIDIA GPU (no CUDA backend is locked for ARM64),
+  or `nvidia-smi` is missing or failing. The provisioner then exits non-zero
+  with the foundation installed. To install the CPU backend there, edit the
+  plan's `enable_profile` line to `enable_profile "ml" --backend cpu` and run
+  the plan again; no `--reconfigure` is needed because the failed run installed
+  no backend. See [ML-PROFILE](docs/ML-PROFILE.md).
 - The `ml` profile needs 30 GB free for a CUDA backend and 10 GB for CPU,
   checked before it builds. A repeat that rebuilds nothing does not need it.
 - It keeps the verified archive. To repeat the install, run
@@ -98,10 +94,10 @@ About the full plan:
 profile. It needs 50 GB free at `/workspace` (`MIN_DISK_GB=50`). On a smaller
 disk the acceptance check rejects the host after the foundation has installed,
 and the run exits non-zero. It deletes the archive once the foundation has
-installed. v2.2.3 publishes it:
+installed:
 
 ```bash
-V=2.2.3
+V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
@@ -200,9 +196,9 @@ to the plan when the declared specification requires a GPU.
 
 | Goal | Command |
 | --- | --- |
-| Provision a fresh server with the complete built-in stack (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.full.example.sh` |
+| Provision a fresh server with the complete built-in stack | `./server-provision.sh --plan ./provision-plan.full.example.sh` |
 | Provision a fresh server with the foundation only | `./server-provision.sh --plan ./provision-plan.example.sh` |
-| Provision a fresh server with the foundation and the ML environment (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
+| Provision a fresh server with the foundation and the ML environment (download block: [ML-PROFILE](docs/ML-PROFILE.md#one-command-install)) | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
 | Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check the host against its declared specification | `server-accept` |
@@ -222,10 +218,10 @@ to the plan when the declared specification requires a GPU.
 `server-provision.sh` verifies the archive, unpacks it, runs that script, runs
 the acceptance check, and only then installs each profile and workload bundle in
 plan order, which is why it, not the inner script, is the entry point on a new
-machine. It deletes a local archive and its `.sha256` only when the plan sets
-`DELETE_ARCHIVES_AFTER_SUCCESS=1` (the foundation plan does; the full and `ml`
-plans do not), and only once that archive's own installation has succeeded: the
-bootstrap archive right after the bootstrap.
+machine. It deletes a local archive and its `.sha256` once that archive's own
+installation has succeeded (the bootstrap archive right after the bootstrap),
+unless the plan sets `DELETE_ARCHIVES_AFTER_SUCCESS=0`. The default is 1; the
+foundation plan keeps it, and the full and `ml` plans set 0.
 
 ## Adding workload bundles
 
@@ -236,8 +232,8 @@ green with nothing else downloaded. To add a workload, put its archive and
 ```text
 server-provision.sh
 provision-plan.example.sh
-server-bootstrap-2.2.3.tar.gz
-server-bootstrap-2.2.3.tar.gz.sha256
+server-bootstrap-2.3.0.tar.gz
+server-bootstrap-2.3.0.tar.gz.sha256
 <workload>-<version>.tar.gz
 <workload>-<version>.tar.gz.sha256
 ```
@@ -360,7 +356,10 @@ directly, accepts an `https://` source and enforces TLS plus an exact SHA-256.
 - Before each real apt attempt the bootstrap simulates it and refuses a plan
   that would change an installed NVIDIA driver or CUDA package. Another apt
   process can still change the plan between simulation and execution.
-- Release archives are byte-reproducible and verified twice on every build.
+- Release archives are byte-reproducible and verified twice on every build:
+  byte-identical for builders with the same umask. CI builds with umask 022
+  (the runner default); a builder with a different umask gets different mode
+  bits in the archives.
 - Release staging trees and every extracted archive are secret-scanned, and
   `release/dist` is scanned again immediately before upload. It must then hold
   exactly the expected assets, each verified, or nothing is published.
