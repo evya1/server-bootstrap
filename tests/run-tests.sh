@@ -574,6 +574,62 @@ fi
     && ok "both zip steps pin TZ=UTC" \
     || bad "a zip step in release/build-release.sh no longer pins TZ=UTC"
 
+# Checkouts made under different umasks also differ in their file modes.
+# Give each fixture an index before changing permissions, so the build must
+# preserve Git's executable set even when working-tree execute bits drift.
+mode_a="$(release_build_fixture)"; mode_b="$(release_build_fixture)"
+for fixture in "$mode_a" "$mode_b"; do
+    git -C "$fixture" init -q
+    git -C "$fixture" -c core.filemode=true add .
+done
+python3 - "$mode_a" "$mode_b" <<'PY'
+import pathlib, subprocess, sys
+for directory, mask in zip(sys.argv[1:], (0o002, 0o022)):
+    root = pathlib.Path(directory)
+    for entry in subprocess.check_output(["git", "-C", directory, "ls-files", "--stage", "-z"]).split(b"\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        mode = 0o777 if metadata.startswith(b"100755 ") else 0o666
+        (root / path.decode()).chmod(mode & ~mask)
+(pathlib.Path(sys.argv[1]) / "server-bootstrap.sh").chmod(0o644)
+(pathlib.Path(sys.argv[1]) / "README.md").chmod(0o775)
+PY
+( umask 002; release_build "$mode_a" ) >"$TMP/mode-a.out" 2>&1; mode_a_rc=$?
+( umask 022; release_build "$mode_b" ) >"$TMP/mode-b.out" 2>&1; mode_b_rc=$?
+if (( mode_a_rc == 0 && mode_b_rc == 0 )) \
+    && [[ -n "$(artifact_hashes "$mode_a")" && "$(artifact_hashes "$mode_a")" == "$(artifact_hashes "$mode_b")" ]]; then
+    ok "all four archives are byte-identical across umasks 002 and 022 and working-tree mode drift"
+else
+    bad "release archives depend on checkout modes or umask (exit $mode_a_rc/$mode_b_rc)"
+fi
+if python3 - "$mode_a" "$(tr -d '[:space:]' < VERSION)" <<'PY'
+import pathlib, subprocess, sys, tarfile, zipfile
+root = pathlib.Path(sys.argv[1]); version = sys.argv[2]
+expected = {}
+for entry in subprocess.check_output(["git", "-C", str(root), "ls-files", "--stage", "-z"]).split(b"\0"):
+    if entry:
+        metadata, path = entry.split(b"\t", 1)
+        expected[path.decode()] = 0o755 if metadata.startswith(b"100755 ") else 0o644
+for suffix in ("tar", "tar.gz", "zip", "source.zip"):
+    archive = root / "release/dist" / f"server-bootstrap-{version}.{suffix}"
+    if suffix == "source.zip":
+        archive = root / "release/dist" / f"server-bootstrap-{version}-source.zip"
+    prefix = "server-bootstrap/" if suffix == "source.zip" else f"server-bootstrap-{version}/"
+    if suffix.startswith("tar"):
+        with tarfile.open(archive) as handle:
+            actual = {m.name.removeprefix(prefix): m.mode & 0o777 for m in handle.getmembers()}
+    else:
+        with zipfile.ZipFile(archive) as handle:
+            actual = {m.filename.removeprefix(prefix): (m.external_attr >> 16) & 0o777 for m in handle.infolist()}
+    assert actual == expected, f"{suffix}: archive modes differ from Git's executable set"
+PY
+then
+    ok "every archive stores 0644 or 0755 exactly as Git records it"
+else
+    bad "release archive modes do not match the Git index"
+fi
+
 # 2. A source zip that differs between passes must fail the gate. Appending the
 #    output directory is deterministic and differs by construction: pass 1
 #    writes to release/dist, pass 2 to a scratch directory.

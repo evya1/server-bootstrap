@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Release archive modes no longer depend on the builder's umask.** All four
+  archives use mode 0644 or 0755 according to Git's recorded executable set,
+  including when working-tree execute bits differ. An unpacked source bundle
+  preserves that normalised set when rebuilt. The suite compares builds from
+  umask-002 and umask-022 checkouts and checks every archived file's mode.
+  ([#81](https://github.com/evya1/server-bootstrap/issues/81))
+
 - **The install blocks wait for another apt process.** On an image without
   `wget` or a CA bundle, such as the stock `ubuntu:24.04` image, the lines
   before the download run apt themselves, and every apt call gave up at once

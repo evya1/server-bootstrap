@@ -88,6 +88,27 @@ echo "==> Release file set: ${#RELEASE_FILES[@]} files (source: $RELEASE_SET_ORI
 echo "==> Refreshing in-bundle checksums"
 bash "$ROOT/release/release-files.sh" write
 
+# Git records only regular-file modes 100644 and 100755. Derive archive modes
+# from that index, so checkout permissions and the builder's umask cannot
+# change them. An unpacked source bundle has no index; its executable bits
+# were already normalised by the build that produced it.
+declare -A RELEASE_MODES=()
+if [[ "$RELEASE_SET_ORIGIN" == git ]]; then
+    while IFS= read -r -d '' entry; do
+        file="${entry#*$'\t'}"
+        case "${entry%% *}" in
+            100644) RELEASE_MODES["$file"]=0644 ;;
+            100755) RELEASE_MODES["$file"]=0755 ;;
+            *) echo "ERROR: unsupported Git file mode: $file" >&2; exit 1 ;;
+        esac
+    done < <(git ls-files --stage -z)
+else
+    for file in "${RELEASE_FILES[@]}"; do
+        RELEASE_MODES["$file"]=0644
+        [[ ! -x "$file" ]] || RELEASE_MODES["$file"]=0755
+    done
+fi
+
 # Every artifact a release publishes, built by one function so that each
 # reproducibility pass produces all of them. The source zip used to be built
 # once, after the comparison, which left a published asset outside the
@@ -105,8 +126,13 @@ bash "$ROOT/release/release-files.sh" write
 build_archives() {
     local output="$1" outdir stage source_stage file
     outdir="$(mkdir -p "$output" && cd "$output" && pwd -P)"
+    source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
+    for file in "${RELEASE_FILES[@]}"; do
+        install -D -m "${RELEASE_MODES[$file]}" "$file" "$source_stage/$NAME/$file"
+    done
     tar --sort=name --mtime="@$SOURCE_DATE" --owner=0 --group=0 --numeric-owner \
         --transform "s,^,$NAME-$VERSION/," -cf "$outdir/$NAME-$VERSION.tar" \
+        -C "$source_stage/$NAME" \
         --null -T <(printf '%s\0' "${RELEASE_FILES[@]}")
     gzip -n -9 -c "$outdir/$NAME-$VERSION.tar" > "$outdir/$NAME-$VERSION.tar.gz"
     stage="$(scratch_dir)"
@@ -115,15 +141,8 @@ build_archives() {
     ( cd "$stage" && find . -type f | LC_ALL=C sort | TZ=UTC zip -X -q -@ "$outdir/$NAME-$VERSION.zip" )
     rm -rf "$stage"
 
-    # Source zip: a stable top-level directory, excluding built releases. The
-    # mode is copied from the working tree rather than left to install's 0755
-    # default: the tar stores each file's real mode, so anything else makes a
-    # rebuild from an unpacked source bundle differ from a rebuild from a
-    # checkout in every file's permission bits and nothing else.
-    source_stage="$(scratch_dir)"; mkdir -p "$source_stage/$NAME"
-    for file in "${RELEASE_FILES[@]}"; do
-        install -D -m "$(stat -c '%a' -- "$file")" "$file" "$source_stage/$NAME/$file"
-    done
+    # The source zip uses the same normalised files under its stable top-level
+    # directory. Rebuilding an unpacked source bundle preserves these modes.
     find "$source_stage" -exec touch -d "@$SOURCE_DATE" {} +
     # Scanned before the zip is written: a finding must stop the build rather
     # than produce an artifact that is then quarantined.
