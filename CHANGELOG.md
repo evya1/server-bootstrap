@@ -39,8 +39,8 @@ The short version of what is now true that was not before:
   never change installed NVIDIA driver or CUDA packages.
 - **`base-python` runs the base environment's interpreter** instead of the
   system one.
-- **Pins:** `gh` `2.102.0`, uv `0.12.23`, Claude Code `2.1.288`, Codex
-  `0.160.0`, pi `1.0.1`, Node.js `24.21.0`, ngrok `3.39.11`.
+- **Pins:** `gh` `2.102.0`, uv `0.12.23`, Claude Code `2.1.289`, Codex
+  `0.160.0`, pi `1.0.2`, Node.js `24.21.0`, ngrok `3.39.11`.
 
 Validated from the release artifacts on clean Ubuntu 24.04 hosts: the full,
 foundation-only and ML plans, each installed and repeated, on x86-64 and
