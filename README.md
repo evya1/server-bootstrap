@@ -38,11 +38,13 @@ are in the notes below the block.
 V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
-command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \
+  until apt-get -o DPkg::Lock::Timeout=10 check >/dev/null && apt-get update; do tries=$((tries + 1)); [ "$tries" -lt 40 ] || break; sleep 5; done \
+  && [ "$tries" -lt 40 ] \
   && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
   && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
     '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; } \
+  && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove wget ca-certificates; } \
   && wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.full.example.sh" \
@@ -64,6 +66,13 @@ That is the whole installation:
   installing if the simulation fails or if apt's plan would also touch an
   NVIDIA driver or CUDA package, the same packages the provisioner protects.
   They never remove a package (`--no-remove`).
+- Those lines wait for another apt process to finish, such as a cloud
+  provider's own package setup when the block is a container's startup
+  script. Each `apt-get update` attempt first waits up to 10 seconds for
+  dpkg's lock (`apt-get check`), and a failed attempt is retried 5 seconds
+  later, 40 attempts at most, about ten minutes; the install then waits up
+  to ten minutes for dpkg's lock. apt prints `Could not get lock` errors
+  while they wait.
 - The foundation takes roughly five minutes, most of it `apt`; the `ml`
   environment then adds its own download, several gigabytes on a CUDA host.
 
@@ -100,11 +109,13 @@ installed:
 V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
-command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
+command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \
+  until apt-get -o DPkg::Lock::Timeout=10 check >/dev/null && apt-get update; do tries=$((tries + 1)); [ "$tries" -lt 40 ] || break; sleep 5; done \
+  && [ "$tries" -lt 40 ] \
   && plan="$(apt-get -s install --no-install-recommends --no-remove wget ca-certificates)" \
   && printf '%s\n' "$plan" | awk -v p='^(nvidia|libnvidia|cuda|libcuda|cudnn|libcudnn|libnccl|libcublas|libcufft|libcurand|libcusolver|libcusparse|libnpp|libnvjpeg|libnvrtc|libnvjitlink|libcupti|libnvtoolsext|libcudart|nsight-)|-nvidia(-|$)' \
     '/^(Inst|Remv|Purg|Conf) / { n = $2; sub(/:.*/, "", n); if (n ~ p) { print "not installing wget: apt would also change " n; s = 1 } } END { exit s }' \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-remove wget ca-certificates; } \
+  && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove wget ca-certificates; } \
   && wget -q --show-progress \
   "$BASE/server-provision.sh" \
   "$BASE/provision-plan.example.sh" \
