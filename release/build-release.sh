@@ -109,8 +109,8 @@ else
     done
 fi
 
-# Every artifact a release publishes, built by one function so that each
-# reproducibility pass produces all of them. The source zip used to be built
+# All four archives are built by one function so each reproducibility pass
+# produces the same set. The source zip used to be built
 # once, after the comparison, which left a published asset outside the
 # reproducibility gate, the manifest, the human summary and the final
 # re-verification -- bytes could be appended to it after creation and the build
@@ -151,23 +151,48 @@ build_archives() {
     rm -rf "$source_stage"
 }
 
+build_manifest() {
+    local output="$1" sha_tar sha_tgz sha_zip sha_src PROFILES_JSON
+    sha_tar="$(artifact_sha256 "$output" "$NAME-$VERSION.tar")" || return
+    sha_tgz="$(artifact_sha256 "$output" "$NAME-$VERSION.tar.gz")" || return
+    sha_zip="$(artifact_sha256 "$output" "$NAME-$VERSION.zip")" || return
+    sha_src="$(artifact_sha256 "$output" "$NAME-$VERSION-source.zip")" || return
+    # Generate the profile metadata in each pass too, from the shipped files.
+    PROFILES_JSON="$(bash "$ROOT/release/release-assets.sh" profiles)"
+    cat > "$output/$NAME-$VERSION-release-manifest.json" <<JSON
+{
+  "name": "$NAME",
+  "version": "$VERSION",
+  "tar_sha256": "$sha_tar",
+  "tar_gz_sha256": "$sha_tgz",
+  "zip_sha256": "$sha_zip",
+  "source_zip_sha256": "$sha_src",
+  "tests": "$TESTS_STATUS",
+  "release_scan": "$SCAN_STATUS",
+  "reproducible": true,
+  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets", "server-profile"],
+  "profiles": $PROFILES_JSON
+}
+JSON
+}
+
 rm -rf "$DIST"; mkdir -p "$DIST"
-# The four release archives are hashed in both passes and compared. Naming them
-# in one list is what stops a new archive being added to the release without
-# being added to the gate -- which is how the source zip ended up outside it.
-#
-# Scope, stated exactly: this list is the four archives, not every asset
-# release.yml uploads (release/release-assets.sh upload). The others -- the
-# sidecars, the manifest and the standalone first-run files -- are derived from
-# or describe these, and are deliberately not double-built. See #47.
-ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" "$NAME-$VERSION-source.zip")
+# Compare the four archives and their release manifest in both passes. The
+# checksum sidecars and standalone first-run copies are verified separately by
+# release-assets.sh against these files and the tracked source.
+ARTIFACTS=("$NAME-$VERSION.tar" "$NAME-$VERSION.tar.gz" "$NAME-$VERSION.zip" \
+    "$NAME-$VERSION-source.zip" "$NAME-$VERSION-release-manifest.json")
+
+artifact_sha256() {  # directory, artifact name
+    [[ -f "$1/$2" ]] || { echo "ERROR: build produced no $2" >&2; return 1; }
+    sha256sum "$1/$2" | awk '{print $1}'
+}
 
 hash_artifacts() {  # directory -> "<name> <sha256>" per line, sorted by name
-    local dir="$1" artifact
+    local dir="$1" artifact digest
     for artifact in "${ARTIFACTS[@]}"; do
-        [[ -f "$dir/$artifact" ]] \
-            || { echo "ERROR: build produced no $artifact" >&2; exit 1; }
-        printf '%s %s\n' "$artifact" "$(sha256sum "$dir/$artifact" | awk '{print $1}')"
+        digest="$(artifact_sha256 "$dir" "$artifact")" || return
+        printf '%s %s\n' "$artifact" "$digest"
     done
 }
 
@@ -177,14 +202,16 @@ sha_of() {  # artifact name, "<name> <sha>" lines -> the sha
 
 echo "==> Reproducible archives, pass 1"
 build_archives "$DIST"
+build_manifest "$DIST"
 hashes_1="$(hash_artifacts "$DIST")"
 
 echo "==> Reproducible archives, pass 2"
 second="$(scratch_dir)"; build_archives "$second"
+build_manifest "$second"
 hashes_2="$(hash_artifacts "$second")"
 
 if [[ "$hashes_1" != "$hashes_2" ]]; then
-    echo "ERROR: release archives are not reproducible" >&2
+    echo "ERROR: release artifacts are not reproducible" >&2
     diff <(printf '%s\n' "$hashes_1") <(printf '%s\n' "$hashes_2") >&2 || true
     exit 1
 fi
@@ -205,26 +232,6 @@ sha_src_1="$(sha_of "$NAME-$VERSION-source.zip" "$hashes_1")"
 while IFS=$'\t' read -r standalone_name standalone_path standalone_mode; do
     install -m "$standalone_mode" "$standalone_path" "$DIST/$standalone_name"
 done < <(bash "$ROOT/release/release-assets.sh" standalone)
-
-# Which ml backends this release carries, and the digest of each lock, taken
-# from the files the archives were built from.
-PROFILES_JSON="$(bash "$ROOT/release/release-assets.sh" profiles)"
-
-cat > "$DIST/$NAME-$VERSION-release-manifest.json" <<JSON
-{
-  "name": "$NAME",
-  "version": "$VERSION",
-  "tar_sha256": "$sha_tar_1",
-  "tar_gz_sha256": "$sha_tgz_1",
-  "zip_sha256": "$sha_zip_1",
-  "source_zip_sha256": "$sha_src_1",
-  "tests": "$TESTS_STATUS",
-  "release_scan": "$SCAN_STATUS",
-  "reproducible": true,
-  "entrypoints": ["server-bootstrap.sh", "server-provision.sh", "server-bundle-install", "server-accept.sh", "server-vscode-extensions", "server-secrets", "server-profile"],
-  "profiles": $PROFILES_JSON
-}
-JSON
 
 verify="$(scratch_dir)"
 tar -xzf "$DIST/$NAME-$VERSION.tar.gz" -C "$verify"
@@ -254,11 +261,11 @@ scan_release_tree "$unpack_src" "extracted $NAME-$VERSION-source.zip"
 # almost everything in it is an archive, so this pass descends into them.
 scan_release_tree "$DIST" "release/dist staging" scan-artifacts
 
-# Publication is only safe if the scans left the archives alone. Re-hashing the
+# Publication is only safe if scans left the archives and manifest alone. Re-hashing the
 # same list the gate used means a new archive cannot be published without this
 # check covering it either.
 if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then
-    echo "ERROR: release archives changed after the reproducibility gate" >&2
+    echo "ERROR: release artifacts changed after the reproducibility gate" >&2
     diff <(printf '%s\n' "$hashes_1") <(hash_artifacts "$DIST") >&2 || true
     exit 1
 fi

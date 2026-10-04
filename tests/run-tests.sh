@@ -198,13 +198,11 @@ grep -qF 'rm -rf "$DIST"' release/build-release.sh \
     && grep -qF 'discarding' release/build-release.sh \
     && ok "a failed scan discards the staged release" \
     || bad "a failed scan leaves release/dist in place"
-# Re-hashing after the scans now covers all four release archives, not the three
-# it used to name: the source zip was outside it, so bytes appended to that
-# asset after creation survived to upload. See #47.
-grep -qF 'release archives changed after the reproducibility gate' release/build-release.sh \
+# Re-hashing after the scans covers all four archives and their manifest.
+grep -qF 'release artifacts changed after the reproducibility gate' release/build-release.sh \
     && grep -qF 'hash_artifacts "$DIST"' release/build-release.sh \
-    && ok "all four release archives are re-verified after scanning" \
-    || bad "nothing re-verifies all four release archives after the scans"
+    && ok "release archives and their manifest are re-verified after scanning" \
+    || bad "nothing re-verifies release artifacts after the scans"
 grep -qF '"release_scan": "$SCAN_STATUS"' release/build-release.sh \
     && ok "the release manifest records the scan result" \
     || bad "the release manifest does not record the scan result"
@@ -676,6 +674,38 @@ out="$(release_build "$fx")" && rc=0 || rc=$?
 (( rc != 0 )) && grep -qF 'changed after the reproducibility gate' <<< "$out" \
     && ok "source-zip tampering after the gate fails final verification" \
     || bad "source-zip tampering after the gate was not detected (rc=$rc)"
+
+# A host-specific field in the manifest must fail the same two-pass gate,
+# even while all four archives stay identical.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='  "name": "$NAME",\n'
+assert t.count(a)==1
+t=t.replace(a, a+'  "builder_directory": "$output",\n',1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'not reproducible' <<< "$out" \
+    && grep -qF 'release-manifest.json' <<< "$out" \
+    && ok "a manifest that differs between passes fails the reproducibility gate" \
+    || bad "a differing release manifest did not fail the gate (rc=$rc)"
+
+# The manifest is also re-hashed after scanning, before publication.
+fx="$(release_build_fixture)"
+python3 - "$fx/release/build-release.sh" <<'PY'
+import sys
+p=sys.argv[1]; t=open(p).read()
+a='if [[ "$(hash_artifacts "$DIST")" != "$hashes_1" ]]; then'
+assert t.count(a)==1
+t=t.replace(a, 'printf TAMPER >> "$DIST/$NAME-$VERSION-release-manifest.json"\n'+a,1)
+open(p,'w').write(t)
+PY
+out="$(release_build "$fx")" && rc=0 || rc=$?
+(( rc != 0 )) && grep -qF 'changed after the reproducibility gate' <<< "$out" \
+    && ok "manifest tampering after the gate fails final verification" \
+    || bad "manifest tampering after the gate was not detected (rc=$rc)"
 
 # 5. --skip-tests must never be reported as a suite that passed.
 fx="$(release_build_fixture)"
@@ -1523,6 +1553,41 @@ if python3 -m venv --without-pip "$BPY_FIX/venv" >/dev/null 2>&1; then
 else
     skip "base-python launcher (python3 -m venv unavailable)"
 fi
+
+section "Generated wrappers with literal configured paths"
+# Execute the generated scripts, with an environment variable set so an
+# unquoted dollar sign cannot accidentally select the intended path.
+WRAP_FIX="$TMP/generated-wrappers"
+WRAP_ODD="$WRAP_FIX/"'path with space-$SB_WRAPPER_PATH-"quote"-`unused`-\slash'
+mkdir -p "$WRAP_ODD/bin"
+cat > "$WRAP_ODD/bin/activate" <<'ACTIVATE'
+export SB_WRAPPER_ACTIVATED=literal-activation
+ACTIVATE
+cat > "$WRAP_FIX/shell" <<'SHELL'
+#!/usr/bin/env bash
+printf '%s\n' "${SB_WRAPPER_ACTIVATED:-unset}"
+exit 7
+SHELL
+cat > "$WRAP_ODD/bin/claude" <<'CLAUDE'
+#!/usr/bin/env bash
+printf '%s\n' "${DISABLE_AUTOUPDATER:-unset}" "$@"
+exit 23
+CLAUDE
+chmod 0755 "$WRAP_FIX/shell" "$WRAP_ODD/bin/claude"
+bootstrap_write_base_python_env "$WRAP_ODD" "$WRAP_FIX/base-python-env"
+wrapper_rc=0
+wrapper_out="$(SB_WRAPPER_PATH=expanded SHELL="$WRAP_FIX/shell" "$WRAP_FIX/base-python-env" 2>/dev/null)" || wrapper_rc=$?
+[[ "$wrapper_out" == literal-activation && "$wrapper_rc" == 7 ]] \
+    && ok "base-python-env activates the literal configured path and preserves the shell's status" \
+    || bad "base-python-env expanded its path or lost the shell's status (rc=$wrapper_rc)"
+# shellcheck source=/dev/null
+source lib/bootstrap/ai_cli.sh
+bootstrap_write_claude_wrapper "$WRAP_ODD" "$WRAP_FIX/claude"
+wrapper_rc=0
+wrapper_out="$(SB_WRAPPER_PATH=expanded "$WRAP_FIX/claude" 'first argument' 'second $arg' 2>/dev/null)" || wrapper_rc=$?
+[[ "$wrapper_out" == $'1\nfirst argument\nsecond $arg' && "$wrapper_rc" == 23 ]] \
+    && ok "the Claude wrapper runs the literal configured path, forwards arguments and disables updates" \
+    || bad "the Claude wrapper expanded its path or lost arguments, update policy or status (rc=$wrapper_rc)"
 
 section "Package manifest"
 PKG_FIX="$TMP/packages"; mkdir -p "$PKG_FIX"
