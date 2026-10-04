@@ -1,4 +1,4 @@
-# Pinned ngrok agent release used by server-bootstrap 2.2.3.
+# Pinned ngrok agent release used by server-bootstrap 2.3.0.
 # Assets: ngrok_3.39.11-0_amd64.deb / ngrok_3.39.11-0_arm64.deb
 # Source: https://ngrok-agent.s3.amazonaws.com/dists/buster/main/binary-<arch>/Packages
 linux-amd64 e51aa234283bcf20a777e21a624b2a3501b058b3d5a1faec59106311dbe30395

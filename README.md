@@ -22,16 +22,8 @@ root. It installs the complete built-in stack: the foundation
 [listed below](#what-the-run-installs), including the ngrok CLI, and the
 optional `ml` environment.
 
-> [!IMPORTANT]
-> No published release ships this block's plan yet. v2.2.3, the latest
-> release, has neither `provision-plan.full.example.sh` nor the `ml` profile,
-> so today the download fails and the block installs nothing. The block names
-> 2.2.3 because that is still this repository's `VERSION`; the release that
-> ships the full plan replaces it. Until then, use the
-> [foundation-only install](#foundation-only-install), which works with v2.2.3.
-
 ```bash
-V=2.2.3
+V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
@@ -77,10 +69,10 @@ CUDA host.
 ### Foundation-only install
 
 `provision-plan.example.sh` installs the foundation alone, without the `ml`
-profile, and deletes the archive after a successful run. v2.2.3 publishes it:
+profile, and deletes the archive after a successful run:
 
 ```bash
-V=2.2.3
+V=2.3.0
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { apt-get update \
@@ -178,9 +170,9 @@ when the declared specification requires a GPU.
 
 | Goal | Command |
 | --- | --- |
-| Provision a fresh server with the complete built-in stack (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.full.example.sh` |
+| Provision a fresh server with the complete built-in stack | `./server-provision.sh --plan ./provision-plan.full.example.sh` |
 | Provision a fresh server with the foundation only | `./server-provision.sh --plan ./provision-plan.example.sh` |
-| Provision a fresh server with the foundation and the ML environment (not in v2.2.3) | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
+| Provision a fresh server with the foundation and the ML environment | `./server-provision.sh --plan ./provision-plan.ml.example.sh` |
 | Re-run or repair the foundation on a host that already has it | `server-bootstrap` |
 | Install one workload bundle later | `server-bundle-install --name … --version … --source … --sha256 …` |
 | Re-check the host against its declared specification | `server-accept` |
@@ -210,8 +202,8 @@ green with nothing else downloaded. To add a workload, put its archive and
 ```text
 server-provision.sh
 provision-plan.example.sh
-server-bootstrap-2.2.3.tar.gz
-server-bootstrap-2.2.3.tar.gz.sha256
+server-bootstrap-2.3.0.tar.gz
+server-bootstrap-2.3.0.tar.gz.sha256
 <workload>-<version>.tar.gz
 <workload>-<version>.tar.gz.sha256
 ```
