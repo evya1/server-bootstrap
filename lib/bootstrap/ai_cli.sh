@@ -38,6 +38,13 @@ bootstrap_npm_packages_current() {  # package@version:command ...
     done
 }
 
+# Write the configured executable path as one literal Bash word.
+bootstrap_write_claude_wrapper() {  # prefix, target
+    # shellcheck disable=SC2016  # "$@" belongs to the generated wrapper
+    printf '#!/usr/bin/env bash\nexport DISABLE_AUTOUPDATER=1\nexec %q "$@"\n' \
+        "$1/bin/claude" > "$2" && chmod 0755 "$2"
+}
+
 bootstrap_ai_cli() {
     CLAUDE_RESULT="disabled"
     CODEX_RESULT="disabled"
@@ -75,12 +82,7 @@ bootstrap_ai_cli() {
         [[ -x "$AI_CLI_PREFIX/bin/claude" ]] || { sb_die "Claude Code executable missing"; return; }
         rm -f -- /usr/local/bin/claude
         if [[ "$CLAUDE_CODE_DISABLE_AUTOUPDATER" == 1 ]]; then
-            cat > /usr/local/bin/claude <<CLAUDEWRAPPER
-#!/usr/bin/env bash
-export DISABLE_AUTOUPDATER=1
-exec "$AI_CLI_PREFIX/bin/claude" "\$@"
-CLAUDEWRAPPER
-            chmod 0755 /usr/local/bin/claude
+            bootstrap_write_claude_wrapper "$AI_CLI_PREFIX" /usr/local/bin/claude
         else
             ln -sfn "$AI_CLI_PREFIX/bin/claude" /usr/local/bin/claude
         fi
