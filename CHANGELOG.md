@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Root-only tests are reported as skipped when they do not run.** The full,
+  remote and profile provision integrations no longer inflate an unprivileged
+  suite's pass count, and the summary reports skips separately. CI now also
+  runs the complete suite as root in fresh `ubuntu:24.04` containers on x86-64
+  and ARM64, exercising those integrations and the README install block.
+  ([#80](https://github.com/evya1/server-bootstrap/issues/80))
+
 - **The release manifest is generated and compared in both build passes.**
   Its profile metadata and archive hashes are included in the reproducibility
   check, and it is re-hashed after scanning along with the archives. A
