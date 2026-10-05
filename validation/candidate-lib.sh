@@ -58,6 +58,14 @@ sb_provider_transaction() {
     [[ "$3" == 0 ]] && sb_provider_history "$1" "$2"
 }
 
+sb_apt_contention_observed() {
+    # Recognize actual wait diagnostics, including apt-get check's Ubuntu 24.04
+    # message after its lock timeout. Permission errors and unrelated apt
+    # failures do not prove contention. The caller separately requires a real
+    # kernel-reported apt lock and a successful, complete provider transaction.
+    grep -Eq '(^| \| )waiting for another apt/dpkg process: [0-9]+ \([^)]*\) holds /var/lib/dpkg/lock-frontend(; |$)|^(Waiting for cache lock: |E: )Could not get lock /var/lib/dpkg/lock-frontend\. It is held by process [0-9]+ \([^)]*\)|^E: Unable to acquire the dpkg frontend lock \(/var/lib/dpkg/lock-frontend\), is another process using it\?$' "$1"
+}
+
 sb_no_driver_changes() {
     # Read the full apt history, including rotated records. Only transaction
     # change fields count; incidental prose or a package simulation is not a change.

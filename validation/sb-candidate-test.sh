@@ -380,9 +380,10 @@ if [[ "$CONTENTION" == provider ]]; then
     cat > "$LOGDIR/provider-hook.sh" <<'HOOK'
 #!/usr/bin/env bash
 set -eu
+source "$SB_PROVIDER_HELPERS"
 : > "$SB_PROVIDER_EVIDENCE/provider-ready"
 for (( attempt=0; attempt<120; attempt++ )); do
-    if grep -Eq 'waiting for another apt/dpkg process:|Waiting for cache lock:|Could not get lock /var/lib/dpkg/lock-frontend' "$SB_PROVIDER_EVIDENCE/install-1.log" 2>/dev/null; then
+    if sb_apt_contention_observed "$SB_PROVIDER_EVIDENCE/install-1.log" 2>/dev/null; then
         : > "$SB_PROVIDER_EVIDENCE/provider-overlap"
         exit 0
     fi
@@ -392,6 +393,7 @@ printf '%s\n' 'installer did not observe the provider apt lock' >&2
 exit 1
 HOOK
     export SB_PROVIDER_EVIDENCE="$LOGDIR"
+    export SB_PROVIDER_HELPERS="$SELF_DIR/candidate-lib.sh"
     (
         apt-get update &&
         DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Pre-Invoke::=bash $LOGDIR/provider-hook.sh" \

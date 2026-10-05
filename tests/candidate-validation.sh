@@ -75,6 +75,30 @@ reject sb_provider_transaction "$TEMP/history" 'install ok installed' 0
 sed '/^End-Date:/d; /^Error:/d' "$TEMP/history" > "$TEMP/incomplete-history"
 reject sb_provider_transaction "$TEMP/incomplete-history" 'install ok installed' 0
 reject sb_provider_history "$TEMP/incomplete-history" 'install ok installed'
+
+# The first diagnostic is the actual Ubuntu 24.04 apt-get check failure seen
+# when the ARM64 provider transaction held its frontend lock in candidate CI.
+for diagnostic in \
+    'E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?' \
+    'Waiting for cache lock: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 42 (apt-get)' \
+    'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 42 (apt-get)' \
+    '12:00:00Z | bootstrap | waiting for another apt/dpkg process: 42 (apt-get) holds /var/lib/dpkg/lock-frontend; 42 (apt-get) holds /var/cache/apt/archives/lock'; do
+    printf '%s\n' "$diagnostic" > "$TEMP/apt-output"
+    accept sb_apt_contention_observed "$TEMP/apt-output"
+done
+for diagnostic in \
+    'E: Unable to locate package missing-package' \
+    'E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)' \
+    'E: Could not get lock /var/lib/dpkg/lock-frontend - open (13: Permission denied)' \
+    'E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), are you root?' \
+    'Waiting for cache lock: unrelated failure' \
+    'E: Unable to acquire the dpkg frontend lock (/tmp/unrelated-lock), is another process using it?' \
+    'Setting up openssh-server'; do
+    printf '%s\n' "$diagnostic" > "$TEMP/apt-output"
+    reject sb_apt_contention_observed "$TEMP/apt-output"
+done
+reject sb_apt_contention_observed "$TEMP/missing-apt-output"
+
 printf 'Install: nano:amd64 (1.0), openssh-server:amd64 (1.0)\n' > "$TEMP/driver-history"
 accept sb_no_driver_changes "$TEMP/driver-history"
 printf 'Upgrade: nvidia-utils-580:amd64 (1.0, 1.1)\n' >> "$TEMP/driver-history"
