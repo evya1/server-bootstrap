@@ -1330,8 +1330,9 @@ section "Fitness: documentation says what the code does"
 # of why a bug was undetectable, and what "checksum-verified" covers. See #29.
 
 # 1. The --write file list. tools/write-pins.py is the writer, so the files it
-# names are the answer; three prose lists have to agree with it. checksums/*.txt
-# collapses to the directory, which is how all three write it.
+# names are the answer; the configuration guide and maintainer banner have to
+# agree with it. The README links to that guide instead of repeating the list.
+# checksums/*.txt collapses to the directory in both recordings.
 doc_list_drift=0
 while IFS= read -r target; do
     [[ -n "$target" ]] || continue
@@ -1341,13 +1342,15 @@ while IFS= read -r target; do
         grep -qF -- "$target" "$file" \
             || { bad "$where does not name $target, which tools/write-pins.py rewrites"; doc_list_drift=1; }
     done <<'LISTS'
-README.md's --write paragraph|README.md
 docs/CONFIGURATION.md|docs/CONFIGURATION.md
 the refresh-pins.sh banner|tools/refresh-pins.sh
 LISTS
 done < <(grep -oE '"[A-Za-z0-9_./-]+\.(sh|md|env|txt|py)"' tools/write-pins.py \
     | tr -d '"' | LC_ALL=C sort -u)
 (( doc_list_drift == 0 )) && ok "every file --write rewrites is named everywhere --write is documented"
+grep -qF '](docs/CONFIGURATION.md)' README.md \
+    && ok "README links to the configuration and pin-maintenance guide" \
+    || bad "README does not link to the configuration and pin-maintenance guide"
 # And nothing may claim the rewrite is atomic across files: it validates every
 # substitution before the first write, but the writes are per file.
 grep -qiF 'atomic across' tools/write-pins.py \
@@ -3623,8 +3626,8 @@ for code_line in \
     grep -qF -- "$code_line" tools/refresh-pins.sh \
         || { bad "refresh-pins.sh does not document: $code_line"; exit_doc_drift=1; }
 done
-grep -qF 'refresh-pins.sh --check --all' README.md \
-    || { bad "README does not document --all"; exit_doc_drift=1; }
+grep -qF 'refresh-pins.sh --check --all' docs/CONFIGURATION.md \
+    || { bad "the configuration guide does not document --all"; exit_doc_drift=1; }
 grep -qF 'exit 3' docs/CONFIGURATION.md \
     || { bad "docs/CONFIGURATION.md does not document the UNKNOWN exit code"; exit_doc_drift=1; }
 (( exit_doc_drift == 0 )) && ok "the exit-code contract is documented where it is used"
@@ -5336,20 +5339,28 @@ fi
 # The README's first Bash block is the whole installation: download the
 # provisioner, the full plan, the versioned main archive and its sidecar,
 # verify the archive, then run the full plan, each step only after the one
-# before it succeeded. The foundation-only block comes after it.
+# before it succeeded. The foundation-only block lives in the linked Quick Start
+# guide and must retain the same verified flow.
 RXB="$TMP/readme-blocks"; mkdir -p "$RXB"
-if readme_out="$(python3 - README.md "$RA_VERSION" "$RXB" <<'PY'
+if readme_out="$(python3 - README.md docs/QUICKSTART.md "$RA_VERSION" "$RXB" <<'PY'
 import pathlib, re, sys
-path, version, out = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
+path, quickstart, version, out = sys.argv[1], sys.argv[2], sys.argv[3], pathlib.Path(sys.argv[4])
 text = pathlib.Path(path).read_text()
 lines = text.split("\n")
-blocks, i = [], 0
-while i < len(lines):
-    if lines[i] == "```bash":
-        j = lines.index("```", i + 1)
-        blocks.append((i, "\n".join(lines[i + 1:j]) + "\n"))
-        i = j
-    i += 1
+quick_lines = pathlib.Path(quickstart).read_text().split("\n")
+
+def blocks_in(lines):
+    blocks, i = [], 0
+    while i < len(lines):
+        if lines[i] == "```bash":
+            j = lines.index("```", i + 1)
+            blocks.append((i, "\n".join(lines[i + 1:j]) + "\n"))
+            i = j
+        i += 1
+    return blocks
+
+blocks = blocks_in(lines)
+quick_blocks = blocks_in(quick_lines)
 
 def steps(body):
     """(command, what joins it to the next) with continuation lines folded."""
@@ -5404,20 +5415,26 @@ def expected(plan):
     ]
 
 problems = []
-install = lines.index("## Install") if "## Install" in lines else -1
-full = [n for n, (_, body) in enumerate(blocks) if "provision-plan.full.example.sh" in body]
-minimal = [n for n, (_, body) in enumerate(blocks) if "provision-plan.example.sh" in body]
+install = lines.index("## How to use") if "## How to use" in lines else -1
+headings = [line for line in lines if line.startswith("## ")]
+minimal = [n for n, (_, body) in enumerate(quick_blocks) if "provision-plan.example.sh" in body]
+if not headings or headings[0] != "## How to use":
+    problems.append("How to use is not the README's first section after the description")
 if not blocks or install < 0 or blocks[0][0] < install or any(l.startswith("## ") for l in lines[install + 1:blocks[0][0]]):
-    problems.append("the first Bash block is not the first thing under ## Install")
+    problems.append("the first Bash block is not the first thing under ## How to use")
 elif steps(blocks[0][1]) != expected("provision-plan.full.example.sh"):
     problems.append("the first Bash block is not download, sha256sum -c, chmod, run the full plan, joined by &&")
-if not minimal or not full or minimal[0] <= full[0]:
-    problems.append("the foundation-only block does not come after the full plan's")
-elif steps(blocks[minimal[0]][1]) != expected("provision-plan.example.sh"):
+if not minimal:
+    problems.append("the Quick Start guide has no foundation-only block")
+elif steps(quick_blocks[minimal[0]][1]) != expected("provision-plan.example.sh"):
     problems.append("the foundation-only block is not the same verified flow with provision-plan.example.sh")
-elif "### Foundation-only install" not in lines[:blocks[minimal[0]][0]]:
-    problems.append("the foundation-only block is not under its own heading")
-if text.find("provision-plan.full.example.sh") > text.find("provision-plan.example.sh"):
+elif "### Foundation-only install" not in quick_lines[:quick_blocks[minimal[0]][0]]:
+    problems.append("the Quick Start foundation-only block is not under its own heading")
+if any("provision-plan.example.sh" in body and "releases/download" in body for _, body in blocks):
+    problems.append("the foundation-only download block is duplicated in the README")
+if "](docs/QUICKSTART.md#foundation-only-install)" not in text:
+    problems.append("the README does not link to the foundation-only instructions")
+if "provision-plan.example.sh" in text and text.find("provision-plan.full.example.sh") > text.find("provision-plan.example.sh"):
     problems.append("the README names the minimal plan before the full plan")
 if problems:
     print("; ".join(problems))
@@ -5434,7 +5451,7 @@ PY
     readme_assets="$readme_out"
     readme_unpublished="$(comm -23 <(LC_ALL=C sort <<< "$readme_assets") <(bash release/release-assets.sh upload | LC_ALL=C sort))"
     [[ -z "$readme_unpublished" && "$(wc -l <<< "$readme_assets")" == 4 ]] \
-        && ok "the README's first block downloads four published assets, verifies the archive, then runs the full plan; the minimal plan follows" \
+        && ok "the README's first block downloads four published assets, verifies the archive, then runs the full plan; Quick Start preserves the foundation-only flow" \
         || bad "the README's first block downloads what no release publishes: $readme_unpublished"
 else
     bad "README install blocks: $readme_out"
@@ -5618,7 +5635,7 @@ while read -r pb_block pb_where pb_ca; do
             || bad "pasted block $pb_where under $pb_sh: $pb_result"
     done
 done <<< "$pb_blocks"
-(( pb_count >= 3 )) && ok "every pasted download block ran: $pb_count" || bad "expected the README's two download blocks and the ML guide's; found $pb_count"
+(( pb_count >= 3 )) && ok "every pasted download block ran: $pb_count" || bad "expected the full, foundation-only and ML download blocks across README and guides; found $pb_count"
 
 # The block itself, run as pasted, against the files this release publishes.
 # wget is a stub serving the release URLs from a directory; the archive is the
@@ -5831,7 +5848,7 @@ while IFS= read -r hit; do
     bad "stale version string: $hit"
     version_drift=1
 done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
-    README.md config.example.env checksums/*.txt docs/PROVISIONING.md docs/ML-PROFILE.md examples/*.sh 2>/dev/null \
+    README.md config.example.env checksums/*.txt docs/QUICKSTART.md docs/PROVISIONING.md docs/ML-PROFILE.md examples/*.sh 2>/dev/null \
     | grep -vF "server-bootstrap $declared" \
     | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"

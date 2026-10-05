@@ -14,7 +14,9 @@ wait within a bounded budget before running apt. This release also makes
 archive modes reproducible across checkout permissions, verifies the release
 manifest in both build passes, preserves configured paths in generated
 wrappers, cleans up rejected bundles with restrictive directory modes, and
-runs the root integration suite in CI on x86-64 and ARM64.
+runs the root integration suite in CI on x86-64 and ARM64. The README puts
+the complete installation first and moves detailed guidance into the existing
+guides.
 
 ### Fixed
 
@@ -66,8 +68,8 @@ runs the root integration suite in CI on x86-64 and ARM64.
   image's `docker-clean` hook would then delete under it. The install waits
   up to ten minutes for dpkg's locks (`-o DPkg::Lock::Timeout=600`). The
   simulation, the NVIDIA/CUDA refusal, `--no-remove` and stopping at the
-  first failure are unchanged, in the README's two blocks and the ML
-  guide's. ([#79][])
+  first failure are unchanged, in the README's full block, Quick Start's
+  foundation-only block and the ML guide's block. ([#79][])
 
 - **The bootstrap waits for another apt or dpkg process on a bare image.** Its
   lock wait polled `fuser`, which is psmisc, and a stock `ubuntu:24.04` image
@@ -80,6 +82,16 @@ runs the root integration suite in CI on x86-64 and ARM64.
   apt transaction and each `apt-get update` attempt, and logged by PID and
   name. The wait is one budget of 600 seconds for the run, after which it
   fails naming the holder. ([#79][])
+
+### Changed
+
+- **The README opens with the complete installation under “How to use”.**
+  Root, OS, disk and GPU requirements are visible beside the unchanged full
+  installation block. Authentication is an optional choice. Quick Start
+  carries the unchanged foundation-only block, commands and rerun details;
+  configuration and security references live in their existing guides. The
+  suite executes the download blocks at their new locations under Bash and
+  dash. ([#93](https://github.com/evya1/server-bootstrap/issues/93))
 
 [#79]: https://github.com/evya1/server-bootstrap/issues/79
 
