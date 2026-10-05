@@ -6,7 +6,7 @@ Nothing merged since 2.3.2.
 
 ## 2.3.2
 
-*Released 2026-10-05.*
+*Released 2026-10-06.*
 
 A patch release for installs that run while another apt or dpkg process is
 busy, including container startup scripts. The install blocks and bootstrap
@@ -17,6 +17,18 @@ wrappers, cleans up rejected bundles with restrictive directory modes, and
 runs the root integration suite in CI on x86-64 and ARM64. The README puts
 the complete installation first and moves detailed guidance into the existing
 guides.
+
+### Added
+
+- **CI installs each verified candidate in ten fresh Ubuntu 24.04 containers.**
+  Full, foundation-only and ML installs, plus full installs with provider-style
+  apt contention both with and without preinstalled wget, run on x86-64 and
+  ARM64 after the shared release build. The jobs receive the candidate commit,
+  artifact and checksum digest from that build, verify its assets against the
+  Git tree, then check installation, stack results, an identical repeat and
+  integrity. Contention cases require an observed apt lock and a completed
+  provider package transaction. The same harness checks GPU candidates and
+  published boot installs, including the actual exit status and stored script.
 
 ### Fixed
 
@@ -84,6 +96,12 @@ guides.
   fails naming the holder. ([#79][])
 
 ### Changed
+
+- **Refreshed the released coding-agent pins.** Codex moves from `0.160.0`
+  to `0.160.1` and pi from `1.0.2` to `1.0.4`, using
+  `tools/refresh-pins.sh --write`. Both remain exact-version npm installs;
+  all other release pins are current. The pinned Oh My Zsh commit stays
+  unchanged. ([#94](https://github.com/evya1/server-bootstrap/issues/94))
 
 - **The README opens with the complete installation under “How to use”.**
   Root, OS, disk and GPU requirements are visible beside the unchanged full

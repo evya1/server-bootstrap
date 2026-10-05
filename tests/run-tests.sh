@@ -5853,6 +5853,13 @@ done < <(grep -rnoE 'server-bootstrap[ -]v?[0-9]+\.[0-9]+\.[0-9]+' \
     | grep -vF "server-bootstrap-$declared" || true)
 (( version_drift == 0 )) && ok "shipped version strings match VERSION"
 
+section "Candidate acceptance boundaries"
+if bash tests/candidate-validation.sh; then
+    ok "candidate identity, stored startup, actual status, provider completion and doctor rejection tests"
+else
+    bad "candidate acceptance boundary rejection tests"
+fi
+
 section "Results"
 printf 'PASS: %d   FAIL: %d   SKIP: %d\n' "$PASS" "$FAIL" "$SKIP"
 # A stale manifest is the one failure here that is routine, mechanical, and not
