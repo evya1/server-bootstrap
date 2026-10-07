@@ -114,7 +114,11 @@ FIRST_PASS=after-install; (( AFTER_STARTUP )) && FIRST_PASS=after-startup
 [[ -d "$CAND" ]] || { echo "STOP: $CAND not found; it must hold the candidate files" >&2; exit 1; }
 LOGDIR="$CAND/logs/$(date -u +%Y%m%dT%H%M%SZ)-$MODE"
 mkdir -p "$LOGDIR" || { echo "STOP: cannot create $LOGDIR" >&2; exit 1; }
+# Keep the original streams so EXIT can close both writers to tee and wait for
+# its EOF. A container's PID 1 must not exit while the final result is buffered.
+exec {LOG_STDOUT}>&1 {LOG_STDERR}>&2
 exec > >(tee -a "$LOGDIR/test.log") 2>&1
+LOG_PID=$!
 
 SUMMARY=(); FAILED=0
 stage() { printf '\n=== [%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -136,7 +140,22 @@ finish() {
 stop() { result STOP "$*"; printf '\nSTOPPED before the next stage.\n'; finish; }
 
 HTTP_PID=""
-cleanup() { [[ -z "$HTTP_PID" ]] || kill "$HTTP_PID" 2>/dev/null || true; }
+cleanup() {
+    local code=$? logger_code=0
+    trap - EXIT
+    if [[ -n "$HTTP_PID" ]]; then
+        kill "$HTTP_PID" 2>/dev/null || true
+        wait "$HTTP_PID" 2>/dev/null || true
+    fi
+    exec 1>&"$LOG_STDOUT" 2>&"$LOG_STDERR"
+    exec {LOG_STDOUT}>&- {LOG_STDERR}>&-
+    wait "$LOG_PID" || logger_code=$?
+    if (( logger_code != 0 )); then
+        printf 'ERROR: candidate log writer failed (exit %s)\n' "$logger_code" >&2
+        (( code != 0 )) || code=$logger_code
+    fi
+    exit "$code"
+}
 trap cleanup EXIT
 
 # --- 1. Host checks: read-only ------------------------------------------------

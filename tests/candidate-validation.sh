@@ -162,5 +162,115 @@ with patch.object(module.metadata, "version", return_value="1.2.3"):
 print("doctor completeness, CPU/GPU counts, skipped checks and exact package versions checked")
 PY
 
+# A gated tee makes fast-exit truncation deterministic. Execute the actual
+# harness logging/EXIT block without touching host packages or needing root.
+accept python3 - "$ROOT" <<'PY'
+"""Exercise the harness's actual logging/EXIT block with a controlled reader."""
+import hashlib
+import os
+from pathlib import Path
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+
+root = Path(sys.argv[1])
+source = (root / 'validation/sb-candidate-test.sh').read_text()
+start = source.index('\nexec ', source.index('mkdir -p "$LOGDIR"'))
+end = source.index('\n# --- 1. Host checks:', start)
+lifecycle = source[start:end]
+real_tee = shutil.which('tee')
+assert real_tee
+with tempfile.TemporaryDirectory(prefix='candidate-logger-') as directory:
+    base = Path(directory)
+    binary = base / 'bin'
+    binary.mkdir()
+    wrapper = binary / 'tee'
+    wrapper.write_text('#!' + sys.executable + '\n' + '''import os, subprocess, sys
+ready = int(os.environ['FIXTURE_LOG_READY'])
+release = int(os.environ['FIXTURE_LOG_RELEASE'])
+os.write(ready, b'R')
+os.close(ready)
+if os.read(release, 1) != b'G':
+    raise SystemExit(99)
+os.close(release)
+code = subprocess.run([os.environ['FIXTURE_REAL_TEE'], *sys.argv[1:]]).returncode
+raise SystemExit(int(os.environ['FIXTURE_TEE_STATUS']) or code)
+''')
+    wrapper.chmod(0o755)
+    script = base / 'fixture.sh'
+    script.write_text('''set -Euo pipefail
+LOGDIR="$1"
+HEAD_SHA="$2"
+MODE=logger-fixture
+''' + lifecycle + '''
+printf 'stdout sentinel\\n'
+printf 'stderr sentinel\\n' >&2
+if [[ "$FIXTURE_PATH" == finish ]]; then
+    if [[ "$FIXTURE_EXIT_STATUS" == 0 ]]; then result PASS fixture
+    else result FAIL fixture; fi
+    printf D >&"$FIXTURE_WRITER_DONE"
+    finish
+fi
+printf 'RESULT: %s\\n' "$([[ "$FIXTURE_EXIT_STATUS" == 0 ]] && echo PASSED || echo FAILED)"
+printf D >&"$FIXTURE_WRITER_DONE"
+exit "$FIXTURE_EXIT_STATUS"
+''')
+    cases = [('exit-success', 'exit', 0, 0, 0), ('exit-failure', 'exit', 42, 0, 42),
+             ('logger-failure', 'exit', 0, 73, 73), ('both-fail', 'exit', 42, 73, 42),
+             ('finish-success', 'finish', 0, 0, 0), ('finish-failure', 'finish', 1, 0, 1)]
+    for name, path, original, logger_status, expected in cases:
+        evidence = base / name
+        evidence.mkdir()
+        ready_read, ready_write = os.pipe()
+        release_read, release_write = os.pipe()
+        done_read, done_write = os.pipe()
+        env = os.environ.copy()
+        env.update(PATH=str(binary) + os.pathsep + env['PATH'], FIXTURE_REAL_TEE=real_tee,
+                   FIXTURE_LOG_READY=str(ready_write), FIXTURE_LOG_RELEASE=str(release_read),
+                   FIXTURE_WRITER_DONE=str(done_write), FIXTURE_PATH=path,
+                   FIXTURE_EXIT_STATUS=str(original), FIXTURE_TEE_STATUS=str(logger_status))
+        process = None
+        try:
+            with (evidence / 'console.log').open('wb') as console:
+                process = subprocess.Popen(['bash', str(script), str(evidence), hashlib.sha1(b'fixture').hexdigest()],
+                                           stdout=console, stderr=subprocess.STDOUT, env=env,
+                                           pass_fds=(ready_write, release_read, done_write), start_new_session=True)
+                for descriptor in (ready_read, done_read):
+                    assert select.select([descriptor], [], [], 10)[0], name + ': missing fixture handshake'
+                    assert os.read(descriptor, 1) in (b'R', b'D')
+                # Both writer and logger are ready. The reader remains blocked
+                # on an explicit gate, so completion before release proves loss.
+                try:
+                    code = process.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    raise AssertionError(name + ': harness exited before logger drain (exit ' + str(code) + ')')
+                os.write(release_write, b'G')
+                code = process.wait(timeout=10)
+                assert code == expected, name + ': wrong exit status ' + str(code)
+            log = (evidence / 'test.log').read_bytes()
+            console = (evidence / 'console.log').read_bytes()
+            for marker in (b'stdout sentinel\n', b'stderr sentinel\n',
+                           b'RESULT: PASSED\n' if original == 0 else b'RESULT: FAILED\n'):
+                assert marker in log and marker in console, name + ': missing final evidence in one stream'
+            if logger_status == 0:
+                assert console == log, name + ': stdout/stderr stream diverged from stored log'
+            print('PASS logger lifecycle: ' + name)
+        finally:
+            if process is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            for descriptor in (ready_read, ready_write, release_read, release_write, done_read, done_write):
+                os.close(descriptor)
+print('logger lifecycle: 6 passed, 0 failed')
+PY
+
 printf 'candidate acceptance boundaries: PASS: %d FAIL: %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

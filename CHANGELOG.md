@@ -29,6 +29,8 @@ guides.
   integrity. Contention cases require an observed apt lock and a completed
   provider package transaction. The same harness checks GPU candidates and
   published boot installs, including the actual exit status and stored script.
+  It waits for its log writer before exiting so captured evidence includes the
+  final result even when a test container stops immediately.
 
 ### Fixed
 
