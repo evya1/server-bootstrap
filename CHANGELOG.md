@@ -6,7 +6,7 @@ Nothing merged since 2.3.2.
 
 ## 2.3.2
 
-*Released 2026-10-06.*
+*Released 2026-10-07.*
 
 A patch release for installs that run while another apt or dpkg process is
 busy, including container startup scripts. The install blocks and bootstrap
@@ -97,11 +97,12 @@ guides.
 
 ### Changed
 
-- **Refreshed the released coding-agent pins.** Codex moves from `0.160.0`
-  to `0.160.1` and pi from `1.0.2` to `1.0.4`, using
-  `tools/refresh-pins.sh --write`. Both remain exact-version npm installs;
-  all other release pins are current. The pinned Oh My Zsh commit stays
-  unchanged. ([#94](https://github.com/evya1/server-bootstrap/issues/94))
+- **Refreshed the released coding-agent pins.** Claude Code moves from
+  `2.1.289` to `2.1.292`, Codex from `0.160.0` to `0.160.1` and pi from
+  `1.0.2` to `1.0.4`, using `tools/refresh-pins.sh --write`.
+  All three remain exact-version npm installs; all other release pins are
+  current. The pinned Oh My Zsh commit stays unchanged.
+  ([#94](https://github.com/evya1/server-bootstrap/issues/94))
 
 - **The README opens with the complete installation under “How to use”.**
   Root, OS, disk and GPU requirements are visible beside the unchanged full
