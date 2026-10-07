@@ -2,7 +2,7 @@
 # Bootstrap defaults. All values can be overridden through the environment.
 
 bootstrap_load_config() {
-    BOOTSTRAP_VERSION="2.3.0"
+    BOOTSTRAP_VERSION="2.3.2"
 
     WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
     TOOLS_ROOT="${TOOLS_ROOT:-$WORKSPACE_ROOT/tools}"
@@ -64,10 +64,10 @@ bootstrap_load_config() {
 
     AI_CLI_PREFIX="${AI_CLI_PREFIX:-/opt/ai-cli}"
     NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org/}"
-    CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.289}"
+    CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.292}"
     CLAUDE_CODE_DISABLE_AUTOUPDATER="${CLAUDE_CODE_DISABLE_AUTOUPDATER:-1}"
-    CODEX_VERSION="${CODEX_VERSION:-0.160.0}"
-    PI_VERSION="${PI_VERSION:-1.0.2}"
+    CODEX_VERSION="${CODEX_VERSION:-0.161.0}"
+    PI_VERSION="${PI_VERSION:-1.0.4}"
     PI_CONFIG_DIR="${PI_CONFIG_DIR:-/root/.pi/agent}"
     PI_MODELS_TEMPLATE="${PI_MODELS_TEMPLATE:-$ROOT/examples/pi-models.example.json}"
 

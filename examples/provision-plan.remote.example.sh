@@ -20,8 +20,8 @@ if [[ "${DRY_RUN:-0}" != 1 ]]; then
 fi
 
 register_bootstrap \
-  "./server-bootstrap-2.3.0.tar.gz" \
-  "./server-bootstrap-2.3.0.tar.gz.sha256"
+  "./server-bootstrap-2.3.2.tar.gz" \
+  "./server-bootstrap-2.3.2.tar.gz.sha256"
 
 # The URL and SHA-256 below are placeholders for the preview. Replace both with
 # the archive's published HTTPS address and the SHA-256 you reviewed. The URL

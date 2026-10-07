@@ -9,6 +9,51 @@ a reference to the file, commit, or release asset is enough to act on.
 
 [advisory]: https://github.com/evya1/server-bootstrap/security/advisories/new
 
+## Installation trust
+
+The archive checksum is verified before extraction. Downloading an archive and
+its `.sha256` from the same origin establishes integrity, not authenticity:
+it detects a truncated or corrupted transfer, but someone who can publish a
+release can replace both. Trust depends on HTTPS and control of the publishing
+account, including account 2FA. Pin an independently reviewed expected SHA-256
+in your own provision plan for remote bundles.
+
+Pinned Node.js, uv, `gh` and ngrok downloads are checked against SHA-256 values
+recorded in this repository before use. The AI CLIs are exact-version npm
+installs whose integrity comes from npm and the registry; their installed
+versions are read back and verified. Oh My Zsh is fetched at an exact commit
+and Git `HEAD` is checked. No upstream installer script is run.
+
+Choosing `latest` is an explicit opt-in. For binary artifacts, the expected
+hash then comes from the publisher's checksum manifest fetched over HTTPS at
+run time, so it carries the same integrity and authenticity limits as an
+archive and sidecar from one origin. Pinned versions remain the default.
+
+## Installation guarantees
+
+- Archives with absolute paths, parent traversal or escaping symlinks are
+  rejected. Remote bundle sources and the npm registry must use HTTPS; a
+  remote bundle names an exact version and SHA-256.
+- API keys live in one root-owned file at mode 0600. It is parsed, never
+  sourced, so command-shaped text in a value remains data. Empty keys are
+  not exported. See [API key configuration](docs/CONFIGURATION.md#api-keys).
+- AI CLI packages are isolated in `/opt/ai-cli`. Installation state records
+  versions and completion. Local archives and sidecars are removed only
+  after their own installation succeeds, according to the plan's retention
+  policy; see [archive deletion](docs/PROVISIONING.md#archive-deletion).
+- Hardware acceptance runs before profiles and workload bundles. No workload
+  or public service starts automatically, and no model or dataset is
+  downloaded. File transfers and tunnels require explicit configuration.
+- Package names are validated before reaching apt. Each real apt attempt is
+  simulated and refused if it would change an installed NVIDIA driver or CUDA
+  package. Another apt process can still change the plan between simulation
+  and execution; see [driver protection](docs/CONFIGURATION.md#nvidia-driver-and-cuda-packages).
+- Release archives and their manifest are built twice and compared byte for
+  byte. File modes are normalised to 0644 or 0755 from Git's executable flags,
+  so checkout permissions and the builder's umask do not change archive bytes.
+  See [Security scanning](docs/SECURITY-SCANNING.md) for the release scans and
+  exact asset checks before publication.
+
 ## History preservation and remediation
 
 **Security fixes in this repository are additive. Published Git history is never

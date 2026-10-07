@@ -15,7 +15,7 @@ downloads no model or dataset and starts no service.
 
 ## One-command install
 
-The README's [first install block](../README.md#install) enables this profile
+The README's [first install block](../README.md#how-to-use) enables this profile
 as part of the complete built-in stack, with
 `provision-plan.full.example.sh`. `provision-plan.ml.example.sh` is the plan
 for the foundation and this profile. Each release publishes
@@ -25,7 +25,7 @@ names. The profile is part of that archive, so neither plan carries an ML URL,
 version, archive, or checksum. On a fresh Ubuntu 24.04 host, as root:
 
 ```bash
-V=2.3.0
+V=2.3.2
 BASE=https://github.com/evya1/server-bootstrap/releases/download/v$V
 cd /root
 command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tries=0; \
@@ -48,7 +48,7 @@ command -v wget >/dev/null && [ -s /etc/ssl/certs/ca-certificates.crt ] || { tri
 
 Each command runs only if the one before it succeeded. On a bare image without
 `wget` or CA certificates, the lines before the download install just those
-two, as in the [README](../README.md#install), waiting first for any other
+two, as in the [README](../README.md#how-to-use), waiting first for any other
 apt process to finish, and stop without installing if
 the simulation fails or if apt's plan would also touch an NVIDIA driver or
 CUDA package. The dry run

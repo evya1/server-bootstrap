@@ -27,6 +27,11 @@ convenient place to export them.
 
 The optional ML profile has its own settings; see [ML-PROFILE](ML-PROFILE.md).
 
+The full plan exports every configurable installer switch as `1` and enables
+every built-in profile. A plan's exports override the caller's environment,
+so edit the corresponding line in a copy of the plan to omit a component.
+ngrok is installed on every bootstrap run and has no installer switch.
+
 ## Distribution packages
 
 The apt package set lives in `config/packages.txt` rather than in shell code, so
@@ -75,8 +80,9 @@ validated against Debian's naming rules before they reach the apt command line.
 | `SKIP_PACKAGES` | *(empty)* | space-separated names removed from both sections |
 
 ```bash
-EXTRA_PACKAGES="postgresql-client redis-tools"
-SKIP_PACKAGES="nmap tcpdump"
+EXTRA_PACKAGES="postgresql-client redis-tools" \
+SKIP_PACKAGES="nmap tcpdump" \
+  server-bootstrap
 ```
 
 Tools the bootstrap installs at a pinned version — Node.js, uv, `gh`, ngrok,
@@ -158,10 +164,10 @@ system prefix, in one npm transaction:
 ```bash
 AI_CLI_PREFIX=/opt/ai-cli
 NPM_REGISTRY=https://registry.npmjs.org/
-CLAUDE_CODE_VERSION=2.1.289
+CLAUDE_CODE_VERSION=2.1.292
 CLAUDE_CODE_DISABLE_AUTOUPDATER=1
-CODEX_VERSION=0.160.0
-PI_VERSION=1.0.2
+CODEX_VERSION=0.161.0
+PI_VERSION=1.0.4
 ```
 
 These are exact-version npm installs. Unlike Node.js, uv, `gh` and ngrok,
@@ -241,9 +247,10 @@ Manage it with `server-secrets`:
 | `server-secrets init` | create the file from the template if it is missing |
 
 Inside an interactive shell, `aikeys status`, `aikeys off` and `aikeys on`
-show, clear and reload the keys. `aikeys off` is what returns `claude` and
-`codex` to Claude Pro/Max and ChatGPT subscription login, because both prefer
-an API key whenever one is present.
+show, clear and reload the keys. Both `claude` and `codex` prefer an API key
+when one is present. Use `aikeys off` to clear keys from the current shell
+before choosing interactive sign-in. API keys are optional; see
+[authentication](QUICKSTART.md#authentication) for both choices.
 
 `SERVER_SECRETS_FILE` overrides the path for a single shell or command, which
 is what the test suite uses.
@@ -270,7 +277,9 @@ integrity, not authenticity, so pinned versions stay the default.
 Tag discovery uses `git ls-remote`, not `api.github.com`: no rate limit, no
 token, and it works from restricted networks.
 
-To refresh the pins themselves rather than resolve at run time:
+To refresh the pins themselves rather than resolve at run time, use these
+maintainer tools from a Git checkout or extracted release archive. The bootstrap
+does not install them on the provisioned host:
 
 ```bash
 tools/refresh-pins.sh            # report drift
@@ -305,6 +314,11 @@ release — a git tag, an npm `dist-tag`, or an apt package index entry — and 
 put until upstream cuts a new one. Oh My Zsh publishes no releases, so its pin
 tracks `refs/heads/master`, which moves several times a day. Moving it is a
 deliberate act: `--write` leaves it alone unless `--all` is given.
+
+The weekly `.github/workflows/pin-drift.yml` check keeps one issue open while
+a release pin is behind, updating it instead of opening a new one each week.
+A moved branch head opens no issue. An upstream resolution failure makes the
+workflow fail rather than report a clean result.
 
 ## VS Code Remote-SSH extensions
 

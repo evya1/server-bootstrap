@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+Nothing merged since 2.3.2.
+
+## 2.3.2
+
+*Released 2026-10-07.*
+
+A patch release for installs that run while another apt or dpkg process is
+busy, including container startup scripts. The install blocks and bootstrap
+wait within a bounded budget before running apt. This release also makes
+archive modes reproducible across checkout permissions, verifies the release
+manifest in both build passes, preserves configured paths in generated
+wrappers, cleans up rejected bundles with restrictive directory modes, and
+runs the root integration suite in CI on x86-64 and ARM64. The README puts
+the complete installation first and moves detailed guidance into the existing
+guides.
+
+### Added
+
+- **CI installs each verified candidate in ten fresh Ubuntu 24.04 containers.**
+  Full, foundation-only and ML installs, plus full installs with provider-style
+  apt contention both with and without preinstalled wget, run on x86-64 and
+  ARM64 after the shared release build. The jobs receive the candidate commit,
+  artifact and checksum digest from that build, verify its assets against the
+  Git tree, then check installation, stack results, an identical repeat and
+  integrity. Contention cases require an observed apt lock and a completed
+  provider package transaction. The same harness checks GPU candidates and
+  published boot installs, including the actual exit status and stored script.
+  It waits for its log writer before exiting so captured evidence includes the
+  final result even when a test container stops immediately.
+
 ### Fixed
 
 - **Root-only tests are reported as skipped when they do not run.** The full,
@@ -52,8 +82,8 @@
   image's `docker-clean` hook would then delete under it. The install waits
   up to ten minutes for dpkg's locks (`-o DPkg::Lock::Timeout=600`). The
   simulation, the NVIDIA/CUDA refusal, `--no-remove` and stopping at the
-  first failure are unchanged, in the README's two blocks and the ML
-  guide's. ([#79][])
+  first failure are unchanged, in the README's full block, Quick Start's
+  foundation-only block and the ML guide's block. ([#79][])
 
 - **The bootstrap waits for another apt or dpkg process on a bare image.** Its
   lock wait polled `fuser`, which is psmisc, and a stock `ubuntu:24.04` image
@@ -66,6 +96,23 @@
   apt transaction and each `apt-get update` attempt, and logged by PID and
   name. The wait is one budget of 600 seconds for the run, after which it
   fails naming the holder. ([#79][])
+
+### Changed
+
+- **Refreshed the released coding-agent pins.** Claude Code moves from
+  `2.1.289` to `2.1.292`, Codex from `0.160.0` to `0.161.0` and pi from
+  `1.0.2` to `1.0.4`, using `tools/refresh-pins.sh --write`.
+  All three remain exact-version npm installs; all other release pins are
+  current. The pinned Oh My Zsh commit stays unchanged.
+  ([#94](https://github.com/evya1/server-bootstrap/issues/94))
+
+- **The README opens with the complete installation under “How to use”.**
+  Root, OS, disk and GPU requirements are visible beside the unchanged full
+  installation block. Authentication is an optional choice. Quick Start
+  carries the unchanged foundation-only block, commands and rerun details;
+  configuration and security references live in their existing guides. The
+  suite executes the download blocks at their new locations under Bash and
+  dash. ([#93](https://github.com/evya1/server-bootstrap/issues/93))
 
 [#79]: https://github.com/evya1/server-bootstrap/issues/79
 
