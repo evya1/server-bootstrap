@@ -98,7 +98,7 @@ guides.
 ### Changed
 
 - **Refreshed the released coding-agent pins.** Claude Code moves from
-  `2.1.289` to `2.1.292`, Codex from `0.160.0` to `0.160.1` and pi from
+  `2.1.289` to `2.1.292`, Codex from `0.160.0` to `0.161.0` and pi from
   `1.0.2` to `1.0.4`, using `tools/refresh-pins.sh --write`.
   All three remain exact-version npm installs; all other release pins are
   current. The pinned Oh My Zsh commit stays unchanged.
