@@ -92,7 +92,7 @@ in [Quick start](docs/QUICKSTART.md).
 | CLI toolkit | [Apt package manifest](config/packages.txt): search, navigation, network and build tools, plus `git`, `git-lfs` and `rclone` |
 | Git and tunnels | Checksum-verified GitHub CLI 2.102.0 (`gh`) and ngrok 3.39.11 CLI |
 | Node | Checksum-verified Node.js 24.21.0 LTS for x64 or ARM64 |
-| Coding agents | Claude Code 2.1.292, OpenAI Codex 0.161.0 and pi 1.0.4, isolated in `/opt/ai-cli` |
+| Coding agents | Claude Code 2.1.293, OpenAI Codex 0.161.0 and pi 1.0.4, isolated in `/opt/ai-cli` |
 | Python and ML | uv, an isolated base environment, and the full plan's locked Python 3.12 ML environment for PyTorch, vision, Jupyter and language tooling |
 | Editor and keys | 49 VS Code Remote-SSH extensions and a root-only API key file managed by `server-secrets` |
 | Hardware | `server-accept`: CPU, RAM, disk and available GPU checks before profiles or bundles |
