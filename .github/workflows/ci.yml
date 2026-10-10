@@ -152,7 +152,7 @@ jobs:
       - name: Upload the test candidate
         id: upload
         if: steps.candidate.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: ${{ steps.candidate.outputs.name }}
           path: ${{ steps.candidate.outputs.dir }}
@@ -227,7 +227,7 @@ jobs:
             bash -c 'bash /validation/sb-candidate-test.sh --check --scenario "$SCENARIO" && bash /validation/sb-candidate-test.sh --scenario "$SCENARIO"'
       - name: Keep candidate acceptance evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: install-logs-${{ matrix.runner }}-${{ matrix.scenario }}${{ matrix.tag }}-${{ github.sha }}
           path: candidate/logs
